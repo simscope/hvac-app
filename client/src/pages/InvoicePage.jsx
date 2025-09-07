@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
-import logo from 'client/src/assets/logo_invoice_header.png';
+import logo from '../../assets/logo_invoice_header.png';
 import autoTable from 'jspdf-autotable';
 
 const InvoicePage = () => {
@@ -223,4 +223,5 @@ const InvoicePage = () => {
 };
 
 export default InvoicePage;
+
 
