@@ -1,10 +1,19 @@
-
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
-import logo from '../../assets/logo_invoice_header.png';
 import autoTable from 'jspdf-autotable';
+
+// Загружаем PNG из /public как dataURL для jsPDF
+async function loadLogoDataURL() {
+  const res = await fetch('/logo_invoice_header.png');
+  const blob = await res.blob();
+  return await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
 
 const InvoicePage = () => {
   const { id } = useParams();
@@ -15,133 +24,132 @@ const InvoicePage = () => {
 
   useEffect(() => {
     const fetchData = async () => {
-      const { data: jobData } = await supabase.from('jobs').select('*').eq('id', id).single();
+      const { data: jobData, error: jobErr } = await supabase
+        .from('jobs')
+        .select('*')
+        .eq('id', id)
+        .single();
+      if (jobErr) { console.error(jobErr); return; }
       setJob(jobData);
 
-      const { data: clientData } = await supabase.from('clients').select('*').eq('id', jobData.client_id).single();
+      const { data: clientData, error: clientErr } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('id', jobData.client_id)
+        .single();
+      if (clientErr) { console.error(clientErr); return; }
       setClient(clientData);
 
-      const { data: materialData } = await supabase.from('materials').select('*').eq('job_id', id);
+      const { data: materialData, error: matErr } = await supabase
+        .from('materials')
+        .select('*')
+        .eq('job_id', id);
+      if (matErr) { console.error(matErr); }
 
       const initialRows = [
-        { type: 'service', name: 'Labor', qty: 1, price: parseFloat(jobData.labor_price || 0) },
-        { type: 'service', name: 'Service Call Fee', qty: 1, price: parseFloat(jobData.scf || 0) },
-        ...(materialData || []).map(m => ({
+        { type: 'service', name: 'Labor', qty: 1, price: Number(jobData.labor_price || 0) },
+        { type: 'service', name: 'Service Call Fee', qty: 1, price: Number(jobData.scf || 0) },
+        ...((materialData || [])).map(m => ({
           type: 'material',
-          name: m.name,
-          qty: Number(m.qty),
-          price: Number(m.price)
-        }))
+          name: m.name || '',
+          qty: Number(m.qty || 0),
+          price: Number(m.price || 0),
+        })),
       ];
-
       setRows(initialRows);
     };
-
     fetchData();
   }, [id]);
 
-  const subtotal = rows.reduce((sum, item) => sum + item.qty * item.price, 0);
-  const total = subtotal - discount;
+  const subtotal = rows.reduce((sum, item) => sum + Number(item.qty || 0) * Number(item.price || 0), 0);
+  const total = subtotal - Number(discount || 0);
 
   const handleChange = (index, key, value) => {
     const updated = [...rows];
-    updated[index][key] = key === 'name' || key === 'type' ? value : parseFloat(value) || 0;
+    updated[index][key] = (key === 'name' || key === 'type') ? value : (parseFloat(value) || 0);
     setRows(updated);
   };
 
-  const addRow = () => {
-    setRows([...rows, { type: 'material', name: '', qty: 1, price: 0 }]);
-  };
+  const addRow = () => setRows([...rows, { type: 'material', name: '', qty: 1, price: 0 }]);
+  const deleteRow = (index) => setRows(rows.filter((_, i) => i !== index));
 
-  const deleteRow = (index) => {
-    const updated = [...rows];
-    updated.splice(index, 1);
-    setRows(updated);
-  };
-
-  const handleDownload = () => {
+  const handleDownload = async () => {
     const doc = new jsPDF();
     const serviceRows = rows.filter(r => r.type === 'service');
     const materialRows = rows.filter(r => r.type === 'material');
 
-  // Логотип
-  doc.addImage(logo, 'PNG', 170, 10, 30, 30);
-
-  // INVOICE # + дата
-  doc.setFont(undefined, 'bold');
-  doc.setFontSize(14);
-  doc.text(`INVOICE #${job?.job_number || id}`, 100, 50);
-  doc.setFont(undefined, 'normal');
-  doc.setFontSize(10);
-  doc.text(`Date: ${new Date().toLocaleDateString()}`, 100, 58);
-
-  // Клиент (слева)
-  let yLeft = 70;
-  doc.setFont(undefined, 'bold');
-  doc.text('Bill To:', 14, yLeft); yLeft += 6;
-  doc.setFont(undefined, 'normal');
-  doc.text(client.full_name || '', 14, yLeft); yLeft += 6;
-  doc.text(client.address || '', 14, yLeft); yLeft += 6;
-  doc.text(client.phone || '', 14, yLeft); yLeft += 6;
-  doc.text(client.email || '', 14, yLeft); yLeft += 8;
-
-  // Компания (справа, на том же уровне)
-  let yRight = 70;
-  doc.setFont(undefined, 'bold');
-  doc.text('Sim Scope Inc.', 200, yRight, { align: 'right' }); yRight += 6;
-  doc.setFont(undefined, 'normal');
-  doc.text('1587 E 19th St', 200, yRight, { align: 'right' }); yRight += 6;
-  doc.text('Brooklyn, NY 11230', 200, yRight, { align: 'right' }); yRight += 6;
-  doc.text('(929) 412-9042', 200, yRight, { align: 'right' }); yRight += 6;
-  doc.text('simscopeinc@gmail.com', 200, yRight, { align: 'right' });
-
- 
-    autoTable(doc, {
-  startY: Math.max(yLeft, yRight) + 10,
-  head: [], // убираем стандартный заголовок
-  body: [
-    // Заголовок вручную
-    [
-      { content: 'Service', styles: { fillColor: [230, 230, 230], fontStyle: 'bold' } },
-      { content: 'Qty', styles: { fillColor: [230, 230, 230], fontStyle: 'bold' } },
-      { content: 'Unit Price', styles: { fillColor: [230, 230, 230], fontStyle: 'bold' } },
-      { content: 'Amount', styles: { fillColor: [230, 230, 230], fontStyle: 'bold' } }
-    ],
-    // Заголовок секции SERVICE
-    
-    ...serviceRows.map(r => [
-      r.name,
-      r.qty,
-      `$${r.price.toFixed(2)}`,
-      `$${(r.qty * r.price).toFixed(2)}`
-    ]),
-    // Заголовок секции MATERIALS
-    [{ content: 'materials', colSpan: 4, styles: { fillColor: [230, 230, 230], fontStyle: 'bold' } }],
-    ...materialRows.map(r => [
-      r.name,
-      r.qty,
-      `$${r.price.toFixed(2)}`,
-      `$${(r.qty * r.price).toFixed(2)}`
-    ])
-  ],
-  styles: { fontSize: 10, halign: 'left', lineWidth: 0 },
-  headStyles: { fillColor: [250, 250, 250], textColor: 0, fontStyle: 'bold' },
-  alternateRowStyles: { fillColor: [255, 255, 255] },
-  margin: { left: 14, right: 14 },
-  
-  // 👇 Увеличиваем ширину первой колонки ("Service")
-  columnStyles: {
-    0: { cellWidth: 130 },  // ← ширина "Service"
-    1: { cellWidth: 20 },  // Qty
-    2: { cellWidth: 20 },  // Unit Price
-    3: { cellWidth: 20 }   // Amount
+    // Логотип из /public как dataURL
+    try {
+      const logoDataUrl = await loadLogoDataURL();
+      doc.addImage(logoDataUrl, 'PNG', 170, 10, 30, 30);
+    } catch (e) {
+      console.warn('Logo load failed, continue without logo', e);
     }
-});
+
+    // INVOICE # + дата
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(14);
+    doc.text(`INVOICE #${job?.job_number || id}`, 100, 50, { align: 'center' });
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(10);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 100, 58, { align: 'center' });
+
+    // Клиент (слева)
+    let yLeft = 70;
+    doc.setFont(undefined, 'bold');
+    doc.text('Bill To:', 14, yLeft); yLeft += 6;
+    doc.setFont(undefined, 'normal');
+    doc.text(client?.full_name || '', 14, yLeft); yLeft += 6;
+    doc.text(client?.address || '', 14, yLeft); yLeft += 6;
+    doc.text(client?.phone || '', 14, yLeft); yLeft += 6;
+    doc.text(client?.email || '', 14, yLeft); yLeft += 8;
+
+    // Компания (справа)
+    let yRight = 70;
+    doc.setFont(undefined, 'bold');
+    doc.text('Sim Scope Inc.', 200, yRight, { align: 'right' }); yRight += 6;
+    doc.setFont(undefined, 'normal');
+    doc.text('1587 E 19th St', 200, yRight, { align: 'right' }); yRight += 6;
+    doc.text('Brooklyn, NY 11230', 200, yRight, { align: 'right' }); yRight += 6;
+    doc.text('(929) 412-9042', 200, yRight, { align: 'right' }); yRight += 6;
+    doc.text('simscopeinc@gmail.com', 200, yRight, { align: 'right' });
+
+    // Таблица (SERVICE + MATERIALS)
+    autoTable(doc, {
+      startY: Math.max(yLeft, yRight) + 10,
+      head: [[ 'Service', 'Qty', 'Unit Price', 'Amount' ]],
+      body: [
+        ...serviceRows.map(r => [
+          r.name,
+          r.qty,
+          `$${Number(r.price).toFixed(2)}`,
+          `$${(Number(r.qty) * Number(r.price)).toFixed(2)}`
+        ]),
+        [{ content: 'MATERIALS', colSpan: 4, styles: { halign: 'left', fillColor: [230,230,230], fontStyle: 'bold' } }],
+        ...materialRows.map(r => [
+          r.name,
+          r.qty,
+          `$${Number(r.price).toFixed(2)}`,
+          `$${(Number(r.qty) * Number(r.price)).toFixed(2)}`
+        ]),
+      ],
+      styles: { fontSize: 10, halign: 'left', lineWidth: 0.1 },
+      headStyles: { fillColor: [245,245,245], textColor: 0, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [255,255,255] },
+      margin: { left: 14, right: 14 },
+      columnStyles: {
+        0: { cellWidth: 130 }, // Service
+        1: { cellWidth: 20 },  // Qty
+        2: { cellWidth: 25 },  // Unit Price
+        3: { cellWidth: 25 },  // Amount
+      },
+    });
+
     let endY = doc.lastAutoTable.finalY + 10;
     doc.setFontSize(12);
     doc.setFont(undefined, 'bold');
     doc.text(`Subtotal: $${subtotal.toFixed(2)}`, 200, endY, { align: 'right' }); endY += 6;
-    doc.text(`Discount: -$${discount.toFixed(2)}`, 200, endY, { align: 'right' }); endY += 6;
+    doc.text(`Discount: -$${Number(discount || 0).toFixed(2)}`, 200, endY, { align: 'right' }); endY += 6;
     doc.text(`Total Due: $${total.toFixed(2)}`, 200, endY, { align: 'right' });
 
     doc.save(`invoice_${job?.job_number || id}.pdf`);
@@ -152,10 +160,11 @@ const InvoicePage = () => {
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex justify-between mb-4">
-        <img src={logo} alt="Logo" style={{ width: '50px' }} />
+        {/* Логотип из /public */}
+        <img src="/logo_invoice_header.png" alt="Logo" style={{ width: 60, height: 60, objectFit: 'contain' }} />
         <div className="text-right text-sm">
           <p><strong>Sim Scope Inc.</strong></p>
-          <p>1587 E 19th St, Brooklyn, NY</p>
+          <p>1587 E 19th St, Brooklyn, NY 11230</p>
           <p>(929) 412-9042</p>
           <p>simscopeinc@gmail.com</p>
         </div>
@@ -163,8 +172,8 @@ const InvoicePage = () => {
 
       <hr className="my-4" />
 
-      <h2 className="text-xl font-bold mb-2">Invoice #{job.job_number}</h2>
-      <p><strong>Client:</strong> {client.full_name}</p>
+      <h2 className="text-xl font-bold mb-2">Invoice #{job?.job_number || id}</h2>
+      <p><strong>Client:</strong> {client?.full_name || ''}</p>
       <p><strong>Date:</strong> {new Date().toLocaleDateString()}</p>
 
       <table className="w-full text-sm mt-4 border-collapse">
@@ -190,7 +199,7 @@ const InvoicePage = () => {
               <td><input value={r.name} onChange={e => handleChange(i, 'name', e.target.value)} className="border px-2" /></td>
               <td><input type="number" value={r.qty} onChange={e => handleChange(i, 'qty', e.target.value)} className="border w-16 text-center" /></td>
               <td><input type="number" value={r.price} onChange={e => handleChange(i, 'price', e.target.value)} className="border w-20 text-right" /></td>
-              <td>${(r.qty * r.price).toFixed(2)}</td>
+              <td>${(Number(r.qty) * Number(r.price)).toFixed(2)}</td>
               <td><button onClick={() => deleteRow(i)} className="text-red-600 px-2">✕</button></td>
             </tr>
           ))}
@@ -223,5 +232,3 @@ const InvoicePage = () => {
 };
 
 export default InvoicePage;
-
-
