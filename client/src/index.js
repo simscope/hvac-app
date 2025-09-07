@@ -1,8 +1,7 @@
-
+// src/index.js
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-
-const App = () => <h1>HVAC Frontend работает!</h1>;
+import App from './App';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);
