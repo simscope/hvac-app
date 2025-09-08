@@ -1,6 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://jywvdftejvnisjvuidtt.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp5d3ZkZnRlanZuaXNqdnVpZHR0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA1MjA5MzksImV4cCI6MjA2NjA5NjkzOX0._iZKkCzHcYUeU-37ZOJxYmvLgCFi0lIbR_xIbfK-EuA';
+const SUPABASE_URL =
+  process.env.REACT_APP_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+const SUPABASE_ANON_KEY =
+  process.env.REACT_APP_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  // не падаем белым экраном, а выводим понятную ошибку в консоль
+  console.error('Missing Supabase env vars', {
+    hasUrl: !!SUPABASE_URL,
+    hasAnon: !!SUPABASE_ANON_KEY,
+  });
+}
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
