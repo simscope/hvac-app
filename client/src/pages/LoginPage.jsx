@@ -1,5 +1,5 @@
-// src/pages/LoginPage.jsx
-import React, { useState } from 'react';
+// client/src/pages/LoginPage.jsx
+import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
@@ -25,7 +25,13 @@ export default function LoginPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = location.state?.from?.pathname || '/jobs'; // куда вести после логина
+
+  // куда вести после входа
+  const fromState = location.state && location.state.from;
+  const safeFrom =
+    fromState && typeof fromState.pathname === 'string' && fromState.pathname !== '/login'
+      ? fromState.pathname
+      : '/jobs';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -34,10 +40,12 @@ export default function LoginPage() {
   const [err, setErr] = useState('');
   const [info, setInfo] = useState('');
 
-  // если уже вошёл — отправим на from
-  if (user) {
-    navigate(from, { replace: true });
-  }
+  // ✅ Редирект только в эффекте, НИКОГДА не во время рендера
+  useEffect(() => {
+    if (user) {
+      navigate(safeFrom, { replace: true });
+    }
+  }, [user, safeFrom, navigate]);
 
   const onLogin = async (e) => {
     e.preventDefault();
@@ -45,9 +53,12 @@ export default function LoginPage() {
     setInfo('');
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
       if (error) throw error;
-      navigate(from, { replace: true });
+      // навигация произойдёт в useEffect, когда появится user
     } catch (error) {
       setErr(error.message || 'Login error');
     } finally {
@@ -63,9 +74,8 @@ export default function LoginPage() {
       return;
     }
     try {
-      // В Supabase → Auth → URL конфигурации должен быть настроен Redirect URL (например, https://yourapp.vercel.app/reset)
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: window.location.origin + '/reset', // сделай страницу /reset при необходимости
+        redirectTo: window.location.origin + '/reset',
       });
       if (error) throw error;
       setInfo('Мы отправили письмо со ссылкой для сброса пароля.');
@@ -76,14 +86,16 @@ export default function LoginPage() {
 
   return (
     <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', background: '#f8fafc' }}>
-      <div style={{
-        width: 380,
-        background: '#fff',
-        border: '1px solid #e5e7eb',
-        borderRadius: 16,
-        padding: 22,
-        boxShadow: '0 8px 30px rgba(0,0,0,0.05)'
-      }}>
+      <div
+        style={{
+          width: 380,
+          background: '#fff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 16,
+          padding: 22,
+          boxShadow: '0 8px 30px rgba(0,0,0,0.05)',
+        }}
+      >
         <h2 style={{ margin: 0 }}>Вход в систему</h2>
         <p style={{ color: '#64748b', marginTop: 6 }}>Sim Scope — HVAC & Appliances</p>
 
@@ -124,7 +136,7 @@ export default function LoginPage() {
                   background: '#fff',
                   borderRadius: 8,
                   padding: '6px 8px',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
                 }}
               >
                 {showPass ? 'Скрыть' : 'Показать'}
@@ -135,11 +147,7 @@ export default function LoginPage() {
           {err && <div style={{ marginTop: 12, color: '#ef4444' }}>{err}</div>}
           {info && <div style={{ marginTop: 12, color: '#16a34a' }}>{info}</div>}
 
-          <button
-            type="submit"
-            disabled={loading}
-            style={{ ...btnStyle, background: '#111827', color: '#fff', marginTop: 16 }}
-          >
+          <button type="submit" disabled={loading} style={{ ...btnStyle, background: '#111827', color: '#fff', marginTop: 16 }}>
             {loading ? 'Входим…' : 'Войти'}
           </button>
         </form>
@@ -153,7 +161,7 @@ export default function LoginPage() {
         </button>
 
         <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
-          Доступ выдает администратор. Если нет аккаунта — обратись к менеджеру.
+          Доступ выдаёт администратор. Если нет аккаунта — обратись к менеджеру.
         </div>
       </div>
     </div>
