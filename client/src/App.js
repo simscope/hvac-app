@@ -1,8 +1,6 @@
-// src/App.js
 import React from 'react';
 import { Routes, Route, Link, Navigate } from 'react-router-dom';
 
-// ВАЖНО: пути и регистр имён должны совпадать с фактическими файлами
 import JobsPage from './pages/JobsPage';
 import JobDetailsPage from './pages/JobDetailsPage';
 import AllJobsPage from './pages/AllJobsPage';
@@ -19,36 +17,33 @@ const linkStyle = { marginRight: 16, textDecoration: 'none', color: '#1976d2', f
 
 export default function App() {
   return (
-    <HashRouter>
-      <div style={{ padding: 20 }}>
-        <h1 style={{ marginTop: 0 }}>HVAC App ✅</h1>
+    <div style={{ padding: 20 }}>
+      <h1 style={{ marginTop: 0 }}>HVAC App ✅</h1>
 
-        <nav style={navStyle}>
-          <Link to="/" style={linkStyle}>📋 Заявки</Link>
-          <Link to="/calendar" style={linkStyle}>📅 Календарь</Link>
-          <Link to="/all" style={linkStyle}>📄 Все заявки</Link>
-          <Link to="/materials" style={linkStyle}>📦 Детали</Link>
-          <Link to="/chat" style={linkStyle}>💬 Чат</Link>
-          <Link to="/admin/chats" style={linkStyle}>⚙️ Чаты (админ)</Link>
-          <Link to="/technicians" style={linkStyle}>👥 Сотрудники</Link>
-          <Link to="/finance" style={linkStyle}>💰 Финансы</Link>
-        </nav>
+      <nav style={navStyle}>
+        <Link to="/" style={linkStyle}>📋 Заявки</Link>
+        <Link to="/calendar" style={linkStyle}>📅 Календарь</Link>
+        <Link to="/all" style={linkStyle}>📄 Все заявки</Link>
+        <Link to="/materials" style={linkStyle}>📦 Детали</Link>
+        <Link to="/chat" style={linkStyle}>💬 Чат</Link>
+        <Link to="/admin/chats" style={linkStyle}>⚙️ Чаты (админ)</Link>
+        <Link to="/technicians" style={linkStyle}>👥 Сотрудники</Link>
+        <Link to="/finance" style={linkStyle}>💰 Финансы</Link>
+      </nav>
 
-        <Routes>
-          <Route path="/" element={<JobsPage />} />
-          <Route path="/calendar" element={<CalendarPage />} />
-          <Route path="/all" element={<AllJobsPage />} />
-          <Route path="/materials" element={<MaterialsPage />} />
-          <Route path="/finance" element={<FinancePage />} />
-          <Route path="/invoice/:id" element={<InvoicePage />} />
-          <Route path="/job/:id" element={<JobDetailsPage />} />
-          <Route path="/technicians" element={<TechniciansPage />} />
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/admin/chats" element={<ChatAdminPage />} />
-          {/* fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </div>
-    </HashRouter>
+      <Routes>
+        <Route path="/" element={<JobsPage />} />
+        <Route path="/calendar" element={<CalendarPage />} />
+        <Route path="/all" element={<AllJobsPage />} />
+        <Route path="/materials" element={<MaterialsPage />} />
+        <Route path="/finance" element={<FinancePage />} />
+        <Route path="/invoice/:id" element={<InvoicePage />} />
+        <Route path="/job/:id" element={<JobDetailsPage />} />
+        <Route path="/technicians" element={<TechniciansPage />} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/admin/chats" element={<ChatAdminPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </div>
   );
 }
