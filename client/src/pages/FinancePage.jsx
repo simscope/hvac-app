@@ -1,6 +1,6 @@
 // client/src/pages/FinancePage.jsx
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabase';
+import { supabase } from '../supabaseClient';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 
@@ -328,3 +328,4 @@ const FinancePage = () => {
 };
 
 export default FinancePage;
+
