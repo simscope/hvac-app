@@ -1,79 +1,104 @@
-// client/src/context/AuthContext.js
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-const Ctx = createContext({
+// Состояние аутентификации, профиль и роль
+const AuthCtx = createContext({
+  loading: true,
+  session: null,
   user: null,
   profile: null,
-  role: null,
   isAdmin: false,
-  loading: true,
-  signOut: async () => {},
 });
 
-export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
+export function AuthProvider({ children }) {
+  const [state, setState] = useState({
+    loading: true,
+    session: null,
+    user: null,
+    profile: null,
+    isAdmin: false,
+  });
 
   useEffect(() => {
-    let cancelled = false;
+    let unsub;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      await handleSession(session);
 
-    const loadProfile = async (u) => {
-      if (!u) {
-        setProfile(null);
-        return;
-      }
-      // грузим профиль по id (id = auth.users.id)
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, role, technician_id, is_admin')
-        .eq('id', u.id)
-        .maybeSingle(); // если версия supabase-js ругается — замени на .single()
-
-      if (!cancelled) {
-        if (error) {
-          console.warn('profiles load error:', error);
-          setProfile(null);
-        } else {
-          setProfile(data);
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(
+        async (_event, session) => {
+          await handleSession(session);
         }
-      }
-    };
+      );
+      unsub = () => subscription?.unsubscribe();
+    })();
 
-    // 1) начальная сессия
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const u = session?.user ?? null;
-      setUser(u);
-      loadProfile(u).finally(() => setLoading(false));
-    });
-
-    // 2) подписка на изменения авторизации
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      const u = session?.user ?? null;
-      setUser(u);
-      loadProfile(u);
-    });
-
-    return () => {
-      cancelled = true;
-      sub?.subscription?.unsubscribe?.();
-    };
+    return () => { try { unsub?.(); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const value = {
-    user,
-    profile,
-    role: profile?.role ?? null,
-    isAdmin: !!profile?.is_admin || profile?.role === 'admin',
-    loading,
-    signOut: () => supabase.auth.signOut(),
+  const handleSession = async (session) => {
+    if (!session?.user) {
+      setState(s => ({ ...s, loading: false, session: null, user: null, profile: null, isAdmin: false }));
+      return;
+    }
+    const user = session.user;
+
+    // Пробуем найти профиль по двум вариантам схемы:
+    // 1) profiles.auth_user_id = user.id
+    // 2) profiles.id = user.id (если id профиля == auth user id)
+    let profile = null;
+    let isAdmin = false;
+
+    const { data: p1 } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('auth_user_id', user.id)
+      .maybeSingle();
+
+    if (p1) profile = p1;
+    else {
+      const { data: p2 } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (p2) profile = p2;
+    }
+
+    if (profile) {
+      isAdmin = !!profile.is_admin || profile.role === 'admin';
+    }
+
+    setState({
+      loading: false,
+      session,
+      user,
+      profile,
+      isAdmin,
+    });
   };
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
-};
+  return <AuthCtx.Provider value={state}>{children}</AuthCtx.Provider>;
+}
 
-export const useAuth = () => useContext(Ctx);
+// Хук для удобного доступа
+export const useAuth = () => useContext(AuthCtx);
 
-// (необязательно) default export, если где-то импортируется по умолчанию
-export default Ctx;
+// Защита: требуется быть авторизованным
+export function RequireAuth({ children }) {
+  const { loading, session } = useAuth();
+  if (loading) return <div className="p-4">Загрузка…</div>;
+  if (!session) return <div className="p-4">Нужно войти</div>;
+  return children;
+}
+
+// Защита: требуется роль администратора
+export function RequireAdmin({ children }) {
+  const { loading, isAdmin } = useAuth();
+  if (loading) return <div className="p-4">Загрузка…</div>;
+  if (!isAdmin) return <div className="p-4">Недостаточно прав</div>;
+  return children;
+}
+
+export default AuthProvider;
