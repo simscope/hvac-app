@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-// ЕСЛИ у тебя клиент называется иначе, замени импорт на:  import { supabase } from '../supabase';
 import { supabase } from '../supabaseClient';
 
 const roleOptions = [
@@ -14,9 +13,10 @@ const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 export default function TechniciansPage() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
 
-  // форма для добавления
-  const [newRow, setNewRow] = useState({ name: '', phone: '', role: 'tech' });
+  // форма добавления
+  const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
 
   useEffect(() => {
     load();
@@ -24,8 +24,17 @@ export default function TechniciansPage() {
 
   const load = async () => {
     setLoading(true);
-    const { data, error } = await supabase.from('technicians').select('*').order('name', { ascending: true });
-    if (!error) setItems(data || []);
+    const { data, error } = await supabase
+      .from('technicians')
+      .select('id, name, phone, email, role, auth_user_id')
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error(error);
+      alert('Не удалось загрузить сотрудников');
+    } else {
+      setItems(data || []);
+    }
     setLoading(false);
   };
 
@@ -34,12 +43,15 @@ export default function TechniciansPage() {
   };
 
   const saveRow = async (row) => {
+    setBusyId(row.id);
     const payload = {
-      name: row.name ?? null,
-      phone: row.phone ?? null,
-      role: row.role ?? null, // <-- Должность
+      name: row.name?.trim() || null,
+      phone: row.phone?.trim() || null,
+      email: row.email?.trim() || null,    // 👈 новый email
+      role: row.role || null,
     };
     const { error } = await supabase.from('technicians').update(payload).eq('id', row.id);
+    setBusyId(null);
     if (error) {
       console.error(error);
       alert('Ошибка при сохранении');
@@ -56,15 +68,20 @@ export default function TechniciansPage() {
     const payload = {
       name: newRow.name.trim(),
       phone: newRow.phone?.trim() || null,
+      email: newRow.email?.trim() || null, // 👈 сохраняем email
       role: newRow.role || 'tech',
     };
     const { error } = await supabase.from('technicians').insert(payload);
     if (error) {
       console.error(error);
-      alert('Ошибка при добавлении');
+      if (String(error.message).includes('unique')) {
+        alert('Такой email уже существует у другого сотрудника');
+      } else {
+        alert('Ошибка при добавлении');
+      }
       return;
     }
-    setNewRow({ name: '', phone: '', role: 'tech' });
+    setNewRow({ name: '', phone: '', email: '', role: 'tech' });
     await load();
   };
 
@@ -79,12 +96,64 @@ export default function TechniciansPage() {
     setItems(prev => prev.filter(r => r.id !== id));
   };
 
+  /**
+   * Отправка волшебной ссылки для входа на email сотрудника.
+   * Работает с клиентским ключом — admin-ключ не нужен.
+   * После входа триггер в БД привяжет auth_user_id к technicians по email.
+   */
+  const sendMagicLink = async (row) => {
+    const email = row.email?.trim();
+    if (!email) {
+      alert('У сотрудника не указан email');
+      return;
+    }
+
+    try {
+      setBusyId(row.id);
+      const redirectTo = `${window.location.origin}/`; // вернёмся на главную после подтверждения
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: redirectTo },
+      });
+      setBusyId(null);
+
+      if (error) {
+        console.error(error);
+        alert('Не удалось отправить ссылку: ' + error.message);
+        return;
+      }
+      alert('Приглашение отправлено на ' + email);
+    } catch (e) {
+      setBusyId(null);
+      console.error(e);
+      alert('Не удалось отправить ссылку');
+    }
+  };
+
+  // На всякий случай: быстрая «ссылка для письма» (если хочешь отправлять сам из почты)
+  const inviteMailto = (row) => {
+    const appUrl = window.location.origin + '/';
+    const subject = encodeURIComponent('Доступ в HVAC App');
+    const body = encodeURIComponent(
+      `Здравствуйте!\n\nВойдите по ссылке: ${appUrl}\nНажмите "Войти по ссылке" и укажите этот email: ${row.email || ''}.\n`
+    );
+    return `mailto:${row.email || ''}?subject=${subject}&body=${body}`;
+  };
+
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">👥 Сотрудники</h1>
 
       {/* Форма добавления */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.5fr 1.2fr auto', gap: 8, marginBottom: 12 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '2fr 1.5fr 2fr 1.2fr auto',
+          gap: 8,
+          marginBottom: 12,
+          alignItems: 'center',
+        }}
+      >
         <input
           style={inputStyle}
           placeholder="Имя"
@@ -96,6 +165,12 @@ export default function TechniciansPage() {
           placeholder="Телефон"
           value={newRow.phone}
           onChange={e => setNewRow({ ...newRow, phone: e.target.value })}
+        />
+        <input
+          style={inputStyle}
+          placeholder="Email"
+          value={newRow.email}
+          onChange={e => setNewRow({ ...newRow, email: e.target.value })}
         />
         <select
           style={inputStyle}
@@ -115,17 +190,18 @@ export default function TechniciansPage() {
             <tr>
               <th style={th} width="40">#</th>
               <th style={th}>Имя</th>
-              <th style={th} width="200">Телефон</th>
-              <th style={th} width="200">Должность</th>
-              <th style={{ ...th, textAlign: 'center' }} width="160">Действия</th>
+              <th style={th} width="160">Телефон</th>
+              <th style={th} width="240">Email</th>
+              <th style={th} width="140">Должность</th>
+              <th style={{ ...th, textAlign: 'center' }} width="260">Действия</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td style={td} colSpan={5}>Загрузка…</td></tr>
+              <tr><td style={td} colSpan={6}>Загрузка…</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr><td style={td} colSpan={5}>Сотрудников пока нет</td></tr>
+              <tr><td style={td} colSpan={6}>Сотрудников пока нет</td></tr>
             )}
             {items.map((row, idx) => (
               <tr key={row.id}>
@@ -145,6 +221,14 @@ export default function TechniciansPage() {
                   />
                 </td>
                 <td style={td}>
+                  <input
+                    style={inputStyle}
+                    type="email"
+                    value={row.email || ''}
+                    onChange={e => onChangeCell(row.id, 'email', e.target.value)}
+                  />
+                </td>
+                <td style={td}>
                   <select
                     style={inputStyle}
                     value={row.role || 'tech'}
@@ -156,7 +240,32 @@ export default function TechniciansPage() {
                   </select>
                 </td>
                 <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 6 }}>💾</button>
+                  <button
+                    title="Сохранить"
+                    onClick={() => saveRow(row)}
+                    style={{ marginRight: 6 }}
+                    disabled={busyId === row.id}
+                  >
+                    {busyId === row.id ? '…' : '💾 Сохранить'}
+                  </button>
+
+                  <button
+                    title="Отправить ссылку для входа"
+                    onClick={() => sendMagicLink(row)}
+                    style={{ marginRight: 6 }}
+                    disabled={busyId === row.id}
+                  >
+                    ✉️ Отправить ссылку
+                  </button>
+
+                  <a
+                    title="Открыть письмо в почтовом клиенте"
+                    href={inviteMailto(row)}
+                    style={{ marginRight: 6 }}
+                  >
+                    📧 Письмо
+                  </a>
+
                   <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️</button>
                 </td>
               </tr>
