@@ -1,83 +1,54 @@
-import React from 'react';
-import { Routes, Route, Link, Navigate } from 'react-router-dom';
-import { useAuth } from './context/AuthContext';
-import { RequireAuth, RequireRole } from './context/AuthContext';
-
-// страницы
-import JobsPage from './pages/JobsPage';
-import CalendarPage from './pages/CalendarPage';
-import AllJobsPage from './pages/AllJobsPage';
-import MaterialsPage from './pages/MaterialsPage';
-import ChatPage from './pages/ChatPage';
-import ChatAdminPage from './pages/ChatAdminPage';
-import TechniciansPage from './pages/TechniciansPage';
-import FinancePage from './pages/FinancePage';
+// добавь эти импорты
+import { Link, Routes, Route } from 'react-router-dom';
+import { useAuth, RequireAdmin, RequireAuth } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
 
-const navStyle = { marginBottom: 20, borderBottom: '1px solid #ccc', paddingBottom: 10 };
-const linkStyle = { marginRight: 16 };
+// … твои страницы: JobsPage, CalendarPage, TechniciansPage и т.д.
 
 export default function App() {
-  const { role, signOut, user } = useAuth();
+  const { profile, isAdmin, user } = useAuth();
+
+  const link = { marginRight: 16 };
 
   return (
-    <div style={{ padding: 20 }}>
-      {/* Навигация показываем только когда есть user */}
-      {user && (
-        <nav style={navStyle}>
-          {/* общие для manager+admin */}
-          <Link to="/" style={linkStyle}>📋 Заявки</Link>
-          {['manager','admin'].includes(role) && (
-            <>
-              <Link to="/calendar" style={linkStyle}>📅 Календарь</Link>
-              <Link to="/all" style={linkStyle}>📄 Все заявки</Link>
-              <Link to="/materials" style={linkStyle}>📦 Детали</Link>
-              <Link to="/chat" style={linkStyle}>💬 Чат</Link>
-            </>
-          )}
-          {/* только админ */}
-          {role === 'admin' && (
-            <>
-              <Link to="/admin/chats" style={linkStyle}>🛠 Чат админка</Link>
-              <Link to="/technicians" style={linkStyle}>👥 Сотрудники</Link>
-              <Link to="/finance" style={linkStyle}>💰 Финансы</Link>
-            </>
-          )}
-          <button onClick={signOut} style={{ marginLeft: 10 }}>Выйти</button>
-        </nav>
-      )}
+    <div className="p-4">
+      <nav style={{ marginBottom: 12, borderBottom: '1px solid #eee', paddingBottom: 8 }}>
+        <Link to="/" style={link}>📋 Заявки</Link>
+        <Link to="/calendar" style={link}>📅 Календарь</Link>
+        <Link to="/JoAllJobsPage" style={link}>📄 Все заявки</Link>
+        <Link to="/materials" style={link}>📦 Детали</Link>
+        <Link to="/chat" style={link}>💬 Чат</Link>
+
+        {/* Админка — видит только admin */}
+        {isAdmin && (
+          <>
+            <Link to="/admin/chats" style={link}>⚙️ Чаты (админ)</Link>
+            <Link to="/technicians" style={link}>👥 Сотрудники</Link>
+            <Link to="/finance" style={link}>💰 Финансы</Link>
+          </>
+        )}
+
+        {/* Справа — вход/выход */}
+        <span style={{ float: 'right' }}>
+          {user ? <span>{user.email}</span> : <Link to="/login">Войти</Link>}
+        </span>
+      </nav>
 
       <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={
-          <RequireAuth>
-            <JobsPage />
-          </RequireAuth>
-        } />
-        <Route path="/calendar" element={
-          <RequireAuth><RequireRole anyOf={['manager','admin']}><CalendarPage/></RequireRole></RequireAuth>
-        } />
-        <Route path="/all" element={
-          <RequireAuth><RequireRole anyOf={['manager','admin']}><AllJobsPage/></RequireRole></RequireAuth>
-        } />
-        <Route path="/materials" element={
-          <RequireAuth><RequireRole anyOf={['manager','admin']}><MaterialsPage/></RequireRole></RequireAuth>
-        } />
-        <Route path="/chat" element={
-          <RequireAuth><RequireRole anyOf={['manager','admin']}><ChatPage/></RequireRole></RequireAuth>
-        } />
-        {/* admin-only */}
-        <Route path="/admin/chats" element={
-          <RequireAuth><RequireRole anyOf={['admin']}><ChatAdminPage/></RequireRole></RequireAuth>
-        } />
-        <Route path="/technicians" element={
-          <RequireAuth><RequireRole anyOf={['admin']}><TechniciansPage/></RequireRole></RequireAuth>
-        } />
-        <Route path="/finance" element={
-          <RequireAuth><RequireRole anyOf={['admin']}><FinancePage/></RequireRole></RequireAuth>
-        } />
+        {/* Открытые или защищённые пути — как у тебя было */}
+        <Route path="/" element={<RequireAuth><JobsPage/></RequireAuth>} />
+        <Route path="/calendar" element={<RequireAuth><CalendarPage/></RequireAuth>} />
+        <Route path="/JoAllJobsPage" element={<RequireAuth><AllJobsPage/></RequireAuth>} />
+        <Route path="/materials" element={<RequireAuth><MaterialsPage/></RequireAuth>} />
+        <Route path="/chat" element={<RequireAuth><ChatPage/></RequireAuth>} />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        {/* Админские */}
+        <Route path="/admin/chats" element={<RequireAdmin><ChatAdminPage/></RequireAdmin>} />
+        <Route path="/technicians" element={<RequireAdmin><TechniciansPage/></RequireAdmin>} />
+        <Route path="/finance" element={<RequireAdmin><FinancePage/></RequireAdmin>} />
+
+        {/* Логин */}
+        <Route path="/login" element={<LoginPage/>} />
       </Routes>
     </div>
   );
