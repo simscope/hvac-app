@@ -1,55 +1,54 @@
-// добавь эти импорты
-import { Link, Routes, Route } from 'react-router-dom';
-import { useAuth, RequireAdmin, RequireAuth } from './context/AuthContext';
-import LoginPage from './pages/LoginPage';
+// src/App.js
+import React from 'react';
+import { HashRouter, Routes, Route, Link, Navigate } from 'react-router-dom';
 
-// … твои страницы: JobsPage, CalendarPage, TechniciansPage и т.д.
+// ВАЖНО: пути и регистр имён должны совпадать с фактическими файлами
+import JobsPage from './pages/JobsPage';
+import JobDetailsPage from './pages/JobDetailsPage';
+import AllJobsPage from './pages/AllJobsPage';
+import CalendarPage from './pages/CalendarPage';
+import MaterialsPage from './pages/MaterialsPage';
+import FinancePage from './pages/FinancePage';
+import InvoicePage from './pages/InvoicePage';
+import TechniciansPage from './pages/TechniciansPage';
+import ChatPage from './pages/ChatPage';
+import ChatAdminPage from './pages/ChatAdminPage';
+
+const navStyle = { marginBottom: 20, borderBottom: '1px solid #eee', paddingBottom: 10 };
+const linkStyle = { marginRight: 16, textDecoration: 'none', color: '#1976d2', fontWeight: 600 };
 
 export default function App() {
-  const { profile, isAdmin, user } = useAuth();
-
-  const link = { marginRight: 16 };
-
   return (
-    <div className="p-4">
-      <nav style={{ marginBottom: 12, borderBottom: '1px solid #eee', paddingBottom: 8 }}>
-        <Link to="/" style={link}>📋 Заявки</Link>
-        <Link to="/calendar" style={link}>📅 Календарь</Link>
-        <Link to="/JoAllJobsPage" style={link}>📄 Все заявки</Link>
-        <Link to="/materials" style={link}>📦 Детали</Link>
-        <Link to="/chat" style={link}>💬 Чат</Link>
+    <HashRouter>
+      <div style={{ padding: 20 }}>
+        <h1 style={{ marginTop: 0 }}>HVAC App ✅</h1>
 
-        {/* Админка — видит только admin */}
-        {isAdmin && (
-          <>
-            <Link to="/admin/chats" style={link}>⚙️ Чаты (админ)</Link>
-            <Link to="/technicians" style={link}>👥 Сотрудники</Link>
-            <Link to="/finance" style={link}>💰 Финансы</Link>
-          </>
-        )}
+        <nav style={navStyle}>
+          <Link to="/" style={linkStyle}>📋 Заявки</Link>
+          <Link to="/calendar" style={linkStyle}>📅 Календарь</Link>
+          <Link to="/all" style={linkStyle}>📄 Все заявки</Link>
+          <Link to="/materials" style={linkStyle}>📦 Детали</Link>
+          <Link to="/chat" style={linkStyle}>💬 Чат</Link>
+          <Link to="/admin/chats" style={linkStyle}>⚙️ Чаты (админ)</Link>
+          <Link to="/technicians" style={linkStyle}>👥 Сотрудники</Link>
+          <Link to="/finance" style={linkStyle}>💰 Финансы</Link>
+        </nav>
 
-        {/* Справа — вход/выход */}
-        <span style={{ float: 'right' }}>
-          {user ? <span>{user.email}</span> : <Link to="/login">Войти</Link>}
-        </span>
-      </nav>
-
-      <Routes>
-        {/* Открытые или защищённые пути — как у тебя было */}
-        <Route path="/" element={<RequireAuth><JobsPage/></RequireAuth>} />
-        <Route path="/calendar" element={<RequireAuth><CalendarPage/></RequireAuth>} />
-        <Route path="/JoAllJobsPage" element={<RequireAuth><AllJobsPage/></RequireAuth>} />
-        <Route path="/materials" element={<RequireAuth><MaterialsPage/></RequireAuth>} />
-        <Route path="/chat" element={<RequireAuth><ChatPage/></RequireAuth>} />
-
-        {/* Админские */}
-        <Route path="/admin/chats" element={<RequireAdmin><ChatAdminPage/></RequireAdmin>} />
-        <Route path="/technicians" element={<RequireAdmin><TechniciansPage/></RequireAdmin>} />
-        <Route path="/finance" element={<RequireAdmin><FinancePage/></RequireAdmin>} />
-
-        {/* Логин */}
-        <Route path="/login" element={<LoginPage/>} />
-      </Routes>
-    </div>
+        <Routes>
+          <Route path="/" element={<JobsPage />} />
+          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/all" element={<AllJobsPage />} />
+          <Route path="/materials" element={<MaterialsPage />} />
+          <Route path="/finance" element={<FinancePage />} />
+          <Route path="/invoice/:id" element={<InvoicePage />} />
+          <Route path="/job/:id" element={<JobDetailsPage />} />
+          <Route path="/technicians" element={<TechniciansPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/admin/chats" element={<ChatAdminPage />} />
+          {/* fallback */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
+    </HashRouter>
   );
 }
