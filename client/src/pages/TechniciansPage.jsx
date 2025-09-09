@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 
+export default function TechniciansPage() {
+  const { isAdmin, loading } = useAuth();
+  if (loading) return <div className="p-4">Загрузка…</div>;
+  if (!isAdmin) return <div className="p-4">Недостаточно прав</div>;
 const roleOptions = [
   { value: 'manager', label: 'Менеджер' },
   { value: 'tech', label: 'Техник' },
@@ -276,3 +281,4 @@ export default function TechniciansPage() {
     </div>
   );
 }
+
