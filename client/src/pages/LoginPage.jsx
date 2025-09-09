@@ -1,68 +1,161 @@
+// src/pages/LoginPage.jsx
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const input = { width: '100%', padding: 8, border: '1px solid #e5e7eb', borderRadius: 6, marginBottom: 8 };
+const inputStyle = {
+  width: '100%',
+  padding: 10,
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  marginTop: 6,
+};
+
+const btnStyle = {
+  width: '100%',
+  padding: 12,
+  borderRadius: 10,
+  border: 'none',
+  cursor: 'pointer',
+  fontWeight: 600,
+};
 
 export default function LoginPage() {
-  const nav = useNavigate();
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const from = location.state?.from?.pathname || '/jobs'; // куда вести после логина
+
   const [email, setEmail] = useState('');
-  const [pass, setPass]   = useState('');
+  const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [info, setInfo] = useState('');
 
-  const signIn = async (e) => {
-    e.preventDefault();
-    setLoading(true); setMsg('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
-    setLoading(false);
-    if (error) setMsg(error.message);
-    else nav('/');
-  };
-
-  const sendMagic = async () => {
-    setLoading(true); setMsg('');
-    const { error } = await supabase.auth.signInWithOtp({ email });
-    setLoading(false);
-    setMsg(error ? error.message : 'Письмо с магической ссылкой отправлено.');
-  };
-
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    nav('/login');
-  };
-
+  // если уже вошёл — отправим на from
   if (user) {
-    return (
-      <div className="p-4">
-        <h2 className="text-xl font-semibold mb-2">Вы вошли как {user.email}</h2>
-        <button onClick={signOut} className="px-3 py-2 bg-gray-200 rounded">Выйти</button>
-      </div>
-    );
+    navigate(from, { replace: true });
   }
 
+  const onLogin = async (e) => {
+    e.preventDefault();
+    setErr('');
+    setInfo('');
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
+      navigate(from, { replace: true });
+    } catch (error) {
+      setErr(error.message || 'Login error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onResetPassword = async () => {
+    setErr('');
+    setInfo('');
+    if (!email.trim()) {
+      setErr('Укажи email для сброса пароля.');
+      return;
+    }
+    try {
+      // В Supabase → Auth → URL конфигурации должен быть настроен Redirect URL (например, https://yourapp.vercel.app/reset)
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin + '/reset', // сделай страницу /reset при необходимости
+      });
+      if (error) throw error;
+      setInfo('Мы отправили письмо со ссылкой для сброса пароля.');
+    } catch (error) {
+      setErr(error.message || 'Ошибка при отправке письма.');
+    }
+  };
+
   return (
-    <div className="p-4 max-w-sm mx-auto">
-      <h1 className="text-2xl font-bold mb-3">Вход</h1>
-      <form onSubmit={signIn}>
-        <input style={input} type="email" placeholder="Email"
-               value={email} onChange={e => setEmail(e.target.value)} />
-        <input style={input} type="password" placeholder="Пароль"
-               value={pass} onChange={e => setPass(e.target.value)} />
-        <button disabled={loading} className="px-3 py-2 bg-blue-600 text-white rounded w-full">
-          {loading ? 'Входим…' : 'Войти'}
-        </button>
-      </form>
+    <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', background: '#f8fafc' }}>
+      <div style={{
+        width: 380,
+        background: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 16,
+        padding: 22,
+        boxShadow: '0 8px 30px rgba(0,0,0,0.05)'
+      }}>
+        <h2 style={{ margin: 0 }}>Вход в систему</h2>
+        <p style={{ color: '#64748b', marginTop: 6 }}>Sim Scope — HVAC & Appliances</p>
 
-      <div className="mt-3">
-        <button disabled={loading} onClick={sendMagic} className="px-3 py-2 bg-gray-100 rounded w-full">
-          Прислать магическую ссылку
+        <form onSubmit={onLogin} style={{ marginTop: 14 }}>
+          <label style={{ fontWeight: 600 }}>Email</label>
+          <input
+            style={inputStyle}
+            type="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoFocus
+            autoComplete="email"
+          />
+
+          <div style={{ marginTop: 12 }}>
+            <label style={{ fontWeight: 600 }}>Пароль</label>
+            <div style={{ position: 'relative' }}>
+              <input
+                style={{ ...inputStyle, paddingRight: 44 }}
+                type={showPass ? 'text' : 'password'}
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                aria-label="Показать/скрыть пароль"
+                onClick={() => setShowPass((s) => !s)}
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: 8,
+                  border: '1px solid #e5e7eb',
+                  background: '#fff',
+                  borderRadius: 8,
+                  padding: '6px 8px',
+                  cursor: 'pointer'
+                }}
+              >
+                {showPass ? 'Скрыть' : 'Показать'}
+              </button>
+            </div>
+          </div>
+
+          {err && <div style={{ marginTop: 12, color: '#ef4444' }}>{err}</div>}
+          {info && <div style={{ marginTop: 12, color: '#16a34a' }}>{info}</div>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ ...btnStyle, background: '#111827', color: '#fff', marginTop: 16 }}
+          >
+            {loading ? 'Входим…' : 'Войти'}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          onClick={onResetPassword}
+          style={{ ...btnStyle, background: '#e5e7eb', color: '#111827', marginTop: 10 }}
+        >
+          Сбросить пароль
         </button>
+
+        <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
+          Доступ выдает администратор. Если нет аккаунта — обратись к менеджеру.
+        </div>
       </div>
-
-      {msg && <div className="mt-3 text-sm text-rose-600">{msg}</div>}
     </div>
   );
 }
