@@ -1,49 +1,140 @@
+   // src/App.jsx
 import React from 'react';
-import { Routes, Route, Link, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute'; // если ты его оставляешь
+import RequireRole from './components/RequireRole';
+import TopNav from './components/TopNav';
+
+// страницы
+import LoginPage from './pages/LoginPage';
+import NoAccessPage from './pages/NoAccessPage';
 
 import JobsPage from './pages/JobsPage';
 import JobDetailsPage from './pages/JobDetailsPage';
-import AllJobsPage from './pages/AllJobsPage';
-import CalendarPage from './pages/CalendarPage';
-import MaterialsPage from './pages/MaterialsPage';
-import FinancePage from './pages/FinancePage';
+import TechnicianCalendar from './pages/TechnicianCalendar';
 import InvoicePage from './pages/InvoicePage';
-import TechniciansPage from './pages/TechniciansPage';
+import MaterialsPage from './pages/MaterialsPage';
 import ChatPage from './pages/ChatPage';
-import ChatAdminPage from './pages/ChatAdminPage';
 
-const navStyle = { marginBottom: 20, borderBottom: '1px solid #eee', paddingBottom: 10 };
-const linkStyle = { marginRight: 16, textDecoration: 'none', color: '#1976d2', fontWeight: 600 };
+import StaffPage from './pages/StaffPage';
+import ReportsPage from './pages/ReportsPage';
+import SettingsPage from './pages/SettingsPage';
+
+// Layout с верхним меню (кроме /login)
+function Shell({ children }) {
+  return (
+    <div>
+      <TopNav />
+      <div>{children}</div>
+    </div>
+  );
+}
 
 export default function App() {
   return (
-    <div style={{ padding: 20 }}>
-      <h1 style={{ marginTop: 0 }}>HVAC App ✅</h1>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* публично */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/no-access" element={<NoAccessPage />} />
 
-      <nav style={navStyle}>
-        <Link to="/" style={linkStyle}>📋 Заявки</Link>
-        <Link to="/calendar" style={linkStyle}>📅 Календарь</Link>
-        <Link to="/all" style={linkStyle}>📄 Все заявки</Link>
-        <Link to="/materials" style={linkStyle}>📦 Детали</Link>
-        <Link to="/chat" style={linkStyle}>💬 Чат</Link>
-        <Link to="/admin/chats" style={linkStyle}>⚙️ Чаты (админ)</Link>
-        <Link to="/technicians" style={linkStyle}>👥 Сотрудники</Link>
-        <Link to="/finance" style={linkStyle}>💰 Финансы</Link>
-      </nav>
+          {/* менеджер + админ */}
+          <Route
+            path="/jobs"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><JobsPage /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/jobs/all"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><JobsPage mode="all" /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/jobs/:id"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><JobDetailsPage /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/calendar"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><TechnicianCalendar /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/materials"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><MaterialsPage /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/chat"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><ChatPage /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/invoice/:jobId"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <Shell><InvoicePage /></Shell>
+              </RequireRole>
+            }
+          />
 
-      <Routes>
-        <Route path="/" element={<JobsPage />} />
-        <Route path="/calendar" element={<CalendarPage />} />
-        <Route path="/all" element={<AllJobsPage />} />
-        <Route path="/materials" element={<MaterialsPage />} />
-        <Route path="/finance" element={<FinancePage />} />
-        <Route path="/invoice/:id" element={<InvoicePage />} />
-        <Route path="/job/:id" element={<JobDetailsPage />} />
-        <Route path="/technicians" element={<TechniciansPage />} />
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/admin/chats" element={<ChatAdminPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </div>
+          {/* только админ */}
+          <Route
+            path="/staff"
+            element={
+              <RequireRole allow={['admin']}>
+                <Shell><StaffPage /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/reports"
+            element={
+              <RequireRole allow={['admin']}>
+                <Shell><ReportsPage /></Shell>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <RequireRole allow={['admin']}>
+                <Shell><SettingsPage /></Shell>
+              </RequireRole>
+            }
+          />
+
+          {/* корень → в заявки (если есть доступ), иначе на /no-access */}
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Shell><JobsPage /></Shell>
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }
