@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-// Состояние аутентификации, профиль и роль
+/**
+ * Состояние аутентификации и профиля
+ */
 const AuthCtx = createContext({
   loading: true,
   session: null,
@@ -44,11 +46,10 @@ export function AuthProvider({ children }) {
     }
     const user = session.user;
 
-    // Пробуем найти профиль по двум вариантам схемы:
-    // 1) profiles.auth_user_id = user.id
-    // 2) profiles.id = user.id (если id профиля == auth user id)
+    // Ищем профиль по двум возможным схемам:
+    // 1) profiles.auth_user_id = auth.user.id
+    // 2) profiles.id = auth.user.id
     let profile = null;
-    let isAdmin = false;
 
     const { data: p1 } = await supabase
       .from('profiles')
@@ -66,9 +67,7 @@ export function AuthProvider({ children }) {
       if (p2) profile = p2;
     }
 
-    if (profile) {
-      isAdmin = !!profile.is_admin || profile.role === 'admin';
-    }
+    const isAdmin = !!profile?.is_admin || profile?.role === 'admin';
 
     setState({
       loading: false,
@@ -82,10 +81,10 @@ export function AuthProvider({ children }) {
   return <AuthCtx.Provider value={state}>{children}</AuthCtx.Provider>;
 }
 
-// Хук для удобного доступа
+/** Хук доступа к контексту */
 export const useAuth = () => useContext(AuthCtx);
 
-// Защита: требуется быть авторизованным
+/** Доступ только для авторизованных */
 export function RequireAuth({ children }) {
   const { loading, session } = useAuth();
   if (loading) return <div className="p-4">Загрузка…</div>;
@@ -93,11 +92,27 @@ export function RequireAuth({ children }) {
   return children;
 }
 
-// Защита: требуется роль администратора
+/** Доступ только для роли admin */
 export function RequireAdmin({ children }) {
   const { loading, isAdmin } = useAuth();
   if (loading) return <div className="p-4">Загрузка…</div>;
   if (!isAdmin) return <div className="p-4">Недостаточно прав</div>;
+  return children;
+}
+
+/**
+ * Доступ по ролям (универсальный гейт)
+ * Пример: <RequireRole allow="manager">...</RequireRole>
+ * или:   <RequireRole allow={['manager','tech']}>...</RequireRole>
+ */
+export function RequireRole({ allow, children }) {
+  const { loading, profile } = useAuth();
+  if (loading) return <div className="p-4">Загрузка…</div>;
+
+  const need = Array.isArray(allow) ? allow : [allow];
+  const role = profile?.role ?? null;
+
+  if (!role || !need.includes(role)) return <div className="p-4">Недостаточно прав</div>;
   return children;
 }
 
