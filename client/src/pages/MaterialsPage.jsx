@@ -1,7 +1,7 @@
 // client/src/pages/MaterialsPage.jsx
 // Таблица материалов + inline-смена статуса заявки в самой таблице
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabase';
+import { supabase } from '../supabaseClient';
 
 // Справочник статусов (добавили ReCall)
 const statusOptions = [
@@ -507,3 +507,4 @@ const MaterialsPage = () => {
 };
 
 export default MaterialsPage;
+
