@@ -1,6 +1,6 @@
-// App.js
 import React from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
+
 import JobDetailsPage from './pages/JobDetailsPage';
 import JobsPage from './pages/JobsPage';
 import AllJobsPage from './pages/AllJobsPage';
@@ -44,19 +44,3 @@ export default function App() {
     </div>
   );
 }
-
-const navStyle = {
-  marginBottom: '20px',
-  borderBottom: '1px solid #ccc',
-  paddingBottom: '10px'
-};
-
-const linkStyle = {
-  marginRight: '20px',
-  textDecoration: 'none',
-  color: '#1976d2',
-  fontWeight: 'bold',
-  fontSize: '16px'
-};
-
-export default App;
