@@ -1,6 +1,6 @@
 // src/App.js
 import React from 'react';
-import { HashRouter, Routes, Route, Link, Navigate } from 'react-router-dom';
+import { Routes, Route, Link, Navigate } from 'react-router-dom';
 
 // ВАЖНО: пути и регистр имён должны совпадать с фактическими файлами
 import JobsPage from './pages/JobsPage';
