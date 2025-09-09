@@ -1,6 +1,6 @@
 // client/src/pages/JoAllJobsPage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../supabase';
+import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 
@@ -539,3 +539,4 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
+
