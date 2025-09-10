@@ -1,11 +1,13 @@
+// client/src/pages/TechniciansPage.jsx
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-// справочник ролей
+// Справочник ролей (добавил admin)
 const roleOptions = [
+  { value: 'admin',   label: 'Админ' },
   { value: 'manager', label: 'Менеджер' },
-  { value: 'tech', label: 'Техник' },
+  { value: 'tech',    label: 'Техник' },
 ];
 
 const inputStyle = { width: '100%', padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 };
@@ -13,7 +15,8 @@ const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 
 const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 
 export default function TechniciansPage() {
-  const { isAdmin, loading: authLoading } = useAuth();
+  // оставляем useAuth для загрузочного спиннера (доступ уже фильтрует роутер)
+  const { loading: authLoading } = useAuth();
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -29,11 +32,11 @@ export default function TechniciansPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('technicians')
-      .select('*')
+      .select('id, name, phone, email, role')
       .order('name', { ascending: true });
 
     if (error) {
-      console.error(error);
+      console.error('technicians select error:', error);
       alert('Ошибка загрузки сотрудников');
       setItems([]);
     } else {
@@ -48,14 +51,14 @@ export default function TechniciansPage() {
 
   const saveRow = async (row) => {
     const payload = {
-      name: row.name ?? null,
-      phone: row.phone ?? null,
-      email: row.email ?? null,
-      role: row.role ?? null,
+      name:  row.name?.trim()  || null,
+      phone: row.phone?.trim() || null,
+      email: row.email?.trim() || null,
+      role:  row.role ? String(row.role).trim().toLowerCase() : null,
     };
     const { error } = await supabase.from('technicians').update(payload).eq('id', row.id);
     if (error) {
-      console.error(error);
+      console.error('technicians update error:', error);
       alert('Ошибка при сохранении');
       return;
     }
@@ -68,14 +71,14 @@ export default function TechniciansPage() {
       return;
     }
     const payload = {
-      name: newRow.name.trim(),
+      name:  newRow.name.trim(),
       phone: newRow.phone?.trim() || null,
       email: newRow.email?.trim() || null,
-      role: newRow.role || 'tech',
+      role:  (newRow.role || 'tech').toLowerCase().trim(),
     };
     const { error } = await supabase.from('technicians').insert(payload);
     if (error) {
-      console.error(error);
+      console.error('technicians insert error:', error);
       alert('Ошибка при добавлении');
       return;
     }
@@ -87,7 +90,7 @@ export default function TechniciansPage() {
     if (!window.confirm('Удалить сотрудника?')) return;
     const { error } = await supabase.from('technicians').delete().eq('id', id);
     if (error) {
-      console.error(error);
+      console.error('technicians delete error:', error);
       alert('Ошибка при удалении');
       return;
     }
@@ -101,23 +104,21 @@ export default function TechniciansPage() {
       alert('У сотрудника пустой Email');
       return;
     }
-    // В Supabase → Authentication → URL settings проверь "Site URL".
+    // Проверь в Supabase → Authentication → URL settings → "Site URL".
     const redirectTo = window.location.origin; // куда вернется после клика по письму
     const { error } = await supabase.auth.signInWithOtp({
       email: target,
       options: { emailRedirectTo: redirectTo },
     });
     if (error) {
-      console.error(error);
+      console.error('sendLoginLink error:', error);
       alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
       return;
     }
     alert('Письмо со ссылкой для входа отправлено на ' + target);
   };
 
-  // гейт: только админ
   if (authLoading) return <div className="p-4">Загрузка…</div>;
-  if (!isAdmin) return <div className="p-4">Недостаточно прав</div>;
 
   return (
     <div className="p-4">
@@ -201,7 +202,7 @@ export default function TechniciansPage() {
                 <td style={td}>
                   <select
                     style={inputStyle}
-                    value={row.role || 'tech'}
+                    value={(row.role || 'tech').toLowerCase()}
                     onChange={e => onChangeCell(row.id, 'role', e.target.value)}
                   >
                     {roleOptions.map(o => (
