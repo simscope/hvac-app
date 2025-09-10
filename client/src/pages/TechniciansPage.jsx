@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-// Роли
+// Должности
 const roleOptions = [
   { value: 'admin',   label: 'Админ' },
   { value: 'manager', label: 'Менеджер' },
@@ -15,24 +15,25 @@ const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 
 const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 
 export default function TechniciansPage() {
-  // Доступ сюда уже пускает только админ через RequireRole
+  // Роут уже фильтрует доступ по роли; используем auth только ради спиннера
   const { loading: authLoading } = useAuth();
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // форма добавления
+  // Форма добавления
   const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
 
   useEffect(() => {
     if (!authLoading) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading]);
 
   const load = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('technicians')
-      .select('id, name, phone, email, role, auth_user_id')
+      .select('id, name, phone, email, role')
       .order('name', { ascending: true });
 
     if (error) {
@@ -97,97 +98,53 @@ export default function TechniciansPage() {
     setItems(prev => prev.filter(r => r.id !== id));
   };
 
-  // === MAGIC LINK (email OTP) ================================
-  const sendMagicLink = async (row) => {
-    const target = (row.email || '').trim();
-    if (!target) {
-      alert('У сотрудника пустой Email');
-      return;
-    }
+  // === АДМИНСКИЕ ДЕЙСТВИЯ ===
 
-    // для hash-роутера
-    const redirectTo = `${window.location.origin}/#/login`;
-
-    // 1) пробуем войти без создания (для уже существующих в auth.users)
-    let { error } = await supabase.auth.signInWithOtp({
-      email: target,
-      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
-    });
-
-    // 2) если не найден — пробуем создать (работает, когда Signups включены)
-    if (error && /not\s*found|user.*does.*not.*exist/i.test(error.message || '')) {
-      const res = await supabase.auth.signInWithOtp({
-        email: target,
-        options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
-      });
-      error = res.error;
-    }
-
-    if (error) {
-      // Частые причины
-      if (error.status === 422 || /Signups.*not.*allowed/i.test(error.message || '')) {
-        alert(
-          'В Supabase отключены самостоятельные регистрации по email.\n' +
-          'Нажмите «Пригласить» — пользователь будет создан админом и получит письмо.'
-        );
-      } else if (/Database error saving new user/i.test(error.message || '')) {
-        alert(
-          'Supabase не смог сохранить пользователя (Database error saving new user).\n' +
-          'Используйте «Пригласить» — это создаст пользователя через серверную функцию.'
-        );
-      } else {
-        console.error('sendMagicLink error:', error);
-        alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
-      }
-      return;
-    }
-
-    alert('Письмо со ссылкой для входа отправлено на ' + target);
-  };
-
-  // === INVITE (через Edge-функцию) ============================
-  // Требуется серверная функция `invite-user` (service role).
-  const inviteUser = async (row) => {
+  // 1) Создать пользователя (email+пароль) и связать с technicians
+  const createUserWithPassword = async (row) => {
     const email = (row.email || '').trim();
-    if (!email) {
-      alert('У сотрудника пустой Email');
-      return;
-    }
+    if (!email) return alert('Укажите email у сотрудника');
+
+    const password = prompt('Задайте временный пароль (мин. 6 символов):');
+    if (!password) return;
+
     try {
-      const { data, error } = await supabase.functions.invoke('invite-user', {
+      const { data, error } = await supabase.functions.invoke('admin-create-user', {
         body: {
           email,
-          name: row.name || '',
-          phone: row.phone || '',
-          role: (row.role || 'tech').toLowerCase(),
+          password,
           technician_id: row.id,
+          name: row.name,
+          role: row.role,
+          phone: row.phone,
         },
       });
-
-      if (error) {
-        console.error('invite-user error:', error);
-        alert(
-          'Не удалось пригласить пользователя.\n\n' +
-          'Скорее всего, ещё не развернута Edge-функция invite-user.\n' +
-          'Сделайте это один раз и попробуйте снова.'
-        );
-        return;
-      }
-
-      // ожидаем с сервера { ok: true, userId }
-      if (data?.ok) {
-        if (!row.auth_user_id && data.userId) {
-          await supabase.from('technicians').update({ auth_user_id: data.userId }).eq('id', row.id);
-        }
-        await load();
-        alert('Приглашение отправлено. Пользователь получит письмо и задаст пароль.');
-      } else {
-        console.warn('invite-user response:', data);
-        alert('Сервер вернул неожиданный ответ. Проверьте логи edge-функции.');
-      }
+      if (error || !data?.ok) throw new Error(data?.message || error?.message || 'error');
+      alert('Пользователь создан. Передайте сотруднику логин и пароль.');
+      await load();
     } catch (e) {
-      console.error('invite-user exception:', e);
-      alert('Сбой при вызове invite-user. Проверьте, что функция задеплоена и доступна.');
+      console.error(e);
+      alert('Не удалось создать пользователя: ' + e.message);
+    }
+  };
+
+  // 2) Сгенерировать ссылку на «Сброс пароля»
+  const generateResetLink = async (row) => {
+    const email = (row.email || '').trim();
+    if (!email) return alert('У сотрудника пустой email');
+
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-reset-password', {
+        body: { email, redirectTo: `${window.location.origin}/#/login` },
+      });
+      if (error || !data?.ok) throw new Error(data?.message || error?.message || 'error');
+
+      const link = data.link;
+      await navigator.clipboard.writeText(link);
+      alert('Ссылка для задания пароля скопирована в буфер обмена:\n' + link);
+    } catch (e) {
+      console.error(e);
+      alert('Не удалось сгенерировать ссылку: ' + e.message);
     }
   };
 
@@ -236,9 +193,9 @@ export default function TechniciansPage() {
               <th style={th} width="40">#</th>
               <th style={th}>Имя</th>
               <th style={th} width="180">Телефон</th>
-              <th style={th} width="260">Email</th>
+              <th style={th} width="240">Email</th>
               <th style={th} width="160">Должность</th>
-              <th style={{ ...th, textAlign: 'center' }} width="320">Действия</th>
+              <th style={{ ...th, textAlign: 'center' }} width="380">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -284,40 +241,19 @@ export default function TechniciansPage() {
                   </select>
                 </td>
                 <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>💾</button>
-
-                  {/* magic-link = вход по email (если signups включены) */}
-                  <button
-                    title="Войти по email (magic-link)"
-                    onClick={() => sendMagicLink(row)}
-                    style={{ marginRight: 8 }}
-                  >
-                    ✉️ Войти по email
+                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>💾 Сохранить</button>
+                  <button title="Создать пользователя (email+пароль)" onClick={() => createUserWithPassword(row)} style={{ marginRight: 8 }}>
+                    🔐 Создать пользователя
                   </button>
-
-                  {/* серверное приглашение = создаёт пользователя, когда signups закрыты */}
-                  <button
-                    title="Пригласить (создать пользователя через сервер)"
-                    onClick={() => inviteUser(row)}
-                    style={{ marginRight: 8 }}
-                  >
-                    📨 Пригласить
+                  <button title="Сброс пароля (ссылка)" onClick={() => generateResetLink(row)} style={{ marginRight: 8 }}>
+                    ♻️ Сброс пароля
                   </button>
-
-                  <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️</button>
+                  <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️ Удалить</button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
-
-      {/* Подсказка по серверной функции */}
-      <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13, lineHeight: 1.5 }}>
-        <b>Подсказка:</b> если при «Войти по email» видите 422/“Signups not allowed”, используйте «Пригласить».
-        Это вызывает Edge-функцию <code>invite-user</code> (нужен service role). Функция должна создать
-        пользователя через <code>auth.admin.inviteUserByEmail</code> и вернуть&nbsp;
-        <code>{'{ ok: true, userId }'}</code>. Мы сразу записываем <code>auth_user_id</code> для техника.
       </div>
     </div>
   );
