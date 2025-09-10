@@ -135,7 +135,7 @@ export default function TechniciansPage() {
     setSendingId(rowId || -1);
 
     // Для hash-роутера возвращаем на /#/login
-    const redirectTo = `${window.location.origin}/#/login`;
+    const redirectTo = window.location.origin;
 
     try {
       // 1) Пытаемся отправить ссылку ТОЛЬКО существующему пользователю
@@ -302,3 +302,4 @@ export default function TechniciansPage() {
     </div>
   );
 }
+
