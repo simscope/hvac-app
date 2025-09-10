@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-// Должности
+// Роли
 const roleOptions = [
   { value: 'admin',   label: 'Админ' },
   { value: 'manager', label: 'Менеджер' },
@@ -15,13 +15,13 @@ const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 
 const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 
 export default function TechniciansPage() {
-  // Роут уже фильтрует доступ по роли; используем auth только ради спиннера
+  // Доступ сюда уже пускает только админ через RequireRole
   const { loading: authLoading } = useAuth();
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Форма добавления
+  // форма добавления
   const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export default function TechniciansPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('technicians')
-      .select('id, name, phone, email, role')
+      .select('id, name, phone, email, role, auth_user_id')
       .order('name', { ascending: true });
 
     if (error) {
@@ -97,56 +97,100 @@ export default function TechniciansPage() {
     setItems(prev => prev.filter(r => r.id !== id));
   };
 
-  /**
-   * Отправка magic-link (email OTP).
-   * Без emailRedirectTo → берётся Authentication → URL Configuration → Site URL.
-   * Сначала пробуем только существующему пользователю (shouldCreateUser: false),
-   * если «user not found» — пытаемся создать (shouldCreateUser: true).
-   */
-  const sendLoginLink = async (email) => {
-    const target = (email || '').trim();
-    if (!target) return alert('У сотрудника пустой Email');
+  // === MAGIC LINK (email OTP) ================================
+  const sendMagicLink = async (row) => {
+    const target = (row.email || '').trim();
+    if (!target) {
+      alert('У сотрудника пустой Email');
+      return;
+    }
 
-    const tryOtp = (shouldCreateUser) =>
-      supabase.auth.signInWithOtp({
+    // для hash-роутера
+    const redirectTo = `${window.location.origin}/#/login`;
+
+    // 1) пробуем войти без создания (для уже существующих в auth.users)
+    let { error } = await supabase.auth.signInWithOtp({
+      email: target,
+      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+    });
+
+    // 2) если не найден — пробуем создать (работает, когда Signups включены)
+    if (error && /not\s*found|user.*does.*not.*exist/i.test(error.message || '')) {
+      const res = await supabase.auth.signInWithOtp({
         email: target,
-        options: {
-          shouldCreateUser,
-          // НЕ передаём emailRedirectTo — это устраняет типовой 422 из-за redirect_to
-        },
+        options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
       });
-
-    // 1) только существующим
-    let { error } = await tryOtp(false);
-
-    // 2) если нет пользователя — создаём (если разрешены signups)
-    if (error && /not\s*found|user\s*not\s*found/i.test(error.message || '')) {
-      const r2 = await tryOtp(true);
-      error = r2.error;
+      error = res.error;
     }
 
     if (error) {
-      const msg = (error.message || '').toLowerCase();
-
-      if (msg.includes('signups not allowed')) {
-        return alert(
-          'В Supabase запрещены регистрации по email.\n' +
-          'Включи: Authentication → Sign In / Providers → Allow new users to sign up.'
+      // Частые причины
+      if (error.status === 422 || /Signups.*not.*allowed/i.test(error.message || '')) {
+        alert(
+          'В Supabase отключены самостоятельные регистрации по email.\n' +
+          'Нажмите «Пригласить» — пользователь будет создан админом и получит письмо.'
         );
-      }
-      if (msg.includes('redirect') || msg.includes('url')) {
-        return alert(
-          'Supabase отклонил redirect_to.\n' +
-          'Решение: не передавать redirect_to в коде и убедиться, что в URL Configuration ' +
-          'прописан Site URL https://hvac-app-jade.vercel.app (и он же в Additional Redirect URLs).'
+      } else if (/Database error saving new user/i.test(error.message || '')) {
+        alert(
+          'Supabase не смог сохранить пользователя (Database error saving new user).\n' +
+          'Используйте «Пригласить» — это создаст пользователя через серверную функцию.'
         );
+      } else {
+        console.error('sendMagicLink error:', error);
+        alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
       }
-
-      console.error('[sendLoginLink] error:', error);
-      return alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
+      return;
     }
 
     alert('Письмо со ссылкой для входа отправлено на ' + target);
+  };
+
+  // === INVITE (через Edge-функцию) ============================
+  // Требуется серверная функция `invite-user` (service role).
+  const inviteUser = async (row) => {
+    const email = (row.email || '').trim();
+    if (!email) {
+      alert('У сотрудника пустой Email');
+      return;
+    }
+    try {
+      const { data, error } = await supabase.functions.invoke('invite-user', {
+        body: {
+          email,
+          name: row.name || '',
+          phone: row.phone || '',
+          role: (row.role || 'tech').toLowerCase(),
+          technician_id: row.id,
+        },
+      });
+
+      if (error) {
+        // Когда функции нет/не настроена: error.message обычно "Function not found"
+        console.error('invite-user error:', error);
+        alert(
+          'Не удалось пригласить пользователя.\n\n' +
+          'Скорее всего, ещё не развернута Edge-функция invite-user.\n' +
+          'Сделайте это один раз и попробуйте снова.'
+        );
+        return;
+      }
+
+      // ожидаем с сервера { ok: true, userId }
+      if (data?.ok) {
+        // Если на сервере не связали — доп.подстраховка: пропишем auth_user_id по email
+        if (!row.auth_user_id && data.userId) {
+          await supabase.from('technicians').update({ auth_user_id: data.userId }).eq('id', row.id);
+        }
+        await load();
+        alert('Приглашение отправлено. Пользователь получит письмо и задаст пароль.');
+      } else {
+        console.warn('invite-user response:', data);
+        alert('Сервер вернул неожиданный ответ. Проверьте логи edge-функции.');
+      }
+    } catch (e) {
+      console.error('invite-user exception:', e);
+      alert('Сбой при вызове invite-user. Проверьте, что функция задеплоена и доступна.');
+    }
   };
 
   if (authLoading) return <div className="p-4">Загрузка…</div>;
@@ -194,9 +238,9 @@ export default function TechniciansPage() {
               <th style={th} width="40">#</th>
               <th style={th}>Имя</th>
               <th style={th} width="180">Телефон</th>
-              <th style={th} width="240">Email</th>
+              <th style={th} width="260">Email</th>
               <th style={th} width="160">Должность</th>
-              <th style={{ ...th, textAlign: 'center' }} width="220">Действия</th>
+              <th style={{ ...th, textAlign: 'center' }} width="320">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -243,15 +287,39 @@ export default function TechniciansPage() {
                 </td>
                 <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
                   <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>💾</button>
-                  <button title="Письмо для входа" onClick={() => sendLoginLink(row.email)} style={{ marginRight: 8 }}>
+
+                  {/* magic-link = вход по email (если signups включены) */}
+                  <button
+                    title="Войти по email (magic-link)"
+                    onClick={() => sendMagicLink(row)}
+                    style={{ marginRight: 8 }}
+                  >
                     ✉️ Войти по email
                   </button>
+
+                  {/* серверное приглaшение = создаёт пользователя, когда signups закрыты */}
+                  <button
+                    title="Пригласить (создать пользователя через сервер)"
+                    onClick={() => inviteUser(row)}
+                    style={{ marginRight: 8 }}
+                  >
+                    📨 Пригласить
+                  </button>
+
                   <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️</button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Подсказка по серверной функции */}
+      <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13, lineHeight: 1.5 }}>
+        <b>Подсказка:</b> если при «Войти по email» видите 422/“Signups not allowed”, используйте «Пригласить».
+        Это вызывает Edge-функцию <code>invite-user</code> (нужен service role).  
+        Функция должна создать пользователя через <code>auth.admin.inviteUserByEmail</code> и вернуть
+        <code>{{"{ ok: true, userId }"}}</code>. Мы сразу записываем <code>auth_user_id</code> для техника.
       </div>
     </div>
   );
