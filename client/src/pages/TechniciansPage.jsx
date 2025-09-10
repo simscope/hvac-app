@@ -14,10 +14,6 @@ const inputStyle = { width: '100%', padding: 6, border: '1px solid #e5e7eb', bor
 const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 'left', fontWeight: 600 };
 const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 
-function isEmail(v) {
-  return !!String(v || '').trim().match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
-}
-
 export default function TechniciansPage() {
   // Роут уже фильтрует доступ по роли; используем auth только ради спиннера
   const { loading: authLoading } = useAuth();
@@ -27,11 +23,6 @@ export default function TechniciansPage() {
 
   // Форма добавления
   const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
-
-  // Локальные флаги занятости
-  const [savingId, setSavingId] = useState(null);
-  const [sendingId, setSendingId] = useState(null);
-  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     if (!authLoading) load();
@@ -59,23 +50,19 @@ export default function TechniciansPage() {
   };
 
   const saveRow = async (row) => {
-    setSavingId(row.id);
     const payload = {
       name:  row.name?.trim()  || null,
       phone: row.phone?.trim() || null,
       email: row.email?.trim() || null,
       role:  row.role ? String(row.role).trim().toLowerCase() : null,
     };
-    try {
-      const { error } = await supabase.from('technicians').update(payload).eq('id', row.id);
-      if (error) throw error;
-      await load();
-    } catch (e) {
-      console.error('technicians update error:', e);
-      alert('Ошибка при сохранении: ' + (e.message || 'неизвестная ошибка'));
-    } finally {
-      setSavingId(null);
+    const { error } = await supabase.from('technicians').update(payload).eq('id', row.id);
+    if (error) {
+      console.error('technicians update error:', error);
+      alert('Ошибка при сохранении');
+      return;
     }
+    await load();
   };
 
   const addRow = async () => {
@@ -83,102 +70,83 @@ export default function TechniciansPage() {
       alert('Введите имя');
       return;
     }
-    if (!isEmail(newRow.email)) {
-      alert('Укажите корректный Email — он нужен для входа по ссылке');
-      return;
-    }
-
-    setAdding(true);
     const payload = {
       name:  newRow.name.trim(),
       phone: newRow.phone?.trim() || null,
       email: newRow.email?.trim() || null,
       role:  (newRow.role || 'tech').toLowerCase().trim(),
     };
-    try {
-      const { error } = await supabase.from('technicians').insert(payload);
-      if (error) throw error;
-      setNewRow({ name: '', phone: '', email: '', role: 'tech' });
-      await load();
-    } catch (e) {
-      console.error('technicians insert error:', e);
-      alert('Ошибка при добавлении: ' + (e.message || 'неизвестная ошибка'));
-    } finally {
-      setAdding(false);
+    const { error } = await supabase.from('technicians').insert(payload);
+    if (error) {
+      console.error('technicians insert error:', error);
+      alert('Ошибка при добавлении');
+      return;
     }
+    setNewRow({ name: '', phone: '', email: '', role: 'tech' });
+    await load();
   };
 
   const removeRow = async (id) => {
     if (!window.confirm('Удалить сотрудника?')) return;
-    try {
-      const { error } = await supabase.from('technicians').delete().eq('id', id);
-      if (error) throw error;
-      setItems(prev => prev.filter(r => r.id !== id));
-    } catch (e) {
-      console.error('technicians delete error:', e);
-      alert('Ошибка при удалении: ' + (e.message || 'неизвестная ошибка'));
+    const { error } = await supabase.from('technicians').delete().eq('id', id);
+    if (error) {
+      console.error('technicians delete error:', error);
+      alert('Ошибка при удалении');
+      return;
     }
+    setItems(prev => prev.filter(r => r.id !== id));
   };
 
-  // Отправка magic-link (email OTP)
-  const sendLoginLink = async (email, rowId) => {
+  /**
+   * Отправка magic-link (email OTP).
+   * Без emailRedirectTo → берётся Authentication → URL Configuration → Site URL.
+   * Сначала пробуем только существующему пользователю (shouldCreateUser: false),
+   * если «user not found» — пытаемся создать (shouldCreateUser: true).
+   */
+  const sendLoginLink = async (email) => {
     const target = (email || '').trim();
-    if (!target) {
-      alert('У сотрудника пустой Email');
-      return;
-    }
-    if (!isEmail(target)) {
-      alert('Некорректный Email');
-      return;
-    }
+    if (!target) return alert('У сотрудника пустой Email');
 
-    setSendingId(rowId || -1);
-
-    // Для hash-роутера возвращаем на /#/login
-    const redirectTo = window.location.origin;
-
-    try {
-      // 1) Пытаемся отправить ссылку ТОЛЬКО существующему пользователю
-      let { error } = await supabase.auth.signInWithOtp({
+    const tryOtp = (shouldCreateUser) =>
+      supabase.auth.signInWithOtp({
         email: target,
-        options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+        options: {
+          shouldCreateUser,
+          // НЕ передаём emailRedirectTo — это устраняет типовой 422 из-за redirect_to
+        },
       });
 
-      // 2) Если пользователь не найден — пробуем создать (если signups разрешены)
-      if (error && /not\s*found/i.test(error.message || '')) {
-        const res = await supabase.auth.signInWithOtp({
-          email: target,
-          options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
-        });
-        error = res.error;
-      }
+    // 1) только существующим
+    let { error } = await tryOtp(false);
 
-      if (error) {
-        // Частые сценарии — даём человеку понятные подсказки
-        if (/signups.*not.*allowed.*otp/i.test(error.message || '')) {
-          alert(
-            'Регистрация по email отключена в Supabase.\n' +
-            'Включи signups в Auth → Settings или создай пользователя вручную в Auth → Users (Invite).'
-          );
-        } else if (/Database error saving new user/i.test(error.message || '')) {
-          alert(
-            'Supabase не смог создать пользователя (Database error saving new user).\n' +
-            'Проверь: Auth → Providers (Email ON), Settings → Signups (ON), Redirect URLs добавлен,\n' +
-            'и что нет «жёсткого» триггера на вставку в auth.users/public.profiles.'
-          );
-        } else {
-          throw error;
-        }
-        return;
-      }
-
-      alert('Письмо со ссылкой для входа отправлено на ' + target);
-    } catch (e) {
-      console.error('sendLoginLink error:', e);
-      alert('Не удалось отправить письмо: ' + (e.message || 'ошибка'));
-    } finally {
-      setSendingId(null);
+    // 2) если нет пользователя — создаём (если разрешены signups)
+    if (error && /not\s*found|user\s*not\s*found/i.test(error.message || '')) {
+      const r2 = await tryOtp(true);
+      error = r2.error;
     }
+
+    if (error) {
+      const msg = (error.message || '').toLowerCase();
+
+      if (msg.includes('signups not allowed')) {
+        return alert(
+          'В Supabase запрещены регистрации по email.\n' +
+          'Включи: Authentication → Sign In / Providers → Allow new users to sign up.'
+        );
+      }
+      if (msg.includes('redirect') || msg.includes('url')) {
+        return alert(
+          'Supabase отклонил redirect_to.\n' +
+          'Решение: не передавать redirect_to в коде и убедиться, что в URL Configuration ' +
+          'прописан Site URL https://hvac-app-jade.vercel.app (и он же в Additional Redirect URLs).'
+        );
+      }
+
+      console.error('[sendLoginLink] error:', error);
+      return alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
+    }
+
+    alert('Письмо со ссылкой для входа отправлено на ' + target);
   };
 
   if (authLoading) return <div className="p-4">Загрузка…</div>;
@@ -216,9 +184,7 @@ export default function TechniciansPage() {
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
-        <button onClick={addRow} disabled={adding} style={{ padding: '6px 12px' }}>
-          {adding ? 'Добавляю…' : '➕ Добавить'}
-        </button>
+        <button onClick={addRow} style={{ padding: '6px 12px' }}>➕ Добавить</button>
       </div>
 
       <div className="overflow-x-auto">
@@ -230,7 +196,7 @@ export default function TechniciansPage() {
               <th style={th} width="180">Телефон</th>
               <th style={th} width="240">Email</th>
               <th style={th} width="160">Должность</th>
-              <th style={{ ...th, textAlign: 'center' }} width="260">Действия</th>
+              <th style={{ ...th, textAlign: 'center' }} width="220">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -276,21 +242,9 @@ export default function TechniciansPage() {
                   </select>
                 </td>
                 <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  <button
-                    title="Сохранить"
-                    onClick={() => saveRow(row)}
-                    disabled={savingId === row.id}
-                    style={{ marginRight: 8 }}
-                  >
-                    {savingId === row.id ? '💾…' : '💾'}
-                  </button>
-                  <button
-                    title="Письмо для входа"
-                    onClick={() => sendLoginLink(row.email, row.id)}
-                    disabled={sendingId === row.id}
-                    style={{ marginRight: 8 }}
-                  >
-                    {sendingId === row.id ? '✉️…' : '✉️ Войти по email'}
+                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>💾</button>
+                  <button title="Письмо для входа" onClick={() => sendLoginLink(row.email)} style={{ marginRight: 8 }}>
+                    ✉️ Войти по email
                   </button>
                   <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️</button>
                 </td>
@@ -302,4 +256,3 @@ export default function TechniciansPage() {
     </div>
   );
 }
-
