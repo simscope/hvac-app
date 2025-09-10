@@ -124,6 +124,14 @@ export default function JobDetailsPage() {
   const [photos, setPhotos] = useState([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileRef = useRef(null);
+  // выбор фото для скачивания
+  const [checked, setChecked] = useState({}); // { [name]: true }
+  const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
+
+  // Комментарии
+  const [comments, setComments] = useState([]);
+  const [commentText, setCommentText] = useState('');
+  const [commentsLoading, setCommentsLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -190,6 +198,8 @@ export default function JobDetailsPage() {
       setMaterials(m || []);
 
       await loadPhotos();
+      await loadComments();
+
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,6 +221,40 @@ export default function JobDetailsPage() {
       return { name: o.name, url: pub.publicUrl };
     });
     setPhotos(mapped);
+    setChecked({}); // сбрасываем выбор при перезагрузке
+  };
+
+  const loadComments = async () => {
+    setCommentsLoading(true);
+    const { data, error } = await supabase
+      .from('comments')
+      .select('id, job_id, text, image_url, author_user_id, created_at')
+      .eq('job_id', jobId)
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('loadComments', error);
+      setComments([]);
+    } else {
+      setComments(data || []);
+    }
+    setCommentsLoading(false);
+  };
+
+  const addComment = async () => {
+    const text = commentText.trim();
+    if (!text) return;
+    const { data, error } = await supabase
+      .from('comments')
+      .insert({ job_id: jobId, text })
+      .select()
+      .single();
+    if (error) {
+      console.error('addComment', error);
+      alert('Не удалось сохранить комментарий');
+      return;
+    }
+    setComments((prev) => [...prev, data]);
+    setCommentText('');
   };
 
   /* ---------- редактирование заявки ---------- */
@@ -415,12 +459,39 @@ export default function JobDetailsPage() {
     await loadPhotos();
   };
 
-  const copyUrl = async (url) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      alert('Ссылка скопирована');
-    } catch {
-      window.prompt('Скопируйте ссылку:', url);
+  const toggleAllPhotos = (v) => {
+    if (v) {
+      const next = {};
+      photos.forEach((p) => { next[p.name] = true; });
+      setChecked(next);
+    } else {
+      setChecked({});
+    }
+  };
+  const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
+
+  const downloadOne = async (name) => {
+    const { data, error } = await storage().download(`${jobId}/${name}`);
+    if (error || !data) {
+      console.error('downloadOne', error);
+      alert('Не удалось скачать файл');
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadSelected = async () => {
+    const names = photos.filter((p) => checked[p.name]).map((p) => p.name);
+    if (!names.length) return;
+    for (const n of names) {
+      await downloadOne(n);
     }
   };
 
@@ -593,9 +664,9 @@ export default function JobDetailsPage() {
           </div>
         </div>
 
-        {/* Клиент */}
+        {/* Клиент — без показа id */}
         <div style={BOX}>
-          <div style={H2}>Клиент {client.id ? <span style={MUTED}>(id: {client.id})</span> : null}</div>
+          <div style={H2}>Клиент</div>
           <div style={{ display: 'grid', gap: 10 }}>
             <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
             <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
@@ -662,9 +733,75 @@ export default function JobDetailsPage() {
         </div>
       </div>
 
+      {/* Комментарии */}
+      <div style={BOX}>
+        <div style={H2}>Комментарии</div>
+
+        {commentsLoading ? (
+          <div style={MUTED}>Загрузка…</div>
+        ) : (
+          <>
+            <div
+              style={{
+                maxHeight: 260,
+                overflowY: 'auto',
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                padding: 10,
+                marginBottom: 8,
+              }}
+            >
+              {comments.length === 0 ? (
+                <div style={MUTED}>Пока нет комментариев</div>
+              ) : (
+                comments.map((c) => (
+                  <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
+                    <div style={{ fontSize: 12, color: '#64748b' }}>
+                      {new Date(c.created_at).toLocaleString()}
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <textarea
+                rows={2}
+                style={{ ...TA, minHeight: 60 }}
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Написать комментарий…"
+              />
+              <button style={PRIMARY} onClick={addComment}>Отправить</button>
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Фото / файлы */}
       <div style={BOX}>
-        <div style={H2}>Фото / файлы по заявке</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={H2}>Фото / файлы</div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <label style={{ userSelect: 'none', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={(e) => toggleAllPhotos(e.target.checked)}
+              />{' '}
+              Выбрать всё
+            </label>
+            <button
+              style={PRIMARY}
+              onClick={downloadSelected}
+              disabled={!Object.values(checked).some(Boolean)}
+            >
+              Скачать выбранные
+            </button>
+          </div>
+        </div>
+
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
           <input
             ref={fileRef}
@@ -675,23 +812,35 @@ export default function JobDetailsPage() {
           />
           {uploadBusy && <span style={MUTED}>Загрузка…</span>}
         </div>
+
         {photos.length === 0 && <div style={MUTED}>Файлов пока нет (необязательно)</div>}
+
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
           {photos.map((p) => (
             <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
+              <label style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6, userSelect:'none', cursor:'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={!!checked[p.name]}
+                  onChange={() => toggleOnePhoto(p.name)}
+                />
+                <span style={{ fontSize:12, wordBreak:'break-all' }}>{p.name}</span>
+              </label>
+
               {/\.(pdf)$/i.test(p.name) ? (
-                <div style={{ fontSize: 12, marginBottom: 6, wordBreak: 'break-all' }}>📄 {p.name}</div>
+                <div style={{ height: 120, display:'grid', placeItems:'center', background:'#f1f5f9', borderRadius:8, marginBottom:6 }}>
+                  📄 PDF
+                </div>
               ) : (
-                <a href={p.url} target="_blank" rel="noreferrer">
-                  <img
-                    src={p.url}
-                    alt={p.name}
-                    style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }}
-                  />
-                </a>
+                <img
+                  src={p.url}
+                  alt={p.name}
+                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display:'block', marginBottom:6 }}
+                />
               )}
+
               <div style={{ display: 'flex', gap: 6 }}>
-                <button style={BTN} onClick={() => copyUrl(p.url)}>Скопировать URL</button>
+                <button style={BTN} onClick={() => downloadOne(p.name)}>Скачать</button>
                 <button style={DANGER} onClick={() => delPhoto(p.name)}>Удалить</button>
               </div>
             </div>
