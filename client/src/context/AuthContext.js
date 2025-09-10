@@ -1,120 +1,81 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+// client/src/context/AuthContext.jsx
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-/**
- * Состояние аутентификации и профиля
- */
-const AuthCtx = createContext({
-  loading: true,
-  session: null,
-  user: null,
-  profile: null,
-  isAdmin: false,
-});
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [state, setState] = useState({
-    loading: true,
-    session: null,
-    user: null,
-    profile: null,
-    isAdmin: false,
-  });
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);   // { id, email, full_name, role, is_active }
+  const [loading, setLoading] = useState(true);
 
+  // 1) следим за сессией
   useEffect(() => {
-    let unsub;
+    let alive = true;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      await handleSession(session);
-
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (_event, session) => {
-          await handleSession(session);
-        }
-      );
-      unsub = () => subscription?.unsubscribe();
+      const { data } = await supabase.auth.getSession();
+      if (!alive) return;
+      setSession(data?.session ?? null);
+      setLoading(false);
     })();
 
-    return () => { try { unsub?.(); } catch {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => {
+      alive = false;
+      sub.subscription?.unsubscribe?.();
+    };
   }, []);
 
-  const handleSession = async (session) => {
-    if (!session?.user) {
-      setState(s => ({ ...s, loading: false, session: null, user: null, profile: null, isAdmin: false }));
-      return;
-    }
-    const user = session.user;
+  // 2) тянем профиль из technicians по email
+  useEffect(() => {
+    let alive = true;
+    async function loadProfile() {
+      setProfile(null);
+      const email = session?.user?.email?.toLowerCase();
+      if (!email) return;
 
-    // Ищем профиль по двум возможным схемам:
-    // 1) profiles.auth_user_id = auth.user.id
-    // 2) profiles.id = auth.user.id
-    let profile = null;
-
-    const { data: p1 } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('auth_user_id', user.id)
-      .maybeSingle();
-
-    if (p1) profile = p1;
-    else {
-      const { data: p2 } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
+      const { data, error } = await supabase
+        .from('technicians')
+        .select('id, email, full_name, role, is_active')
+        .ilike('email', email)
         .maybeSingle();
-      if (p2) profile = p2;
+
+      if (!alive) return;
+
+      if (error) {
+        console.error('loadProfile error', error);
+        setProfile(null);
+        return;
+      }
+
+      // Если строки нет — можно дать админ-доступ через переменную окружения (опционально)
+      const envAdmin = import.meta?.env?.VITE_ADMIN_EMAIL?.toLowerCase?.();
+      if (!data && envAdmin && envAdmin === email) {
+        setProfile({ id: null, email, full_name: 'Admin', role: 'admin', is_active: true });
+        return;
+      }
+
+      setProfile(data || null);
     }
+    loadProfile();
+  }, [session?.user?.email]);
 
-    const isAdmin = !!profile?.is_admin || profile?.role === 'admin';
-
-    setState({
-      loading: false,
+  const value = useMemo(
+    () => ({
       session,
-      user,
+      user: session?.user ?? null,
       profile,
-      isAdmin,
-    });
-  };
+      role: profile?.role || null,          // 'admin' | 'manager' | 'tech' | null
+      isActive: !!profile?.is_active,
+      loading,
+      logout: async () => supabase.auth.signOut(),
+    }),
+    [session, profile, loading]
+  );
 
-  return <AuthCtx.Provider value={state}>{children}</AuthCtx.Provider>;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-/** Хук доступа к контексту */
-export const useAuth = () => useContext(AuthCtx);
-
-
-/** Доступ только для авторизованных */
-export function RequireAuth({ children }) {
-  const { loading, session } = useAuth();
-  if (loading) return <div className="p-4">Загрузка…</div>;
-  if (!session) return <div className="p-4">Нужно войти</div>;
-  return children;
+export function useAuth() {
+  return useContext(AuthContext);
 }
-
-/** Доступ только для роли admin */
-export function RequireAdmin({ children }) {
-  const { loading, isAdmin } = useAuth();
-  if (loading) return <div className="p-4">Загрузка…</div>;
-  if (!isAdmin) return <div className="p-4">Недостаточно прав</div>;
-  return children;
-}
-
-/**
- * Доступ по ролям (универсальный гейт)
- * Пример: <RequireRole allow="manager">...</RequireRole>
- * или:   <RequireRole allow={['manager','tech']}>...</RequireRole>
- */
-export function RequireRole({ allow, children }) {
-  const { loading, profile } = useAuth();
-  if (loading) return <div className="p-4">Загрузка…</div>;
-
-  const need = Array.isArray(allow) ? allow : [allow];
-  const role = profile?.role ?? null;
-
-  if (!role || !need.includes(role)) return <div className="p-4">Недостаточно прав</div>;
-  return children;
-}
-
-export default AuthProvider;
