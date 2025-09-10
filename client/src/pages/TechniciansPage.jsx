@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-// Справочник ролей (добавил admin)
+// Должности
 const roleOptions = [
   { value: 'admin',   label: 'Админ' },
   { value: 'manager', label: 'Менеджер' },
@@ -15,13 +15,13 @@ const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 
 const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 
 export default function TechniciansPage() {
-  // оставляем useAuth для загрузочного спиннера (доступ уже фильтрует роутер)
+  // Роут уже фильтрует доступ по роли; используем auth только ради спиннера
   const { loading: authLoading } = useAuth();
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // форма добавления
+  // Форма добавления
   const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
 
   useEffect(() => {
@@ -97,24 +97,50 @@ export default function TechniciansPage() {
     setItems(prev => prev.filter(r => r.id !== id));
   };
 
-  // Отправка магической ссылки для входа (email OTP)
+  // Отправка magic-link (email OTP)
   const sendLoginLink = async (email) => {
     const target = (email || '').trim();
     if (!target) {
       alert('У сотрудника пустой Email');
       return;
     }
-    // Проверь в Supabase → Authentication → URL settings → "Site URL".
-    const redirectTo = window.location.origin; // куда вернется после клика по письму
-    const { error } = await supabase.auth.signInWithOtp({
+
+    // Для hash-роутера возвращаем на /#/login
+    const redirectTo = `${window.location.origin}/#/login`;
+
+    // 1) Пытаемся отправить ссылку ТОЛЬКО существующему пользователю
+    let { error } = await supabase.auth.signInWithOtp({
       email: target,
-      options: { emailRedirectTo: redirectTo },
+      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
     });
+
+    // 2) Если пользователь не найден — пробуем создать (нормальный путь)
+    if (error && /not\s*found/i.test(error.message || '')) {
+      const res = await supabase.auth.signInWithOtp({
+        email: target,
+        options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
+      });
+      error = res.error;
+    }
+
     if (error) {
-      console.error('sendLoginLink error:', error);
-      alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
+      // Частый случай: Database error saving new user
+      if (/Database error saving new user/i.test(error.message || '')) {
+        alert(
+          'Не удалось отправить письмо: Database error saving new user.\n\n' +
+          'Что проверить в Supabase:\n' +
+          '1) Auth → Providers: Email включён; Auth → Settings: Signups разрешены.\n' +
+          '2) Auth → Settings → Redirect URLs: добавь ' + redirectTo + '\n' +
+          '3) Триггеры/функции на вставку в auth.users (часто handle_new_user → public.profiles): ' +
+          'убедиcь, что там нет NOT NULL/ORG_ID ограничений, из-за которых insert падает.'
+        );
+      } else {
+        console.error('sendLoginLink error:', error);
+        alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
+      }
       return;
     }
+
     alert('Письмо со ссылкой для входа отправлено на ' + target);
   };
 
