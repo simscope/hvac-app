@@ -165,7 +165,6 @@ export default function TechniciansPage() {
       });
 
       if (error) {
-        // Когда функции нет/не настроена: error.message обычно "Function not found"
         console.error('invite-user error:', error);
         alert(
           'Не удалось пригласить пользователя.\n\n' +
@@ -177,7 +176,6 @@ export default function TechniciansPage() {
 
       // ожидаем с сервера { ok: true, userId }
       if (data?.ok) {
-        // Если на сервере не связали — доп.подстраховка: пропишем auth_user_id по email
         if (!row.auth_user_id && data.userId) {
           await supabase.from('technicians').update({ auth_user_id: data.userId }).eq('id', row.id);
         }
@@ -297,7 +295,7 @@ export default function TechniciansPage() {
                     ✉️ Войти по email
                   </button>
 
-                  {/* серверное приглaшение = создаёт пользователя, когда signups закрыты */}
+                  {/* серверное приглашение = создаёт пользователя, когда signups закрыты */}
                   <button
                     title="Пригласить (создать пользователя через сервер)"
                     onClick={() => inviteUser(row)}
@@ -317,9 +315,9 @@ export default function TechniciansPage() {
       {/* Подсказка по серверной функции */}
       <div style={{ marginTop: 12, color: '#6b7280', fontSize: 13, lineHeight: 1.5 }}>
         <b>Подсказка:</b> если при «Войти по email» видите 422/“Signups not allowed”, используйте «Пригласить».
-        Это вызывает Edge-функцию <code>invite-user</code> (нужен service role).  
-        Функция должна создать пользователя через <code>auth.admin.inviteUserByEmail</code> и вернуть
-        <code>{{"{ ok: true, userId }"}}</code>. Мы сразу записываем <code>auth_user_id</code> для техника.
+        Это вызывает Edge-функцию <code>invite-user</code> (нужен service role). Функция должна создать
+        пользователя через <code>auth.admin.inviteUserByEmail</code> и вернуть&nbsp;
+        <code>{'{ ok: true, userId }'}</code>. Мы сразу записываем <code>auth_user_id</code> для техника.
       </div>
     </div>
   );
