@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 
 /* ---------- UI стили ---------- */
 const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
@@ -98,7 +99,7 @@ function slugifyFileName(name) {
   return `${translit || 'file'}.${ext}`;
 }
 function makeSafeStorageKey(jobId, originalName) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-'); // 2025-09-05T15-30-00-123Z
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const safeName = slugifyFileName(originalName);
   return `${jobId}/${stamp}_${safeName}`;
 }
@@ -108,6 +109,7 @@ export default function JobDetailsPage() {
   const { id } = useParams();
   const jobId = id;
   const navigate = useNavigate();
+  const { user, profile } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [job, setJob] = useState(null);
@@ -124,12 +126,13 @@ export default function JobDetailsPage() {
   const [photos, setPhotos] = useState([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileRef = useRef(null);
+
   // выбор фото для скачивания
   const [checked, setChecked] = useState({}); // { [name]: true }
   const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
 
   // Комментарии
-  const [comments, setComments] = useState([]);
+  const [comments, setComments] = useState([]); // [{..., author_name}]
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
@@ -221,9 +224,10 @@ export default function JobDetailsPage() {
       return { name: o.name, url: pub.publicUrl };
     });
     setPhotos(mapped);
-    setChecked({}); // сбрасываем выбор при перезагрузке
+    setChecked({});
   };
 
+  // Комментарии: тянем, затем подтягиваем имена авторов единым запросом
   const loadComments = async () => {
     setCommentsLoading(true);
     const { data, error } = await supabase
@@ -231,21 +235,43 @@ export default function JobDetailsPage() {
       .select('id, job_id, text, image_url, author_user_id, created_at')
       .eq('job_id', jobId)
       .order('created_at', { ascending: true });
+
     if (error) {
       console.error('loadComments', error);
       setComments([]);
-    } else {
-      setComments(data || []);
+      setCommentsLoading(false);
+      return;
     }
+
+    const list = data || [];
+    const ids = Array.from(
+      new Set(list.map(c => c.author_user_id).filter(Boolean))
+    );
+
+    let map = {};
+    if (ids.length) {
+      const { data: people } = await supabase
+        .from('technicians')
+        .select('auth_user_id, name')
+        .in('auth_user_id', ids);
+      map = Object.fromEntries((people || []).map(p => [p.auth_user_id, p.name]));
+    }
+
+    setComments(list.map(c => ({ ...c, author_name: map[c.author_user_id] || null })));
     setCommentsLoading(false);
   };
 
   const addComment = async () => {
     const text = commentText.trim();
     if (!text) return;
+    const payload = {
+      job_id: jobId,
+      text,
+      author_user_id: user?.id ?? null,
+    };
     const { data, error } = await supabase
       .from('comments')
-      .insert({ job_id: jobId, text })
+      .insert(payload)
       .select()
       .single();
     if (error) {
@@ -253,7 +279,10 @@ export default function JobDetailsPage() {
       alert('Не удалось сохранить комментарий');
       return;
     }
-    setComments((prev) => [...prev, data]);
+    // имя автора сразу из профиля (если есть)
+    const authorName =
+      profile?.full_name || profile?.name || user?.email || null;
+    setComments(prev => [...prev, { ...data, author_name: authorName }]);
     setCommentText('');
   };
 
@@ -428,7 +457,6 @@ export default function JobDetailsPage() {
         continue;
       }
 
-      // ГЕНЕРАЦИЯ БЕЗОПАСНОГО КЛЮЧА ДЛЯ SUPABASE STORAGE
       const key = makeSafeStorageKey(jobId, f.name);
 
       const { error } = await storage().upload(key, f, {
@@ -754,14 +782,18 @@ export default function JobDetailsPage() {
               {comments.length === 0 ? (
                 <div style={MUTED}>Пока нет комментариев</div>
               ) : (
-                comments.map((c) => (
-                  <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
-                    <div style={{ fontSize: 12, color: '#64748b' }}>
-                      {new Date(c.created_at).toLocaleString()}
+                comments.map((c) => {
+                  const when = new Date(c.created_at).toLocaleString();
+                  const who = c.author_name || '—';
+                  return (
+                    <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>
+                        {when} • {who}
+                      </div>
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
                     </div>
-                    <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
