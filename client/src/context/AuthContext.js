@@ -4,59 +4,21 @@ import { supabase } from '../supabaseClient';
 
 const AuthContext = createContext(null);
 
+/**
+ * Минимальный и стабильный контекст авторизации:
+ * - следит за сессией
+ * - при наличии user.id подтягивает запись из public.technicians по auth_user_id
+ * - вычисляет роль (admin/manager/tech) с fallback на is_admin
+ * - отдаёт user, profile, role, isAdmin, loading, logout
+ */
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
+  const [techRow, setTechRow] = useState(null);
 
-  // строка из public.technicians
-  const [row, setRow] = useState(null);
-
-  // раздельные флаги загрузки
   const [authLoading, setAuthLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
 
-  // ===== helpers =====
-  const normalizeRole = (r, is_admin) => {
-    const v = String(r || '').toLowerCase();
-    if (v === 'admin' || v === 'manager' || v === 'tech') return v;
-    if (is_admin) return 'admin';
-    return null;
-  };
-
-  const refreshProfile = async (uid) => {
-    if (!uid) {
-      setRow(null);
-      return;
-    }
-    setProfileLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('technicians')
-        .select('id, name, phone, role, is_admin, org_id, auth_user_id, email')
-        .eq('auth_user_id', uid)
-        .maybeSingle();
-
-      if (error) {
-        console.error('[AUTH] technicians load error', error);
-        setRow(null);
-      } else {
-        setRow(data || null);
-      }
-    } finally {
-      setProfileLoading(false);
-    }
-  };
-
-  const tryLinkTechnicianByEmail = async (email) => {
-    // Пытаемся вызвать RPC, если её нет/запрещено — молча игнорируем
-    if (!email) return;
-    try {
-      await supabase.rpc('link_technician_to_auth', { p_email: email });
-    } catch {
-      // no-op
-    }
-  };
-
-  // 1) начальная сессия и подписка
+  // 1) Инициализация сессии + подписка на изменения
   useEffect(() => {
     let alive = true;
 
@@ -64,23 +26,15 @@ export function AuthProvider({ children }) {
       try {
         const { data, error } = await supabase.auth.getSession();
         if (!alive) return;
-        if (error) console.error('[AUTH] getSession error', error);
+        if (error) console.error('[AUTH] getSession error:', error);
         setSession(data?.session ?? null);
       } finally {
         if (alive) setAuthLoading(false);
       }
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s ?? null);
-
-      // после входа — пытаемся привязать технаря по email и обновить профиль
-      if (s?.user) {
-        await tryLinkTechnicianByEmail(s.user.email);
-        await refreshProfile(s.user.id);
-      } else {
-        setRow(null);
-      }
     });
 
     return () => {
@@ -89,41 +43,69 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  // 2) когда есть/меняется user.id — грузим профиль
+  // 2) Подгружаем строку техника по auth_user_id
   useEffect(() => {
-    const uid = session?.user?.id || null;
-    refreshProfile(uid);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let alive = true;
+
+    const loadTech = async (uid) => {
+      if (!uid) {
+        setTechRow(null);
+        return;
+      }
+      setProfileLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('technicians')
+          .select('id, name, phone, email, role, is_admin, org_id, auth_user_id')
+          .eq('auth_user_id', uid)
+          .maybeSingle();
+
+        if (!alive) return;
+        if (error) {
+          console.error('[AUTH] technicians query error:', error);
+          setTechRow(null);
+        } else {
+          setTechRow(data || null);
+        }
+      } catch (e) {
+        console.error('[AUTH] technicians query exception:', e);
+        setTechRow(null);
+      } finally {
+        if (alive) setProfileLoading(false);
+      }
+    };
+
+    loadTech(session?.user?.id || null);
+    return () => {
+      alive = false;
+    };
   }, [session?.user?.id]);
 
-  // 3) роль
-  const normalizedRole = useMemo(
-    () => normalizeRole(row?.role, row?.is_admin),
-    [row?.role, row?.is_admin]
-  );
-
-  // 4) Фолбэк-админ из переменной окружения (CRA)
-  const envAdmin = (process.env.REACT_APP_ADMIN_EMAIL || '').toLowerCase();
-  const envAdminHit =
-    !!envAdmin && !!session?.user?.email && session.user.email.toLowerCase() === envAdmin;
+  // 3) Нормализуем роль
+  const role = useMemo(() => {
+    const r = String(techRow?.role || '').toLowerCase();
+    if (r === 'admin' || r === 'manager' || r === 'tech') return r;
+    if (techRow?.is_admin) return 'admin';
+    return null;
+  }, [techRow?.role, techRow?.is_admin]);
 
   const loading = authLoading || profileLoading;
 
-  // Экспортируемые значения контекста
+  // 4) Экспортируемые значения
   const value = useMemo(
     () => ({
       session,
       user: session?.user ?? null,
-      profile: row
-        ? { id: row.id, full_name: row.name, phone: row.phone, email: row.email, org_id: row.org_id }
+      profile: techRow
+        ? { id: techRow.id, full_name: techRow.name, phone: techRow.phone, email: techRow.email, org_id: techRow.org_id }
         : null,
-      role: normalizedRole || (envAdminHit ? 'admin' : null),
-      isAdmin: (normalizedRole || (envAdminHit ? 'admin' : null)) === 'admin',
-      isActive: true, // в вашей схеме нет отдельного флага
+      role,
+      isAdmin: role === 'admin',
+      isActive: true, // отдельного флага в схеме нет
       loading,
       logout: async () => supabase.auth.signOut(),
     }),
-    [session, row, normalizedRole, envAdminHit, loading]
+    [session, techRow, role, loading]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
