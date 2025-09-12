@@ -79,7 +79,7 @@ const normalizeStatusForDb = (s) => {
   return v;
 };
 
-/* ---------- Санитизация имён файлов для Storage ---------- */
+/* ---------- Санитизация имён файлов ---------- */
 const RU_MAP = {
   а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ё:'e', ж:'zh', з:'z', и:'i', й:'y',
   к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u', ф:'f',
@@ -123,7 +123,6 @@ export default function JobDetailsPage() {
   const [materials, setMaterials] = useState([]);
 
   // Клиент
-  thead;
   const [client, setClient] = useState({ id: null, full_name: '', phone: '', email: '', address: '' });
   const [clientDirty, setClientDirty] = useState(false);
 
@@ -232,7 +231,7 @@ export default function JobDetailsPage() {
     setChecked({});
   };
 
-  // Комментарии: тянем, затем подтягиваем имена авторов единым запросом
+  // Комментарии
   const loadComments = async () => {
     setCommentsLoading(true);
     const { data, error } = await supabase
@@ -249,9 +248,7 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-    const ids = Array.from(
-      new Set(list.map(c => c.author_user_id).filter(Boolean))
-    );
+    const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
 
     let map = {};
     if (ids.length) {
@@ -284,9 +281,7 @@ export default function JobDetailsPage() {
       alert('Не удалось сохранить комментарий');
       return;
     }
-    // имя автора сразу из профиля (если есть)
-    const authorName =
-      profile?.full_name || profile?.name || user?.email || null;
+    const authorName = profile?.full_name || profile?.name || user?.email || null;
     setComments(prev => [...prev, { ...data, author_name: authorName }]);
     setCommentText('');
   };
@@ -402,18 +397,13 @@ export default function JobDetailsPage() {
     }
   };
 
-  // <-- ПЕРЕПИСАНО ПОЛНОСТЬЮ
   const saveMats = async () => {
-    // новые (с временными id) и существующие
     const news = materials
-      // не вставляем пустые строки без названия
       .filter((m) => String(m.name || '').trim().length > 0)
       .filter((m) => String(m.id).startsWith('tmp-'));
 
-    const olds = materials
-      .filter((m) => !String(m.id).startsWith('tmp-'));
+    const olds = materials.filter((m) => !String(m.id).startsWith('tmp-'));
 
-    // --- вставка новых
     if (news.length) {
       const rows = news.map((m) => ({
         job_id: jobId,
@@ -423,21 +413,16 @@ export default function JobDetailsPage() {
         vendor: String(m.vendor || '').trim(),
       }));
 
-      // 1-я попытка: как есть
       let { error } = await supabase.from('materials').insert(rows);
 
-      // если в схеме нет vendor — пробуем без него
       if (error && /column .*vendor/i.test(error.message)) {
         const rowsNoVendor = rows.map(({ vendor, ...r }) => r);
         ({ error } = await supabase.from('materials').insert(rowsNoVendor));
       }
-
-      // если в схеме нет qty — пробуем с quantity
       if (error && /column .*qty/i.test(error.message)) {
         const rowsQuantity = rows.map(({ qty, ...r }) => ({ ...r, quantity: qty ?? 1 }));
         ({ error } = await supabase.from('materials').insert(rowsQuantity));
       }
-
       if (error) {
         console.error('[materials.insert] rows:', rows);
         console.error('[materials.insert] error:', error);
@@ -446,7 +431,6 @@ export default function JobDetailsPage() {
       }
     }
 
-    // --- обновление существующих
     for (const m of olds) {
       let patch = {
         name: String(m.name || '').trim(),
@@ -455,21 +439,16 @@ export default function JobDetailsPage() {
         vendor: String(m.vendor || '').trim(),
       };
 
-      // 1-я попытка
       let { error } = await supabase.from('materials').update(patch).eq('id', m.id);
 
-      // нет vendor — без него
       if (error && /column .*vendor/i.test(error.message)) {
         const { vendor, ...p } = patch;
         ({ error } = await supabase.from('materials').update(p).eq('id', m.id));
       }
-
-      // нет qty — используем quantity
       if (error && /column .*qty/i.test(error.message)) {
         const { qty, ...p } = patch;
         ({ error } = await supabase.from('materials').update({ ...p, quantity: qty ?? 1 }).eq('id', m.id));
       }
-
       if (error) {
         console.error('[materials.update] row:', m, 'patch:', patch);
         console.error('[materials.update] error:', error);
@@ -478,7 +457,6 @@ export default function JobDetailsPage() {
       }
     }
 
-    // перечитываем свежее состояние
     const { data: fresh, error: e2 } = await supabase
       .from('materials')
       .select('*')
@@ -494,7 +472,6 @@ export default function JobDetailsPage() {
     setMaterials(fresh || []);
     alert('Материалы сохранены');
   };
-  // --> КОНЕЦ БЛОКА МАТЕРИАЛОВ
 
   /* ---------- файлы ---------- */
   const onPick = async (e) => {
@@ -748,7 +725,7 @@ export default function JobDetailsPage() {
           </div>
         </div>
 
-        {/* Клиент — без показа id */}
+        {/* Клиент */}
         <div style={BOX}>
           <div style={H2}>Клиент</div>
           <div style={{ display: 'grid', gap: 10 }}>
