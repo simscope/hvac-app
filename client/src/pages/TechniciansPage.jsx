@@ -1,7 +1,5 @@
 // client/src/pages/AdminTechniciansPage.jsx
-// Страница админа: ввод e-mail, имени, телефона, роли и ВРЕМЕННОГО пароля.
-// Создание вызывает edge-функцию admin-create-user.
-// Проверка прав: считаем админом, если это видно в app_metadata ИЛИ в profiles ИЛИ в technicians.
+// Создание сотрудника с расширенным выводом ошибок из Edge Function.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
@@ -24,7 +22,6 @@ export default function AdminTechniciansPage() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // форма
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -32,7 +29,6 @@ export default function AdminTechniciansPage() {
   const [password, setPassword] = useState(genTempPassword());
   const [orgId, setOrgId] = useState(1);
 
-  // считаем админом по любому из источников
   const isAdmin = useMemo(() => {
     if (!me) return false;
     if (me.app_metadata?.role === 'admin') return true;
@@ -47,21 +43,11 @@ export default function AdminTechniciansPage() {
       setMe(user || null);
 
       if (user) {
-        // роль из profiles
-        const { data: prof } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', user.id)
-          .maybeSingle();
-        setMeProfileRole(prof?.role ?? null);
+        const prof = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+        setMeProfileRole(prof.data?.role ?? null);
 
-        // роль/флаг из technicians
-        const { data: tech } = await supabase
-          .from('technicians')
-          .select('role, is_admin')
-          .eq('auth_user_id', user.id)
-          .maybeSingle();
-        setMeTechInfo(tech || null);
+        const tech = await supabase.from('technicians').select('role, is_admin').eq('auth_user_id', user.id).maybeSingle();
+        setMeTechInfo(tech.data || null);
       }
 
       await fetchTechnicians();
@@ -69,16 +55,35 @@ export default function AdminTechniciansPage() {
   }, []);
 
   async function fetchTechnicians() {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('technicians')
       .select('id, name, phone, role, is_admin, org_id, auth_user_id, email')
       .order('name', { ascending: true });
-    if (!error) setList(data || []);
+    setList(data || []);
+  }
+
+  function showEdgeError(prefix, errObj, dataObj) {
+    // Пытаемся вытащить тело ответа Edge Function
+    const msgParts = [prefix];
+    if (errObj?.message) msgParts.push(`message: ${errObj.message}`);
+    // supabase-js кладёт тело в error.context?.response?.text
+    const ctx = errObj?.context as any;
+    const resp = ctx?.response;
+    if (resp?.error) msgParts.push(`resp.error: ${resp.error}`);
+    if (resp?.status) msgParts.push(`status: ${resp.status}`);
+    if (resp?.body) {
+      msgParts.push(`body: ${JSON.stringify(resp.body)}`);
+    }
+    if (dataObj?.error || dataObj?.warning) {
+      msgParts.push(`payload: ${JSON.stringify(dataObj)}`);
+    }
+    alert(msgParts.join("\n"));
   }
 
   async function createTech(e) {
     e.preventDefault();
     if (!isAdmin) return alert("Только админ может создавать сотрудников");
+
     setLoading(true);
     try {
       const payload = {
@@ -91,8 +96,15 @@ export default function AdminTechniciansPage() {
       };
 
       const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+
+      if (error) {
+        showEdgeError("Edge Function error", error, data);
+        return;
+      }
+      if (data?.error) {
+        showEdgeError("Edge returned error", null, data);
+        return;
+      }
 
       setEmail("");
       setName("");
@@ -101,9 +113,9 @@ export default function AdminTechniciansPage() {
       setPassword(genTempPassword());
 
       await fetchTechnicians();
-      alert("Сотрудник создан. Передай ему e-mail и временный пароль для первого входа.");
+      alert("Сотрудник создан. Передай ему e-mail и временный пароль.");
     } catch (err) {
-      alert("Ошибка: " + (err.message || String(err)));
+      alert("Unhandled error: " + (err?.message || String(err)));
     } finally {
       setLoading(false);
     }
@@ -115,7 +127,7 @@ export default function AdminTechniciansPage() {
       body: { action: 'sendPasswordReset', email: emailAddr }
     });
     if (error || data?.error) {
-      alert("Не удалось отправить reset: " + (error?.message || data?.error));
+      showEdgeError("Reset error", error, data);
     } else {
       alert("Ссылка на сброс пароля сгенерирована/отправлена (см. настройки проекта).");
     }
@@ -198,9 +210,7 @@ export default function AdminTechniciansPage() {
               </tr>
             ))}
             {list.length === 0 && (
-              <tr>
-                <td className={td} colSpan={6}>Нет сотрудников</td>
-              </tr>
+              <tr><td className={td} colSpan={6}>Нет сотрудников</td></tr>
             )}
           </tbody>
         </table>
