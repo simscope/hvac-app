@@ -1,8 +1,8 @@
 // client/src/pages/AdminTechniciansPage.jsx
-// Создание сотрудника через Edge Function с прямым fetch и понятной диагностикой.
+// Ничего глобально не ломаем: используем ТВОЙ рабочий supabaseClient и обычный functions.invoke.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase, SUPABASE_URL } from '../supabaseClient';
+import { supabase } from '../supabaseClient'; // оставь как у тебя в проекте
 
 const input = "w-full px-3 py-2 border rounded";
 const btn = "px-3 py-2 border rounded hover:bg-gray-50";
@@ -12,31 +12,6 @@ const td = "px-3 py-2 border-b";
 function genTempPassword(len = 12) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-}
-
-async function callEdge(path, body) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token || '';
-  const base = SUPABASE_URL || '';
-  if (!base) {
-    return { ok: false, status: 0, json: { error: 'SUPABASE_URL is empty on client', stage: 'client-env' } };
-  }
-
-  const url = `${base.replace(/\/+$/, '')}/functions/v1/${path}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'authorization': `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch { json = { raw: text }; }
-
-  return { ok: res.ok, status: res.status, json };
 }
 
 export default function AdminTechniciansPage() {
@@ -71,10 +46,7 @@ export default function AdminTechniciansPage() {
         const prof = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
         setMeProfileRole(prof.data?.role ?? null);
 
-        const tech = await supabase.from('technicians')
-          .select('role, is_admin')
-          .eq('auth_user_id', user.id)
-          .maybeSingle();
+        const tech = await supabase.from('technicians').select('role, is_admin').eq('auth_user_id', user.id).maybeSingle();
         setMeTechInfo(tech.data || null);
       }
 
@@ -109,27 +81,19 @@ export default function AdminTechniciansPage() {
     };
 
     try {
-      // Быстрая предварительная проверка
-      const dbg = await callEdge('admin-create-user', { action: 'debug', ...payload });
-      if (!dbg.ok || dbg.json?.error) {
-        show("DEBUG", { status: dbg.status, ...dbg.json });
-        return;
+      // (необязательно) быстрый дебаг
+      const dbg = await supabase.functions.invoke('admin-create-user', { body: { action: 'debug', ...payload } });
+      if (dbg.error || dbg.data?.error) {
+        return show("DEBUG", dbg.data || dbg.error);
       }
 
-      // Основной вызов
-      const res = await callEdge('admin-create-user', payload);
-      if (!res.ok || res.json?.error) {
-        show("Create failed", { status: res.status, ...res.json });
-        return;
+      const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
+
+      if (error || data?.error) {
+        return show("Create failed", data || error);
       }
 
-      // Успех
-      setEmail("");
-      setName("");
-      setPhone("");
-      setRole("tech");
-      setPassword(genTempPassword());
-
+      setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword(genTempPassword());
       await fetchTechnicians();
       alert("Сотрудник создан. Передай ему e-mail и временный пароль.");
     } catch (err) {
@@ -140,13 +104,11 @@ export default function AdminTechniciansPage() {
   }
 
   async function sendReset(emailAddr) {
-    if (!isAdmin) return;
-    const res = await callEdge('admin-create-user', { action: 'sendPasswordReset', email: emailAddr });
-    if (!res.ok || res.json?.error) {
-      show("Reset error", { status: res.status, ...res.json });
-    } else {
-      alert("Ссылка на сброс пароля сгенерирована/отправлена (см. настройки проекта).");
-    }
+    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+      body: { action: 'sendPasswordReset', email: emailAddr }
+    });
+    if (error || data?.error) show("Reset error", data || error);
+    else alert("Ссылка на сброс пароля сгенерирована/отправлена.");
   }
 
   return (
@@ -183,16 +145,12 @@ export default function AdminTechniciansPage() {
           <label className="block text-sm mb-1">Временный пароль *</label>
           <div className="flex gap-2">
             <input className={input} required value={password} onChange={e => setPassword(e.target.value)} />
-            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>
-              Сгенерировать
-            </button>
+            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
           </div>
           <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
         </div>
         <div className="md:col-span-2">
-          <button disabled={loading} className={btn} type="submit">
-            {loading ? "Создаю..." : "Создать сотрудника"}
-          </button>
+          <button disabled={loading} className={btn} type="submit">{loading ? "Создаю..." : "Создать сотрудника"}</button>
         </div>
       </form>
 
@@ -217,17 +175,13 @@ export default function AdminTechniciansPage() {
                 <td className={td}>{row.role}</td>
                 <td className={td}>{row.is_admin ? "TRUE" : "FALSE"}</td>
                 <td className={td}>
-                  <div className="flex gap-2">
-                    <button className={btn} onClick={() => row.email && sendReset(row.email)} disabled={!row.email}>
-                      Сброс пароля
-                    </button>
-                  </div>
+                  <button className={btn} onClick={() => row.email && sendReset(row.email)} disabled={!row.email}>
+                    Сброс пароля
+                  </button>
                 </td>
               </tr>
             ))}
-            {list.length === 0 && (
-              <tr><td className={td} colSpan={6}>Нет сотрудников</td></tr>
-            )}
+            {list.length === 0 && <tr><td className={td} colSpan={6}>Нет сотрудников</td></tr>}
           </tbody>
         </table>
       </div>
