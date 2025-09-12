@@ -1,213 +1,190 @@
-// client/src/pages/TechniciansPage.jsx
-import React, { useEffect, useState } from 'react';
+// client/src/pages/AdminTechniciansPage.jsx
+import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { useAuth } from '../context/AuthContext';
 
-// Должности
-const roleOptions = [
-  { value: 'admin',   label: 'Админ' },
-  { value: 'manager', label: 'Менеджер' },
-  { value: 'tech',    label: 'Техник' },
-];
+const input = "w-full px-3 py-2 border rounded";
+const btn = "px-3 py-2 border rounded hover:bg-gray-50";
+const th = "px-3 py-2 text-left border-b";
+const td = "px-3 py-2 border-b";
 
-const inputStyle = { width: '100%', padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 };
-const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 'left', fontWeight: 600 };
-const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
+function genTempPassword(len = 12) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random()*chars.length)]).join('');
+}
 
-export default function TechniciansPage() {
-  // доступ к странице у вас уже фильтруется роутами по роли админа
-  const { loading: authLoading } = useAuth();
+export default function AdminTechniciansPage() {
+  const [me, setMe] = useState(null);
+  const [staff, setStaff] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Форма создания
+  const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [role, setRole] = useState("tech");
+  const [password, setPassword] = useState(genTempPassword());
+  const [notes, setNotes] = useState("");
 
-  // Форма добавления
-  const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
+  const isAdmin = useMemo(() => (me?.app_metadata?.role === 'admin'), [me]);
 
   useEffect(() => {
-    if (!authLoading) load();
-  }, [authLoading]);
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setMe(user || null);
+      await fetchStaff();
+    })();
+  }, []);
 
-  const load = async () => {
-    setLoading(true);
+  async function fetchStaff() {
     const { data, error } = await supabase
-      .from('technicians')
-      .select('id, name, phone, email, role')
-      .order('name', { ascending: true });
+      .from('staff')
+      .select('id, auth_user_id, email, full_name, phone, role, is_active, created_at, notes')
+      .order('created_at', { ascending: false });
+    if (!error) setStaff(data || []);
+  }
 
-    if (error) {
-      console.error('technicians select error:', error);
-      alert('Ошибка загрузки сотрудников');
-      setItems([]);
-    } else {
-      setItems(data || []);
-    }
-    setLoading(false);
-  };
-
-  const onChangeCell = (id, field, value) => {
-    setItems(prev => prev.map(r => (r.id === id ? { ...r, [field]: value } : r)));
-  };
-
-  const saveRow = async (row) => {
-    const payload = {
-      name:  row.name?.trim()  || null,
-      phone: row.phone?.trim() || null,
-      email: row.email?.trim() || null,
-      role:  row.role ? String(row.role).trim().toLowerCase() : null,
-    };
-    const { error } = await supabase.from('technicians').update(payload).eq('id', row.id);
-    if (error) {
-      console.error('technicians update error:', error);
-      alert('Ошибка при сохранении');
+  async function createEmployee(e) {
+    e.preventDefault();
+    if (!isAdmin) {
+      alert("Только админ может создавать сотрудников");
       return;
     }
-    await load();
-  };
-
-  const addRow = async () => {
-    if (!newRow.name?.trim()) {
-      alert('Введите имя');
-      return;
-    }
-    const payload = {
-      name:  newRow.name.trim(),
-      phone: newRow.phone?.trim() || null,
-    if (!target) {
-      alert('У сотрудника пустой Email');
-      return;
-    }
-    const url = `${window.location.origin}/#/register?email=${encodeURIComponent(target)}`;
+    setLoading(true);
     try {
-      await navigator.clipboard.writeText(url);
-      alert('Ссылка регистрации скопирована в буфер обмена:\n' + url);
-    } catch {
-      // запасной вариант
-      window.prompt('Скопируйте ссылку:', url);
-    }
-  };
+      const payload = {
+        email: email.trim(),
+        password: password,
+        role,
+        full_name: fullName.trim() || null,
+        phone: phone.trim() || null,
+        is_active: true,
+        notes: notes || null,
+      };
+      const { data, error } = await supabase.functions.invoke('admin-create-user', {
+        body: payload,
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
 
-  // Сброс пароля — стандартное письмо Supabase (без Edge-функций)
-  const sendPasswordReset = async (email) => {
-    const target = (email || '').trim();
-    if (!target) {
-      alert('У сотрудника пустой Email');
-      return;
+      // очистим форму, обновим список
+      setEmail(""); setFullName(""); setPhone(""); setRole("tech"); setPassword(genTempPassword()); setNotes("");
+      await fetchStaff();
+      alert("Пользователь создан. Передай ему логин и временный пароль.");
+    } catch (err) {
+      alert("Ошибка создания: " + (err.message || String(err)));
+    } finally {
+      setLoading(false);
     }
-    const redirectTo = `${window.location.origin}/#/login`; // куда вернётся после смены пароля
-    const { error } = await supabase.auth.resetPasswordForEmail(target, { redirectTo });
-    if (error) {
-      console.error('resetPasswordForEmail error:', error);
-      alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
-      return;
-    }
-    alert('Письмо для смены пароля отправлено: ' + target);
-  };
+  }
 
-  if (authLoading) return <div className="p-4">Загрузка…</div>;
+  async function toggleActive(row) {
+    if (!isAdmin) return;
+    const { error } = await supabase
+      .from('staff')
+      .update({ is_active: !row.is_active })
+      .eq('id', row.id);
+    if (!error) fetchStaff();
+  }
+
+  async function sendReset(email) {
+    if (!isAdmin) return;
+    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+      body: { action: 'sendPasswordReset', email }
+    });
+    if (error || data?.error) {
+      alert("Не удалось отправить reset: " + (error?.message || data?.error));
+    } else {
+      alert("Ссылка на сброс пароля сгенерирована/отправлена (см. настройки проекта).");
+    }
+  }
 
   return (
-    <div className="p-4">
-      <h1 className="text-2xl font-bold mb-4">👥 Сотрудники</h1>
+    <div className="p-4 max-w-5xl mx-auto">
+      <h1 className="text-2xl font-semibold mb-4">Сотрудники</h1>
 
-      {/* Форма добавления */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.3fr 2fr 1.2fr auto', gap: 8, marginBottom: 12 }}>
-        <input
-          style={inputStyle}
-          placeholder="Имя"
-          value={newRow.name}
-          onChange={e => setNewRow({ ...newRow, name: e.target.value })}
-        />
-        <input
-          style={inputStyle}
-          placeholder="Телефон"
-          value={newRow.phone}
-          onChange={e => setNewRow({ ...newRow, phone: e.target.value })}
-        />
-        <input
-          style={inputStyle}
-          placeholder="Email"
-          value={newRow.email}
-          onChange={e => setNewRow({ ...newRow, email: e.target.value })}
-        />
-        <select
-          style={inputStyle}
-          value={newRow.role}
-          onChange={e => setNewRow({ ...newRow, role: e.target.value })}
-        >
-          {roleOptions.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <button onClick={addRow} style={{ padding: '6px 12px' }}>➕ Добавить</button>
-      </div>
+      {/* ФОРМА СОЗДАНИЯ */}
+      <form onSubmit={createEmployee} className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-3 mb-6">
+        <div>
+          <label className="block text-sm mb-1">E-mail *</label>
+          <input className={input} type="email" required value={email} onChange={e=>setEmail(e.target.value)} />
+        </div>
+        <div>
+          <label className="block text-sm mb-1">Телефон</label>
+          <input className={input} value={phone} onChange={e=>setPhone(e.target.value)} />
+        </div>
+        <div>
+          <label className="block text-sm mb-1">ФИО</label>
+          <input className={input} value={fullName} onChange={e=>setFullName(e.target.value)} />
+        </div>
+        <div>
+          <label className="block text-sm mb-1">Роль *</label>
+          <select className={input} value={role} onChange={e=>setRole(e.target.value)}>
+            <option value="tech">Техник</option>
+            <option value="manager">Менеджер</option>
+            <option value="admin">Админ</option>
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-sm mb-1">Временный пароль *</label>
+          <div className="flex gap-2">
+            <input className={input} required value={password} onChange={e=>setPassword(e.target.value)} />
+            <button type="button" className={btn} onClick={()=>setPassword(genTempPassword())}>Сгенерировать</button>
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Отдай сотруднику e-mail и этот временный пароль для входа.</div>
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-sm mb-1">Заметки</label>
+          <textarea className={input} rows={2} value={notes} onChange={e=>setNotes(e.target.value)} />
+        </div>
+        <div className="md:col-span-2">
+          <button disabled={loading} className={btn} type="submit">
+            {loading ? "Создаю..." : "Создать сотрудника"}
+          </button>
+        </div>
+      </form>
 
+      {/* ТАБЛИЦА */}
       <div className="overflow-x-auto">
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead style={{ background: '#f8fafc' }}>
+        <table className="w-full border">
+          <thead>
             <tr>
-              <th style={th} width="40">#</th>
-              <th style={th}>Имя</th>
-              <th style={th} width="180">Телефон</th>
-              <th style={th} width="240">Email</th>
-              <th style={th} width="160">Должность</th>
-              <th style={{ ...th, textAlign: 'center' }} width="340">Действия</th>
+              <th className={th}>Дата</th>
+              <th className={th}>E-mail</th>
+              <th className={th}>ФИО</th>
+              <th className={th}>Телефон</th>
+              <th className={th}>Роль</th>
+              <th className={th}>Статус</th>
+              <th className={th}>Действия</th>
             </tr>
           </thead>
           <tbody>
-            {loading && (
-              <tr><td style={td} colSpan={6}>Загрузка…</td></tr>
-            )}
-            {!loading && items.length === 0 && (
-              <tr><td style={td} colSpan={6}>Сотрудников пока нет</td></tr>
-            )}
-            {items.map((row, idx) => (
+            {staff.map(row => (
               <tr key={row.id}>
-                <td style={td}>{idx + 1}</td>
-                <td style={td}>
-                  <input
-                    style={inputStyle}
-                    value={row.name || ''}
-                    onChange={e => onChangeCell(row.id, 'name', e.target.value)}
-                  />
+                <td className={td}>{new Date(row.created_at).toLocaleString()}</td>
+                <td className={td}>{row.email}</td>
+                <td className={td}>{row.full_name || '-'}</td>
+                <td className={td}>{row.phone || '-'}</td>
+                <td className={td}>{row.role}</td>
+                <td className={td}>
+                  <span className={`px-2 py-1 rounded text-sm ${row.is_active ? 'bg-green-100' : 'bg-gray-200'}`}>
+                    {row.is_active ? 'активен' : 'выкл.'}
+                  </span>
                 </td>
-                <td style={td}>
-                  <input
-                    style={inputStyle}
-                    value={row.phone || ''}
-                    onChange={e => onChangeCell(row.id, 'phone', e.target.value)}
-                  />
-                </td>
-                <td style={td}>
-                  <input
-                    style={inputStyle}
-                    value={row.email || ''}
-                    onChange={e => onChangeCell(row.id, 'email', e.target.value)}
-                  />
-                </td>
-                <td style={td}>
-                  <select
-                    style={inputStyle}
-                    value={(row.role || 'tech').toLowerCase()}
-                    onChange={e => onChangeCell(row.id, 'role', e.target.value)}
-                  >
-                    {roleOptions.map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
-                </td>
-                <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>💾</button>
-                  <button title="Ссылка регистрации" onClick={() => copyRegistrationLink(row.email)} style={{ marginRight: 8 }}>
-                    🔗 Ссылка регистрации
-                  </button>
-                  <button title="Сбросить пароль" onClick={() => sendPasswordReset(row.email)} style={{ marginRight: 8 }}>
-                    📨 Сбросить пароль
-                  </button>
-                  <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️</button>
+                <td className={td}>
+                  <div className="flex gap-2">
+                    <button className={btn} onClick={()=>toggleActive(row)}>
+                      {row.is_active ? 'Отключить' : 'Включить'}
+                    </button>
+                    <button className={btn} onClick={()=>sendReset(row.email)}>
+                      Сброс пароля
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
+            {staff.length === 0 && (
+              <tr><td className={td} colSpan={7}>Нет сотрудников</td></tr>
+            )}
           </tbody>
         </table>
       </div>
