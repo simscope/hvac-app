@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 
 const inputStyle = {
   width: '100%',
-  height: 40,
+  height: 44,                 // немного выше, чтобы тексту было свободнее
   padding: '0 12px',
   boxSizing: 'border-box',
   border: '1px solid #e5e7eb',
@@ -41,7 +41,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
 
-  // Редирект только в эффекте
   useEffect(() => {
     if (user) navigate(safeFrom, { replace: true });
   }, [user, safeFrom, navigate]);
@@ -56,7 +55,6 @@ export default function LoginPage() {
         password,
       });
       if (error) throw error;
-      // переход произойдёт в useEffect
     } catch (error) {
       setErr(error.message || 'Ошибка входа');
     } finally {
@@ -106,7 +104,7 @@ export default function LoginPage() {
             <label style={{ fontWeight: 600 }}>Пароль</label>
             <div style={{ position: 'relative' }}>
               <input
-                style={{ ...inputStyle, paddingRight: 92 }} // место под кнопку
+                style={{ ...inputStyle, paddingRight: 100 }} // место под кнопку
                 type={showPass ? 'text' : 'password'}
                 placeholder="••••••••"
                 value={password}
@@ -122,13 +120,16 @@ export default function LoginPage() {
                   position: 'absolute',
                   right: 8,
                   top: '50%',
-                  transform: 'translateY(-50%)',
+                  transform: 'translateY(-50%)', // строго по центру контейнера
+                  height: 32,                    // фиксируем высоту
+                  lineHeight: '32px',
+                  padding: '0 12px',            // без вертикальных паддингов
                   border: '1px solid #e5e7eb',
                   background: '#fff',
                   borderRadius: 8,
-                  padding: '6px 10px',
                   cursor: 'pointer',
                   fontSize: 13,
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {showPass ? 'Скрыть' : 'Показать'}
