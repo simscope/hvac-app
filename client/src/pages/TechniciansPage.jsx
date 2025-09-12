@@ -14,76 +14,62 @@ function genTempPassword(len = 12) {
 
 export default function AdminTechniciansPage() {
   const [me, setMe] = useState(null);
-  const [staff, setStaff] = useState([]);
+  const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Форма создания
+  // форма
   const [email, setEmail] = useState("");
-  const [fullName, setFullName] = useState("");
+  const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech");
   const [password, setPassword] = useState(genTempPassword());
-  const [notes, setNotes] = useState("");
+  const [orgId, setOrgId] = useState(1);
 
-  const isAdmin = useMemo(() => (me?.app_metadata?.role === 'admin'), [me]);
+  const isAdmin = useMemo(() => me?.app_metadata?.role === 'admin', [me]);
 
   useEffect(() => {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       setMe(user || null);
-      await fetchStaff();
+      await fetchTechnicians();
     })();
   }, []);
 
-  async function fetchStaff() {
+  async function fetchTechnicians() {
     const { data, error } = await supabase
-      .from('staff')
-      .select('id, auth_user_id, email, full_name, phone, role, is_active, created_at, notes')
-      .order('created_at', { ascending: false });
-    if (!error) setStaff(data || []);
+      .from('technicians')
+      .select('id, name, phone, role, is_admin, org_id, auth_user_id, email')
+      .order('name', { ascending: true });
+    if (!error) setList(data || []);
   }
 
-  async function createEmployee(e) {
+  async function createTech(e) {
     e.preventDefault();
-    if (!isAdmin) {
-      alert("Только админ может создавать сотрудников");
-      return;
-    }
+    if (!isAdmin) return alert("Только админ может создавать сотрудников");
     setLoading(true);
     try {
       const payload = {
         email: email.trim(),
-        password: password,
-        role,
-        full_name: fullName.trim() || null,
+        password,
+        name: name.trim(),
         phone: phone.trim() || null,
-        is_active: true,
-        notes: notes || null,
+        role,
+        org_id: Number(orgId) || 1,
       };
-      const { data, error } = await supabase.functions.invoke('admin-create-user', {
-        body: payload,
-      });
+
+      const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      // очистим форму, обновим список
-      setEmail(""); setFullName(""); setPhone(""); setRole("tech"); setPassword(genTempPassword()); setNotes("");
-      await fetchStaff();
-      alert("Пользователь создан. Передай ему логин и временный пароль.");
+      // очистим форму и обновим список
+      setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword(genTempPassword());
+      await fetchTechnicians();
+      alert("Сотрудник создан. Передай ему e-mail и временный пароль.");
     } catch (err) {
-      alert("Ошибка создания: " + (err.message || String(err)));
+      alert("Ошибка: " + (err.message || String(err)));
     } finally {
       setLoading(false);
     }
-  }
-
-  async function toggleActive(row) {
-    if (!isAdmin) return;
-    const { error } = await supabase
-      .from('staff')
-      .update({ is_active: !row.is_active })
-      .eq('id', row.id);
-    if (!error) fetchStaff();
   }
 
   async function sendReset(email) {
@@ -98,12 +84,21 @@ export default function AdminTechniciansPage() {
     }
   }
 
+  async function toggleActive(row) {
+    if (!isAdmin) return;
+    const { data, error } = await supabase
+      .from('technicians')
+      .update({ is_admin: row.role === 'admin' ? true : row.is_admin }) // не меняем логику is_admin для не-админов
+      .eq('id', row.id);
+    if (!error) fetchTechnicians();
+  }
+
   return (
     <div className="p-4 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Сотрудники</h1>
+      <h1 className="text-2xl font-semibold mb-4">Техники / Сотрудники</h1>
 
-      {/* ФОРМА СОЗДАНИЯ */}
-      <form onSubmit={createEmployee} className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-3 mb-6">
+      {/* форма создания */}
+      <form onSubmit={createTech} className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-3 mb-6">
         <div>
           <label className="block text-sm mb-1">E-mail *</label>
           <input className={input} type="email" required value={email} onChange={e=>setEmail(e.target.value)} />
@@ -113,8 +108,8 @@ export default function AdminTechniciansPage() {
           <input className={input} value={phone} onChange={e=>setPhone(e.target.value)} />
         </div>
         <div>
-          <label className="block text-sm mb-1">ФИО</label>
-          <input className={input} value={fullName} onChange={e=>setFullName(e.target.value)} />
+          <label className="block text-sm mb-1">Имя / ФИО *</label>
+          <input className={input} required value={name} onChange={e=>setName(e.target.value)} />
         </div>
         <div>
           <label className="block text-sm mb-1">Роль *</label>
@@ -124,17 +119,18 @@ export default function AdminTechniciansPage() {
             <option value="admin">Админ</option>
           </select>
         </div>
+        <div>
+          <label className="block text-sm mb-1">Орг. ID</label>
+          <input className={input} type="number" value={orgId} onChange={e=>setOrgId(e.target.value)} />
+          <div className="text-xs text-gray-500 mt-1">Если у тебя всегда 1 — можно не трогать.</div>
+        </div>
         <div className="md:col-span-2">
           <label className="block text-sm mb-1">Временный пароль *</label>
           <div className="flex gap-2">
             <input className={input} required value={password} onChange={e=>setPassword(e.target.value)} />
             <button type="button" className={btn} onClick={()=>setPassword(genTempPassword())}>Сгенерировать</button>
           </div>
-          <div className="text-xs text-gray-500 mt-1">Отдай сотруднику e-mail и этот временный пароль для входа.</div>
-        </div>
-        <div className="md:col-span-2">
-          <label className="block text-sm mb-1">Заметки</label>
-          <textarea className={input} rows={2} value={notes} onChange={e=>setNotes(e.target.value)} />
+          <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
         </div>
         <div className="md:col-span-2">
           <button disabled={loading} className={btn} type="submit">
@@ -143,47 +139,41 @@ export default function AdminTechniciansPage() {
         </div>
       </form>
 
-      {/* ТАБЛИЦА */}
+      {/* таблица */}
       <div className="overflow-x-auto">
         <table className="w-full border">
           <thead>
             <tr>
-              <th className={th}>Дата</th>
+              <th className={th}>Имя</th>
               <th className={th}>E-mail</th>
-              <th className={th}>ФИО</th>
               <th className={th}>Телефон</th>
               <th className={th}>Роль</th>
-              <th className={th}>Статус</th>
+              <th className={th}>is_admin</th>
               <th className={th}>Действия</th>
             </tr>
           </thead>
           <tbody>
-            {staff.map(row => (
+            {list.map(row => (
               <tr key={row.id}>
-                <td className={td}>{new Date(row.created_at).toLocaleString()}</td>
-                <td className={td}>{row.email}</td>
-                <td className={td}>{row.full_name || '-'}</td>
-                <td className={td}>{row.phone || '-'}</td>
+                <td className={td}>{row.name}</td>
+                <td className={td}>{row.email || "-"}</td>
+                <td className={td}>{row.phone || "-"}</td>
                 <td className={td}>{row.role}</td>
-                <td className={td}>
-                  <span className={`px-2 py-1 rounded text-sm ${row.is_active ? 'bg-green-100' : 'bg-gray-200'}`}>
-                    {row.is_active ? 'активен' : 'выкл.'}
-                  </span>
-                </td>
+                <td className={td}>{row.is_admin ? "TRUE" : "FALSE"}</td>
                 <td className={td}>
                   <div className="flex gap-2">
-                    <button className={btn} onClick={()=>toggleActive(row)}>
-                      {row.is_active ? 'Отключить' : 'Включить'}
-                    </button>
-                    <button className={btn} onClick={()=>sendReset(row.email)}>
+                    <button className={btn} onClick={()=>sendReset(row.email)} disabled={!row.email}>
                       Сброс пароля
+                    </button>
+                    <button className={btn} onClick={()=>toggleActive(row)}>
+                      Обновить
                     </button>
                   </div>
                 </td>
               </tr>
             ))}
-            {staff.length === 0 && (
-              <tr><td className={td} colSpan={7}>Нет сотрудников</td></tr>
+            {list.length === 0 && (
+              <tr><td className={td} colSpan={6}>Нет сотрудников</td></tr>
             )}
           </tbody>
         </table>
