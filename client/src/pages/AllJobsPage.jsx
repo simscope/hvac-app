@@ -9,8 +9,6 @@ const JoAllJobsPage = () => {
   const [origJobs, setOrigJobs] = useState([]); // последний снимок с сервера
   const [technicians, setTechnicians] = useState([]);
   const [clients, setClients] = useState([]);
-  const [comments, setComments] = useState([]);
-  const [materials, setMaterials] = useState([]);
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTech, setFilterTech] = useState('all');
   const [filterPaid, setFilterPaid] = useState('all');
@@ -37,19 +35,15 @@ const JoAllJobsPage = () => {
 
   const fetchAll = async () => {
     setLoading(true);
-    const [{ data: j }, { data: t }, { data: c }, { data: cm }, { data: m }] = await Promise.all([
+    const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
       supabase.from('jobs').select('*'),
       supabase.from('technicians').select('id, name, role').eq('role', 'tech'),
       supabase.from('clients').select('*'),
-      supabase.from('comments').select('job_id, text'),
-      supabase.from('materials').select('*'),
     ]);
     setJobs(j || []);
     setOrigJobs(j || []);
     setTechnicians(t || []);
     setClients(c || []);
-    setComments(cm || []);
-    setMaterials(m || []);
     setLoading(false);
   };
 
@@ -63,10 +57,6 @@ const JoAllJobsPage = () => {
     ].filter(Boolean);
     return parts.join(', ');
   };
-
-  const getComment = (jobId) => comments.find((c) => c.job_id === jobId)?.text || '—';
-  const getMaterials = (jobId) =>
-    materials.filter((m) => m.job_id === jobId).map((m) => m.name).join(', ') || '—';
 
   const handleChange = (id, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
@@ -86,14 +76,15 @@ const JoAllJobsPage = () => {
   const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
   const scfPaidOk         = (j) => Number(j.scf || 0) <= 0 || !!j.payment_method;
   const laborPaidOk       = (j) => Number(j.labor_price || 0) <= 0 || !!j.labor_payment_method;
-  const fullyPaid         = (j) => scfPaidOk(j) && laborPaidOk(j);
 
   /* ====== ГАРАНТИЯ/АРХИВ считаем по СОХРАНЁННОМУ состоянию (origJobs) ====== */
   const isDone = (s) => {
     const v = String(s || '').toLowerCase().trim();
     return v === 'завершено' || v === 'выполнено';
   };
-  const isRecall = (s) => String(s || '').trim().toLowerCase() === 'recall' || String(s || '').trim() === 'ReCall';
+  const isRecall = (s) =>
+    String(s || '').trim().toLowerCase() === 'recall' ||
+    String(s || '').trim() === 'ReCall';
 
   const origById = (id) => origJobs.find((x) => x.id === id) || null;
 
@@ -104,7 +95,6 @@ const JoAllJobsPage = () => {
     return scfOK && laborOK;
   };
 
-  // старт гарантии — из completed_at; если поля нет в схеме, допускаем фолбэк на updated_at при "завершено"
   const warrantyStart = (j) => {
     const o = origById(j.id) || j;
     if (o.completed_at) return new Date(o.completed_at);
@@ -119,24 +109,22 @@ const JoAllJobsPage = () => {
 
   const persistedInWarranty = (j) => {
     const o = origById(j.id) || j;
-    if (isRecall(o.status)) return false; // ReCall всегда активный, игнорируем completed_at
+    if (isRecall(o.status)) return false; // ReCall всегда активный
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now <= warrantyEnd(j);
   };
   const persistedInArchive = (j) => {
     const o = origById(j.id) || j;
-    if (isRecall(o.status)) return false; // ReCall не уходит в архив
+    if (isRecall(o.status)) return false;
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now > warrantyEnd(j);
   };
 
   const handleSave = async (job) => {
     const { id } = job;
 
-    // какое сохранённое состояние было до этого
     const prev = origById(id) || {};
     const wasDone    = isDone(prev.status);
     const willBeDone = isDone(job.status);
 
-    // формируем payload (НЕ меняем написание статуса)
     const payload = {
       scf: job.scf !== '' && job.scf != null ? parseFloat(job.scf) : null,
       status: job.status ?? null,
@@ -148,17 +136,13 @@ const JoAllJobsPage = () => {
       issue: job.issue ?? null,
     };
 
-    // Если входим в "завершено" — фиксируем новую точку старта гарантии
+    // при переходе в "завершено" фиксируем новую дату
     if (!wasDone && willBeDone) {
       payload.completed_at = new Date().toISOString();
     }
-    // Если выходим из "завершено" (например, в ReCall) — НИЧЕГО не делаем с completed_at.
-    // Оно нам не мешает, т.к. ReCall всегда активный в фильтрах.
 
-    // 1) пробуем сохранить с completed_at (если добавляли выше)
     let { error } = await supabase.from('jobs').update(payload).eq('id', id);
 
-    // 2) если в схеме нет completed_at — повтор без него
     if (error && String(error.message || '').toLowerCase().includes('completed_at')) {
       const { completed_at, ...withoutCompleted } = payload;
       ({ error } = await supabase.from('jobs').update(withoutCompleted).eq('id', id));
@@ -169,7 +153,7 @@ const JoAllJobsPage = () => {
       alert('Ошибка при сохранении');
       return;
     }
-    await fetchAll(); // обновим origJobs, чтобы строка ушла/осталась корректно
+    await fetchAll();
     alert('Сохранено');
   };
 
@@ -199,8 +183,6 @@ const JoAllJobsPage = () => {
         Техник: tech?.name || '',
         Система: job.system_type,
         Проблема: job.issue,
-        Комментарий: getComment(job.id),
-        Материалы: getMaterials(job.id),
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -212,16 +194,13 @@ const JoAllJobsPage = () => {
   /* ====== Фильтрация/группировка ====== */
   const filteredJobs = useMemo(() => {
     return (jobs || [])
-      // вкладки: по сохранённому состоянию (origJobs) + ReCall всегда активный
       .filter((j) => {
         const o = origById(j.id) || j;
         const recall = isRecall(o.status);
         if (viewMode === 'warranty') return !recall && persistedInWarranty(j);
         if (viewMode === 'archive')  return !recall && persistedInArchive(j);
-        // active:
         return recall || !(persistedInWarranty(j) || persistedInArchive(j));
       })
-      // фильтр по статусу
       .filter((j) =>
         filterStatus === 'all'
           ? true
@@ -229,9 +208,7 @@ const JoAllJobsPage = () => {
               ? isRecall(j.status)
               : j.status === filterStatus)
       )
-      // фильтр по технику
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
-      // поиск по клиенту/телефону/адресу
       .filter((j) => {
         if (!searchText) return true;
         const c = getClient(j.client_id);
@@ -244,13 +221,15 @@ const JoAllJobsPage = () => {
           addr.includes(t)
         );
       })
-      // фильтр по оплате
       .filter((j) => {
-        if (filterPaid === 'paid') return (Number(j.scf || 0) <= 0 || !!j.payment_method) && (Number(j.labor_price || 0) <= 0 || !!j.labor_payment_method);
-        if (filterPaid === 'unpaid') return (Number(j.scf || 0) > 0 && !j.payment_method) || (Number(j.labor_price || 0) > 0 && !j.labor_payment_method);
+        if (filterPaid === 'paid')
+          return (Number(j.scf || 0) <= 0 || !!j.payment_method) &&
+                 (Number(j.labor_price || 0) <= 0 || !!j.labor_payment_method);
+        if (filterPaid === 'unpaid')
+          return (Number(j.scf || 0) > 0 && !j.payment_method) ||
+                 (Number(j.labor_price || 0) > 0 && !j.labor_payment_method);
         return true;
       })
-      // сортировка по Job #
       .sort((a, b) => {
         const A = (a.job_number || a.id).toString();
         const B = (b.job_number || b.id).toString();
@@ -278,9 +257,7 @@ const JoAllJobsPage = () => {
         .jobs-table input, .jobs-table select, .jobs-table textarea { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
         .jobs-table .center { text-align:center; }
-        /* зелёная строка — только когда уже сохранена в гарантию и это НЕ ReCall */
         .jobs-table tr.warranty { background:#dcfce7; }
-        /* красная подсветка пустого выбора оплаты при сумме > 0 */
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
       `}</style>
 
@@ -344,8 +321,6 @@ const JoAllJobsPage = () => {
                 <col style={{ width: 240 }} />
                 <col style={{ width: 120 }} />
                 <col style={{ width: 220 }} />
-                <col style={{ width: 220 }} />
-                <col style={{ width: 220 }} />
                 <col style={{ width: 90 }} />
                 <col style={{ width: 130 }} />
                 <col style={{ width: 90 }} />
@@ -365,8 +340,6 @@ const JoAllJobsPage = () => {
                   <th>Адрес</th>
                   <th>Система</th>
                   <th>Проблема</th>
-                  <th>Комментарий</th>
-                  <th>Детали</th>
                   <th>SCF</th>
                   <th>Оплата SCF</th>
                   <th>Работа</th>
@@ -386,7 +359,6 @@ const JoAllJobsPage = () => {
                   const scfError   = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
 
-                  // зелёная строка только если сохранённо в гарантию И это не ReCall
                   const rowClass = persistedInWarranty(job) ? 'warranty' : '';
 
                   return (
@@ -408,7 +380,7 @@ const JoAllJobsPage = () => {
                             navigate(`/job/${job.id}`);
                           }
                         }
-                      }}
+                      })}
                       title="Открыть редактирование заявки"
                       style={{ cursor: 'pointer' }}
                     >
@@ -429,8 +401,6 @@ const JoAllJobsPage = () => {
                       <td><div className="cell-wrap">{formatAddress(client) || '—'}</div></td>
                       <td><div className="cell-wrap">{job.system_type || '—'}</div></td>
                       <td><div className="cell-wrap">{job.issue || '—'}</div></td>
-                      <td><div className="cell-wrap">{getComment(job.id)}</div></td>
-                      <td><div className="cell-wrap">{getMaterials(job.id)}</div></td>
 
                       <td>
                         <input
@@ -491,7 +461,9 @@ const JoAllJobsPage = () => {
                         </select>
                       </td>
 
-                      <td className="center">{(scfPaidOk(job) && laborPaidOk(job)) ? '✔️' : ''}</td>
+                      <td className="center">
+                        {(scfPaidOk(job) && laborPaidOk(job)) ? '✔️' : ''}
+                      </td>
 
                       <td className="center">
                         <button
@@ -539,4 +511,3 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
-
