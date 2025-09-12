@@ -1,22 +1,28 @@
-import React, { useEffect, useState } from "react";
-import { supabase } from "../supabaseClient";
-import { useAuth } from "../context/AuthContext";
+// client/src/pages/TechniciansPage.jsx
+import React, { useEffect, useState } from 'react';
+import { supabase } from '../supabaseClient';
+import { useAuth } from '../context/AuthContext';
 
+// Должности
 const roleOptions = [
-  { value: "admin", label: "Админ" },
-  { value: "manager", label: "Менеджер" },
-  { value: "tech", label: "Техник" },
+  { value: 'admin',   label: 'Админ' },
+  { value: 'manager', label: 'Менеджер' },
+  { value: 'tech',    label: 'Техник' },
 ];
 
-const inputStyle = { width: "100%", padding: 6, border: "1px solid #e5e7eb", borderRadius: 6 };
-const th = { padding: "8px 10px", borderBottom: "1px solid #e5e7eb", textAlign: "left", fontWeight: 600 };
-const td = { padding: "6px 10px", borderBottom: "1px solid #f1f5f9" };
+const inputStyle = { width: '100%', padding: 6, border: '1px solid #e5e7eb', borderRadius: 6 };
+const th = { padding: '8px 10px', borderBottom: '1px solid #e5e7eb', textAlign: 'left', fontWeight: 600 };
+const td = { padding: '6px 10px', borderBottom: '1px solid #f1f5f9' };
 
 export default function TechniciansPage() {
-  const { role: myRole, loading: authLoading } = useAuth();
+  // доступ к странице у вас уже фильтруется роутами по роли админа
+  const { loading: authLoading } = useAuth();
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [newRow, setNewRow] = useState({ name: "", phone: "", email: "", role: "tech" });
+
+  // Форма добавления
+  const [newRow, setNewRow] = useState({ name: '', phone: '', email: '', role: 'tech' });
 
   useEffect(() => {
     if (!authLoading) load();
@@ -25,13 +31,13 @@ export default function TechniciansPage() {
   const load = async () => {
     setLoading(true);
     const { data, error } = await supabase
-      .from("technicians")
-      .select("id, name, phone, email, role, auth_user_id")
-      .order("name", { ascending: true });
+      .from('technicians')
+      .select('id, name, phone, email, role')
+      .order('name', { ascending: true });
 
     if (error) {
-      console.error("technicians select error:", error);
-      alert("Ошибка загрузки сотрудников");
+      console.error('technicians select error:', error);
+      alert('Ошибка загрузки сотрудников');
       setItems([]);
     } else {
       setItems(data || []);
@@ -40,20 +46,20 @@ export default function TechniciansPage() {
   };
 
   const onChangeCell = (id, field, value) => {
-    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    setItems(prev => prev.map(r => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
   const saveRow = async (row) => {
     const payload = {
-      name: row.name?.trim() || null,
+      name:  row.name?.trim()  || null,
       phone: row.phone?.trim() || null,
       email: row.email?.trim() || null,
-      role: row.role ? String(row.role).trim().toLowerCase() : null,
+      role:  row.role ? String(row.role).trim().toLowerCase() : null,
     };
-    const { error } = await supabase.from("technicians").update(payload).eq("id", row.id);
+    const { error } = await supabase.from('technicians').update(payload).eq('id', row.id);
     if (error) {
-      console.error("technicians update error:", error);
-      alert("Ошибка при сохранении");
+      console.error('technicians update error:', error);
+      alert('Ошибка при сохранении');
       return;
     }
     await load();
@@ -61,117 +67,91 @@ export default function TechniciansPage() {
 
   const addRow = async () => {
     if (!newRow.name?.trim()) {
-      alert("Введите имя");
+      alert('Введите имя');
       return;
     }
     const payload = {
-      name: newRow.name.trim(),
+      name:  newRow.name.trim(),
       phone: newRow.phone?.trim() || null,
-      email: newRow.email?.trim() || null,
-      role: (newRow.role || "tech").toLowerCase().trim(),
-    };
-    const { error } = await supabase.from("technicians").insert(payload);
-    if (error) {
-      console.error("technicians insert error:", error);
-      alert("Ошибка при добавлении");
+    if (!target) {
+      alert('У сотрудника пустой Email');
       return;
     }
-    setNewRow({ name: "", phone: "", email: "", role: "tech" });
-    await load();
-  };
-
-  const removeRow = async (id) => {
-    if (!window.confirm("Удалить сотрудника?")) return;
-    const { error } = await supabase.from("technicians").delete().eq("id", id);
-    if (error) {
-      console.error("technicians delete error:", error);
-      alert("Ошибка при удалении");
-      return;
-    }
-    setItems((prev) => prev.filter((r) => r.id !== id));
-  };
-
-  // Создание аккаунта через Edge Function
-  const createAccount = async (row) => {
-    const email = (row.email || "").trim();
-    if (!email) {
-      alert("У сотрудника пустой Email");
-      return;
-    }
-    const password = prompt("Задайте временный пароль (не короче 6 символов):", "");
-    if (!password || password.length < 6) {
-      alert("Пароль должен быть не короче 6 символов");
-      return;
-    }
-
+    const url = `${window.location.origin}/#/register?email=${encodeURIComponent(target)}`;
     try {
-      const { data, error } = await supabase.functions.invoke("admin-create-user", {
-        body: {
-          email,
-          password,
-          role: (row.role || "tech").toLowerCase(),
-          technician_id: row.id,
-        },
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      alert("Аккаунт создан и привязан");
-      await load();
-    } catch (e) {
-      console.error(e);
-      alert("Не удалось создать аккаунт: " + (e?.message || e));
+      await navigator.clipboard.writeText(url);
+      alert('Ссылка регистрации скопирована в буфер обмена:\n' + url);
+    } catch {
+      // запасной вариант
+      window.prompt('Скопируйте ссылку:', url);
     }
+  };
+
+  // Сброс пароля — стандартное письмо Supabase (без Edge-функций)
+  const sendPasswordReset = async (email) => {
+    const target = (email || '').trim();
+    if (!target) {
+      alert('У сотрудника пустой Email');
+      return;
+    }
+    const redirectTo = `${window.location.origin}/#/login`; // куда вернётся после смены пароля
+    const { error } = await supabase.auth.resetPasswordForEmail(target, { redirectTo });
+    if (error) {
+      console.error('resetPasswordForEmail error:', error);
+      alert('Не удалось отправить письмо: ' + (error.message || 'ошибка'));
+      return;
+    }
+    alert('Письмо для смены пароля отправлено: ' + target);
   };
 
   if (authLoading) return <div className="p-4">Загрузка…</div>;
-  if (myRole !== "admin") return <div className="p-4">Нет прав доступа.</div>;
 
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">👥 Сотрудники</h1>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.3fr 2fr 1.2fr auto", gap: 8, marginBottom: 12 }}>
+
+      {/* Форма добавления */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.3fr 2fr 1.2fr auto', gap: 8, marginBottom: 12 }}>
         <input
           style={inputStyle}
           placeholder="Имя"
           value={newRow.name}
-          onChange={(e) => setNewRow({ ...newRow, name: e.target.value })}
+          onChange={e => setNewRow({ ...newRow, name: e.target.value })}
         />
         <input
           style={inputStyle}
           placeholder="Телефон"
           value={newRow.phone}
-          onChange={(e) => setNewRow({ ...newRow, phone: e.target.value })}
+          onChange={e => setNewRow({ ...newRow, phone: e.target.value })}
         />
         <input
           style={inputStyle}
           placeholder="Email"
           value={newRow.email}
-          onChange={(e) => setNewRow({ ...newRow, email: e.target.value })}
+          onChange={e => setNewRow({ ...newRow, email: e.target.value })}
         />
         <select
           style={inputStyle}
           value={newRow.role}
-          onChange={(e) => setNewRow({ ...newRow, role: e.target.value })}
+          onChange={e => setNewRow({ ...newRow, role: e.target.value })}
         >
-          {roleOptions.map((o) => (
+          {roleOptions.map(o => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
-        <button onClick={addRow} style={{ padding: "6px 12px" }}>
-          ➕ Добавить
-        </button>
+        <button onClick={addRow} style={{ padding: '6px 12px' }}>➕ Добавить</button>
       </div>
+
       <div className="overflow-x-auto">
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead style={{ background: "#f8fafc" }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ background: '#f8fafc' }}>
             <tr>
               <th style={th} width="40">#</th>
               <th style={th}>Имя</th>
               <th style={th} width="180">Телефон</th>
               <th style={th} width="240">Email</th>
               <th style={th} width="160">Должность</th>
-              <th style={{ ...th, textAlign: "center" }} width="380">Действия</th>
+              <th style={{ ...th, textAlign: 'center' }} width="340">Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -187,48 +167,44 @@ export default function TechniciansPage() {
                 <td style={td}>
                   <input
                     style={inputStyle}
-                    value={row.name || ""}
-                    onChange={(e) => onChangeCell(row.id, "name", e.target.value)}
+                    value={row.name || ''}
+                    onChange={e => onChangeCell(row.id, 'name', e.target.value)}
                   />
                 </td>
                 <td style={td}>
                   <input
                     style={inputStyle}
-                    value={row.phone || ""}
-                    onChange={(e) => onChangeCell(row.id, "phone", e.target.value)}
+                    value={row.phone || ''}
+                    onChange={e => onChangeCell(row.id, 'phone', e.target.value)}
                   />
                 </td>
                 <td style={td}>
                   <input
                     style={inputStyle}
-                    value={row.email || ""}
-                    onChange={(e) => onChangeCell(row.id, "email", e.target.value)}
+                    value={row.email || ''}
+                    onChange={e => onChangeCell(row.id, 'email', e.target.value)}
                   />
                 </td>
                 <td style={td}>
                   <select
                     style={inputStyle}
-                    value={(row.role || "tech").toLowerCase()}
-                    onChange={(e) => onChangeCell(row.id, "role", e.target.value)}
+                    value={(row.role || 'tech').toLowerCase()}
+                    onChange={e => onChangeCell(row.id, 'role', e.target.value)}
                   >
-                    {roleOptions.map((o) => (
+                    {roleOptions.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
                 </td>
-                <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>
-                    💾 Сохранить
+                <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  <button title="Сохранить" onClick={() => saveRow(row)} style={{ marginRight: 8 }}>💾</button>
+                  <button title="Ссылка регистрации" onClick={() => copyRegistrationLink(row.email)} style={{ marginRight: 8 }}>
+                    🔗 Ссылка регистрации
                   </button>
-                  <button title="Создать аккаунт" onClick={() => createAccount(row)} style={{ marginRight: 8 }}>
-                    👤 Создать аккаунт
+                  <button title="Сбросить пароль" onClick={() => sendPasswordReset(row.email)} style={{ marginRight: 8 }}>
+                    📨 Сбросить пароль
                   </button>
-                  <button title="Удалить" onClick={() => removeRow(row.id)}>
-                    🗑️ Удалить
-                  </button>
-                  {row.auth_user_id && (
-                    <span style={{ marginLeft: 10, opacity: 0.6 }}>UID: {row.auth_user_id.slice(0, 8)}…</span>
-                  )}
+                  <button title="Удалить" onClick={() => removeRow(row.id)}>🗑️</button>
                 </td>
               </tr>
             ))}
