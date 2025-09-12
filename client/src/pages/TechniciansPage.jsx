@@ -1,7 +1,7 @@
 // src/pages/AdminTechniciansPage.jsx
-// В том же стиле, что у тебя: ненавязчивые бордеры/радиусы.
-// Важное: если invoke вернул FunctionsHttpError — делаем "raw" fetch и
-// показываем JSON ответа (status, stage, error, details, action_link).
+// Минималистичный стиль как в проекте.
+// Если invoke вернул FunctionsHttpError — делаем raw fetch к Edge функции
+// и показываем JSON (status, stage, error, details) под формой.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase, supabaseUrl } from '../supabaseClient';
@@ -16,7 +16,7 @@ function genTempPassword(len = 12) {
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
-// Сырой вызов функции для получения тела ошибки при 4xx/5xx
+// Сырой вызов edge-функции (чтобы увидеть тело ошибки при 4xx/5xx)
 async function rawCallFunction(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || '';
@@ -36,7 +36,6 @@ async function rawCallFunction(path, body) {
   return { ok: res.ok, status: res.status, json };
 }
 
-/* ——— маленький баннер-алёрт в твоём стиле ——— */
 function Alert({ kind = 'info', title, children }) {
   const color =
     kind === 'error'   ? 'border-red-300 bg-red-50' :
@@ -58,18 +57,18 @@ export default function AdminTechniciansPage() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // форма
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech");
   const [password, setPassword] = useState(genTempPassword());
-  const [orgId, setOrgId] = useState(1);
 
-  // UI: баннер + “детали” (JSON из функции)
+  // баннер и детали ответа функции
   const [banner, setBanner] = useState(null); // { kind, title, text, details? }
   const [showDetails, setShowDetails] = useState(false);
 
-  // Поиск/фильтр под нашу таблицу
+  // простые фильтры
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
 
@@ -101,7 +100,7 @@ export default function AdminTechniciansPage() {
   async function fetchTechnicians() {
     const { data, error } = await supabase
       .from('technicians')
-      .select('id, name, phone, role, is_admin, org_id, auth_user_id, email')
+      .select('id, name, phone, role, auth_user_id, email') // is_admin и org_id убраны
       .order('name', { ascending: true });
     if (error) {
       setBanner({ kind: 'error', title: 'Ошибка загрузки', text: error.message });
@@ -117,7 +116,7 @@ export default function AdminTechniciansPage() {
 
   function resetForm() {
     setEmail(""); setName(""); setPhone("");
-    setRole("tech"); setPassword(genTempPassword()); setOrgId(1);
+    setRole("tech"); setPassword(genTempPassword());
   }
 
   async function createTech(e) {
@@ -135,17 +134,17 @@ export default function AdminTechniciansPage() {
       name: name.trim(),
       phone: phone.trim() || null,
       role,
-      org_id: Number(orgId) || 1,
+      // org_id не отправляем — на Edge-функции подставится 1 по умолчанию
       link_if_exists: true,
     };
 
     setLoading(true);
     try {
-      // 1) основной вызов
+      // 1) обычный вызов
       const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
 
       if (error || data?.error || data?.warning) {
-        // 2) fallback: сырой запрос — показать статус/стадию/детали
+        // 2) fallback: raw fetch — покажем JSON с полями status/stage/error/details
         const raw = await rawCallFunction('admin-create-user', payload);
         setBanner({
           kind: raw.ok ? 'success' : 'error',
@@ -204,7 +203,6 @@ export default function AdminTechniciansPage() {
     <div className="p-4 max-w-5xl mx-auto">
       <h1 className="text-2xl font-semibold mb-4">Техники / Сотрудники</h1>
 
-      {/* Баннер состояния (в твоём стиле) */}
       {banner && (
         <div className="mb-4">
           <Alert kind={banner.kind} title={banner.title}>
@@ -225,7 +223,7 @@ export default function AdminTechniciansPage() {
         </div>
       )}
 
-      {/* Форма */}
+      {/* форма — без Орг. ID */}
       <form onSubmit={createTech} className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-3 mb-6">
         <div>
           <label className="block text-sm mb-1">E-mail *</label>
@@ -247,11 +245,6 @@ export default function AdminTechniciansPage() {
             <option value="admin">Админ</option>
           </select>
         </div>
-        <div>
-          <label className="block text-sm mb-1">Орг. ID</label>
-          <input className={input} type="number" value={orgId} onChange={e => setOrgId(e.target.value)} />
-          <div className="text-xs text-gray-500 mt-1">Если всегда 1 — можно не трогать.</div>
-        </div>
         <div className="md:col-span-2">
           <label className="block text-sm mb-1">Временный пароль *</label>
           <div className="flex gap-2">
@@ -260,17 +253,14 @@ export default function AdminTechniciansPage() {
           </div>
           <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
         </div>
-        <div className="md:col-span-2 flex items-center gap-2">
+        <div className="md:col-span-2">
           <button disabled={disableSubmit} className={btn} type="submit">
             {loading ? "Создаю..." : "Создать сотрудника"}
-          </button>
-          <button type="button" className={btn} disabled={loading} onClick={resetForm}>
-            Очистить
           </button>
         </div>
       </form>
 
-      {/* Поиск/фильтр в том же стиле */}
+      {/* небольшой поиск/фильтр — в том же стиле */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
         <input className={input} placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} />
         <select className={input} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
@@ -284,7 +274,7 @@ export default function AdminTechniciansPage() {
         </div>
       </div>
 
-      {/* Таблица — оставил как у тебя */}
+      {/* таблица — колонка is_admin убрана */}
       <div className="overflow-x-auto">
         <table className="w-full border">
           <thead>
@@ -293,7 +283,6 @@ export default function AdminTechniciansPage() {
               <th className={th}>E-mail</th>
               <th className={th}>Телефон</th>
               <th className={th}>Роль</th>
-              <th className={th}>is_admin</th>
               <th className={th}>Действия</th>
             </tr>
           </thead>
@@ -304,7 +293,6 @@ export default function AdminTechniciansPage() {
                 <td className={td}>{row.email || "-"}</td>
                 <td className={td}>{row.phone || "-"}</td>
                 <td className={td}>{row.role}</td>
-                <td className={td}>{row.is_admin ? "TRUE" : "FALSE"}</td>
                 <td className={td}>
                   <button className={btn} onClick={() => row.email && sendReset(row.email)} disabled={!row.email}>
                     Сброс пароля
@@ -312,7 +300,11 @@ export default function AdminTechniciansPage() {
                 </td>
               </tr>
             ))}
-            {filteredRows().length === 0 && <tr><td className={td} colSpan={6}>Нет сотрудников</td></tr>}
+            {filteredRows().length === 0 && (
+              <tr>
+                <td className={td} colSpan={5}>Нет сотрудников</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
