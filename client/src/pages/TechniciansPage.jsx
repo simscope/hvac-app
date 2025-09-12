@@ -99,6 +99,7 @@ export default function AdminTechniciansPage() {
       phone: phone.trim() || null,
       role,
       org_id: Number(orgId) || 1,
+      link_if_exists: true,
     };
 
     try {
@@ -218,3 +219,4 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
+
