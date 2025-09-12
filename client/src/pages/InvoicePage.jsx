@@ -1,502 +1,477 @@
-// client/src/pages/InvoicePage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/* ─────────────── utils ─────────────── */
-const CURRENCY = (n) => `$${Number(n || 0).toFixed(2)}`;
-const useQuery = () => new URLSearchParams(useLocation().search);
+/** Загрузка логотипа из /public как dataURL для вставки в jsPDF */
+async function loadLogoDataURL() {
+  try {
+    const res = await fetch('/logo_invoice_header.png', { cache: 'no-store' });
+    if (!res.ok) throw new Error('Logo fetch error');
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    });
+    return dataUrl;
+  } catch {
+    return null; // логотип необязателен
+  }
+}
 
-function ymd(d = new Date()) {
+/** Утилиты */
+const n2 = (v) => Number(v || 0);
+const toCurrency = (v) => `$${Number(v || 0).toFixed(2)}`;
+const todayISO = () => {
+  const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
+};
 
-async function loadLogoOriginalDataURL() {
-  const res = await fetch('/logo_invoice_header.png');
-  if (!res.ok) throw new Error('Logo not found');
-  const blob = await res.blob();
-  const dataUrl = await new Promise((resolve) => {
-    const fr = new FileReader();
-    fr.onloadend = () => resolve(fr.result);
-    fr.readAsDataURL(blob);
-  });
-  const fmt = (dataUrl || '').slice(5, 14).toUpperCase().includes('PNG') ? 'PNG' : 'JPEG';
-  return { dataUrl, format: fmt };
-}
-
-function createPdf() {
-  return new jsPDF({
-    unit: 'mm',
-    format: 'a4',
-    compress: true,
-    putOnlyUsedFonts: true,
-    precision: 2,
-  });
-}
-
-/* ─────────────── component ─────────────── */
 export default function InvoicePage() {
-  const { id } = useParams(); // "new" | <jobId>
-  const q = useQuery();
-  const invoiceIdFromQuery = q.get('invoice'); // редактирование сохранённого
-  const jobIdFromQuery = q.get('jobId');       // /invoice/new?jobId=...
-
+  const { id: jobIdParam } = useParams(); // job id опциональный
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  // инвойс
-  const [invoiceId, setInvoiceId] = useState(null); // uuid в таблице invoices
-  const [number, setNumber] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(ymd()); // <-- новая дата, YYYY-MM-DD
-  const [includeWarranty, setIncludeWarranty] = useState(true);
-  const [warrantyDays, setWarrantyDays] = useState(60);
+  // Шапка/клиент
+  const [invoiceNumber, setInvoiceNumber] = useState(''); // оставить пустым => автонумерация БД
+  const [invoiceDate, setInvoiceDate] = useState(todayISO());
+  const [customerName, setCustomerName] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+
+  // Строки инвойса
+  const [rows, setRows] = useState([
+    { type: 'service', name: 'Labor', qty: 1, price: 0 },
+    { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
+  ]);
   const [discount, setDiscount] = useState(0);
 
-  // клиент / позиции
-  const [client, setClient] = useState({ full_name: '', address: '', phone: '', email: '' });
-  const [rows, setRows] = useState([]);
+  // Гарантия
+  const [includeWarranty, setIncludeWarranty] = useState(true);
+  const [warrantyDays, setWarrantyDays] = useState(60);
 
-  const warrantyText = useMemo(() => {
-    const days = Number(warrantyDays || 0);
-    return (
-      `A ${days}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
-      `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, ` +
-      `damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
-      `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`
-    );
-  }, [warrantyDays]);
+  // Служебные
+  const [logoDataURL, setLogoDataURL] = useState(null);
+  const [jobId, setJobId] = useState(null); // если пришёл :id
 
+  /** Подтянуть логотип и (если нужно) заявку/клиента/материалы */
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const dataUrl = await loadLogoDataURL();
+      setLogoDataURL(dataUrl || null);
+
+      const id = jobIdParam || null;
+      setJobId(id);
+
+      if (id) {
+        // Подтягиваем заявку
+        const { data: job, error: jobErr } = await supabase
+          .from('jobs')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (jobErr) {
+          console.error('job fetch error:', jobErr);
+        }
+
+        // Клиент
+        if (job?.client_id) {
+          const { data: c } = await supabase
+            .from('clients')
+            .select('full_name, address, phone, email')
+            .eq('id', job.client_id)
+            .maybeSingle();
+          if (c) {
+            setCustomerName(c.full_name || '');
+            setCustomerAddress(c.address || '');
+            setCustomerPhone(c.phone || '');
+            setCustomerEmail(c.email || '');
+          }
+        } else {
+          // fallback из самой заявки (если есть поля)
+          setCustomerName(job?.client_name || job?.full_name || '');
+          setCustomerAddress(job?.client_address || job?.address || '');
+          setCustomerPhone(job?.client_phone || job?.phone || '');
+          setCustomerEmail(job?.client_email || job?.email || '');
+        }
+
+        // SCF/Labor
+        const scf = n2(job?.scf);
+        const labor = n2(job?.labor_price);
+
+        setRows((prev) => {
+          const base = [...prev];
+          // Labor
+          base[0] = { type: 'service', name: 'Labor', qty: 1, price: labor };
+          // SCF
+          base[1] = { type: 'service', name: 'Service Call Fee', qty: 1, price: scf };
+          return base;
+        });
+
+        // Материалы
+        const { data: mats } = await supabase
+          .from('materials')
+          .select('name, qty, price')
+          .eq('job_id', id);
+        if (mats && mats.length) {
+          setRows((prev) => {
+            const base = [...prev];
+            mats.forEach((m) =>
+              base.push({
+                type: 'material',
+                name: m.name || '',
+                qty: n2(m.qty) || 1,
+                price: n2(m.price),
+              })
+            );
+            return base;
+          });
+        }
+      }
+
+      setLoading(false);
+    })();
+  }, [jobIdParam]);
+
+  /** Суммы */
   const subtotal = useMemo(
-    () => rows.reduce((s, r) => s + Number(r.qty || 0) * Number(r.price || 0), 0),
+    () =>
+      rows.reduce((sum, r) => sum + n2(r.qty) * n2(r.price), 0),
     [rows]
   );
-  const total = useMemo(() => Math.max(0, subtotal - Number(discount || 0)), [subtotal, discount]);
+  const total = useMemo(() => Math.max(0, subtotal - n2(discount)), [subtotal, discount]);
 
-  /* ─────────────── load ─────────────── */
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        setLoading(true);
-        setErr('');
-
-        // редактирование сохранённого инвойса
-        if (invoiceIdFromQuery) {
-          const { data, error } = await supabase
-            .from('invoices')
-            .select('*')
-            .eq('id', invoiceIdFromQuery)
-            .maybeSingle();
-          if (error || !data) throw new Error('Invoice not found');
-
-          if (!alive) return;
-          setInvoiceId(data.id);
-          setNumber(String(data.number ?? ''));
-          setInvoiceDate(data.invoice_date ? String(data.invoice_date).slice(0, 10) : ymd());
-          setIncludeWarranty(!!data.include_warranty);
-          setWarrantyDays(Number(data.warranty_days ?? 60));
-          setDiscount(Number(data.discount ?? 0));
-          setClient({
-            full_name: data.client_name || '',
-            address: data.client_address || '',
-            phone: data.client_phone || '',
-            email: data.client_email || '',
-          });
-          setRows(Array.isArray(data.rows) ? data.rows : []);
-          setLoading(false);
-          return;
-        }
-
-        const nextNum = await getNextInvoiceNumber();
-
-        // создать по заявке или пустой
-        const jobId = id === 'new' ? (jobIdFromQuery || null) : id;
-        if (jobId) {
-          const { data: j } = await supabase
-            .from('jobs')
-            .select('*')
-            .eq('id', jobId)
-            .maybeSingle();
-
-          let c = null;
-          if (j?.client_id) {
-            const { data: cdb } = await supabase
-              .from('clients')
-              .select('*')
-              .eq('id', j.client_id)
-              .maybeSingle();
-            if (cdb) c = cdb;
-          }
-          setClient({
-            full_name: c?.full_name || j?.client_name || j?.full_name || '',
-            address: c?.address || j?.client_address || j?.address || '',
-            phone:   c?.phone   || j?.client_phone   || j?.phone   || '',
-            email:   c?.email   || j?.client_email   || j?.email   || '',
-          });
-          setRows([
-            { type: 'service', name: 'Labor',            qty: 1, price: Number(j?.labor_price || 0) },
-            { type: 'service', name: 'Service Call Fee', qty: 1, price: Number(j?.scf || 0) },
-          ]);
-        } else {
-          setRows([{ type: 'service', name: 'Labor', qty: 1, price: 0 }]);
-        }
-
-        setNumber(String(nextNum));
-        setInvoiceDate(ymd()); // сегодня по умолчанию
-      } catch (e) {
-        console.error(e);
-        if (alive) setErr(e.message || 'Load error');
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, [id, invoiceIdFromQuery, jobIdFromQuery]);
-
-  async function getNextInvoiceNumber() {
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('number')
-      .order('number', { ascending: false })
-      .limit(1);
-    if (error) return 1;
-    const last = data?.[0]?.number ?? 0;
-    const n = Number(last || 0);
-    return Number.isFinite(n) ? n + 1 : 1;
-  }
-
-  /* ─────────────── edits ─────────────── */
-  const changeRow = (i, k, v) => {
+  /** Работа со строками */
+  const changeRow = (idx, field, value) => {
     setRows((prev) => {
       const cp = [...prev];
-      cp[i] = { ...cp[i], [k]: k === 'name' || k === 'type' ? v : Number(v || 0) };
+      const v =
+        field === 'qty' || field === 'price'
+          ? Number(value || 0)
+          : value;
+      cp[idx] = { ...cp[idx], [field]: v };
       return cp;
     });
   };
-  const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
-  const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
+  const addRow = () => setRows((prev) => [...prev, { type: 'material', name: '', qty: 1, price: 0 }]);
+  const delRow = (idx) => setRows((prev) => prev.filter((_, i) => i !== idx));
 
-  /* ─────────────── save + pdf ─────────────── */
-  async function handleSaveAndDownload() {
+  /** Сохранение в БД + скачивание PDF */
+  const onSaveAndDownload = async () => {
+    setSaving(true);
     try {
-      setErr('');
+      // нужен автор для created_by
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData?.user) throw new Error('Auth required');
+      const userId = authData.user.id;
 
+      // Формируем payload
       const payload = {
-        number: Number(number || 0) || null,
-        invoice_date: invoiceDate || ymd(), // <-- сохраняем дату
-        include_warranty: includeWarranty,
-        warranty_days: Number(warrantyDays || 0) || null,
-        discount: Number(discount || 0) || 0,
+        // invoice_number: если пусто — БД поставит default (sequence)
+        ...(String(invoiceNumber).trim()
+          ? { invoice_number: Number(invoiceNumber) }
+          : {}),
+        job_id: jobId ?? null,
+        invoice_date: invoiceDate || todayISO(),
+
+        customer_name: customerName || '',
+        customer_address: customerAddress || '',
+        customer_phone: customerPhone || '',
+        customer_email: customerEmail || '',
+
+        rows, // jsonb
         subtotal,
+        discount: n2(discount),
         total,
-        client_name: client.full_name || '',
-        client_address: client.address || '',
-        client_phone: client.phone || '',
-        client_email: client.email || '',
-        rows,
-        job_id: id && id !== 'new' ? id : (jobIdFromQuery || null),
+
+        include_warranty: !!includeWarranty,
+        warranty_days: Number(warrantyDays || 60),
+
+        created_by: userId,
       };
 
-      let savedId = invoiceId;
+      // INSERT -> вернёт готовый номер (если auto) и id
+      const { data: rec, error: insErr } = await supabase
+        .from('invoices')
+        .insert(payload)
+        .select('*')
+        .single();
 
-      if (invoiceId) {
-        const { error } = await supabase.from('invoices').update(payload).eq('id', invoiceId);
-        if (error) throw error;
-      } else {
-        const { data, error } = await supabase.from('invoices').insert(payload).select('id').single();
-        if (error) throw error;
-        savedId = data.id;
-        setInvoiceId(savedId);
-        if (id === 'new' && typeof window !== 'undefined') {
-          const url = new URL(window.location.href);
-          url.searchParams.set('invoice', savedId);
-          window.history.replaceState({}, '', url.toString());
-        }
+      if (insErr) {
+        console.error(insErr);
+        alert(insErr.message || 'Failed to save invoice');
+        setSaving(false);
+        return;
       }
 
-      const fileName = `${number || savedId}.pdf`;
-      const pdfBlob = await buildPdfBlob();
+      // Если номер был автогенерируемый — покажем его в UI
+      if (!String(invoiceNumber).trim() && rec?.invoice_number != null) {
+        setInvoiceNumber(String(rec.invoice_number));
+      }
 
-      // пробуем сохранить в storage (если бакет есть)
-      try {
-        const { error: upErr } = await supabase.storage
-          .from('invoices')
-          .upload(fileName, pdfBlob, { upsert: true, contentType: 'application/pdf' });
-        if (!upErr) {
-          const { data: pub } = supabase.storage.from('invoices').getPublicUrl(fileName);
-          const pdfUrl = pub?.publicUrl || null;
-          if (pdfUrl) await supabase.from('invoices').update({ pdf_url: pdfUrl }).eq('id', savedId);
-        }
-      } catch (_) { /* игнор, если хранилища нет */ }
+      // Генерация PDF
+      const doc = new jsPDF({ unit: 'pt', format: 'letter' }); // компактнее в pt
+      const marginX = 40;
+      let y = 40;
 
-      // локальное скачивание (устойчиво)
-      const url = URL.createObjectURL(pdfBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // небольшой таймаут перед revoke — на некоторых браузерах нужно время
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      // Логотип (не сжимаем дополнительно)
+      if (logoDataURL) {
+        doc.addImage(logoDataURL, 'PNG', doc.internal.pageSize.getWidth() - 110, y, 70, 70);
+      }
 
-      alert('Invoice saved & downloaded');
+      // Заголовок
+      doc.setFontSize(16);
+      doc.setFont(undefined, 'bold');
+      doc.text(`INVOICE #${rec?.invoice_number ?? invoiceNumber || '—'}`, doc.internal.pageSize.getWidth() / 2, y + 20, {
+        align: 'center',
+      });
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Date: ${new Date(invoiceDate || todayISO()).toLocaleDateString()}`, doc.internal.pageSize.getWidth() / 2, y + 36, {
+        align: 'center',
+      });
+
+      // Bill To
+      y += 80;
+      doc.setFont(undefined, 'bold');
+      doc.text('Bill To:', marginX, y);
+      doc.setFont(undefined, 'normal');
+      y += 14;
+      if (customerName) { doc.text(String(customerName), marginX, y); y += 14; }
+      if (customerAddress) { doc.text(String(customerAddress), marginX, y); y += 14; }
+      if (customerPhone) { doc.text(String(customerPhone), marginX, y); y += 14; }
+      if (customerEmail) { doc.text(String(customerEmail), marginX, y); y += 14; }
+
+      // Company (справа)
+      const rightX = doc.internal.pageSize.getWidth() - marginX;
+      let yR = 120;
+      doc.setFont(undefined, 'bold');
+      doc.text('Sim Scope Inc.', rightX, yR, { align: 'right' });
+      doc.setFont(undefined, 'normal');
+      yR += 14; doc.text('1587 E 19th St', rightX, yR, { align: 'right' });
+      yR += 14; doc.text('Brooklyn, NY 11230', rightX, yR, { align: 'right' });
+      yR += 14; doc.text('(929) 412-9042', rightX, yR, { align: 'right' });
+      yR += 14; doc.text('simscopeinc@gmail.com', rightX, yR, { align: 'right' });
+
+      // Подготовим таблицу
+      const serviceRows = rows.filter((r) => r.type === 'service');
+      const materialRows = rows.filter((r) => r.type === 'material');
+
+      const body = [
+        ...serviceRows.map((r) => [r.name, String(r.qty), toCurrency(r.price), toCurrency(n2(r.qty) * n2(r.price))]),
+      ];
+
+      if (materialRows.length) {
+        body.push([{ content: 'MATERIALS', colSpan: 4, styles: { halign: 'left', fillColor: [238, 238, 238], fontStyle: 'bold' } }]);
+        materialRows.forEach((r) =>
+          body.push([r.name, String(r.qty), toCurrency(r.price), toCurrency(n2(r.qty) * n2(r.price))])
+        );
+      }
+
+      autoTable(doc, {
+        startY: Math.max(y, yR) + 10,
+        head: [['Description', 'Qty', 'Unit Price', 'Amount']],
+        body,
+        styles: { fontSize: 10, lineWidth: 0.1, cellPadding: 6 },
+        headStyles: { fillColor: [245, 245, 245], textColor: 0, fontStyle: 'bold' },
+        margin: { left: marginX, right: marginX },
+        columnStyles: {
+          0: { cellWidth: doc.internal.pageSize.getWidth() - marginX * 2 - 150 }, // Description
+          1: { cellWidth: 40, halign: 'center' },
+          2: { cellWidth: 55, halign: 'right' },
+          3: { cellWidth: 55, halign: 'right' },
+        },
+      });
+
+      let endY = doc.lastAutoTable.finalY + 10;
+
+      // Итоги справа
+      doc.setFont(undefined, 'bold');
+      doc.text(`Subtotal: ${toCurrency(subtotal)}`, rightX, endY, { align: 'right' }); endY += 14;
+      doc.text(`Discount: -${toCurrency(discount)}`, rightX, endY, { align: 'right' }); endY += 14;
+      doc.text(`Total Due: ${toCurrency(total)}`, rightX, endY, { align: 'right' });
+
+      // Гарантия
+      endY += 24;
+      if (includeWarranty) {
+        doc.setFont(undefined, 'bold');
+        doc.text(`Warranty (${Number(warrantyDays || 60)} days):`, marginX, endY);
+        doc.setFont(undefined, 'normal');
+        endY += 14;
+
+        const warrantyText =
+          'A limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ' +
+          'The warranty does not cover other components or the appliance as a whole, normal wear, consumables, ' +
+          'damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ' +
+          'The warranty starts on the job completion date and is valid only when the invoice is paid in full.';
+
+        const split = doc.splitTextToSize(warrantyText, doc.internal.pageSize.getWidth() - marginX * 2);
+        doc.text(split, marginX, endY);
+        endY += split.length * 12;
+      }
+
+      endY += 24;
+      doc.setFont(undefined, 'italic');
+      doc.text('Thank you for your business!', marginX, endY);
+
+      // Скачивание
+      const fileName = `invoice_${rec?.invoice_number ?? invoiceNumber || 'new'}.pdf`;
+      doc.save(fileName);
     } catch (e) {
       console.error(e);
-      setErr(e.message || 'Save error');
-      alert('Failed to save or download invoice');
+      alert(e?.message || 'Failed to save or download invoice');
+    } finally {
+      setSaving(false);
     }
-  }
+  };
 
-  async function buildPdfBlob() {
-    const doc = createPdf();
-
-    // логотип — всегда оригинал
-    try {
-      const { dataUrl, format } = await loadLogoOriginalDataURL();
-      doc.addImage(dataUrl, format, 170, 10, 28, 28, undefined, 'FAST');
-    } catch {}
-
-    // шапка
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
-    doc.text(`INVOICE #${number || '—'}`, 100, 50, { align: 'center' });
-
-    const printDate = new Date(invoiceDate || ymd());
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text(`Date: ${printDate.toLocaleDateString()}`, 100, 57, { align: 'center' });
-
-    // клиент
-    let yL = 68;
-    doc.setFont('helvetica', 'bold'); doc.text('Bill To:', 14, yL); yL += 5;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    if (client?.full_name) { doc.text(String(client.full_name), 14, yL); yL += 5; }
-    if (client?.address)   { doc.text(String(client.address),   14, yL); yL += 5; }
-    if (client?.phone)     { doc.text(String(client.phone),     14, yL); yL += 5; }
-    if (client?.email)     { doc.text(String(client.email),     14, yL); yL += 5; }
-
-    // компания
-    let yR = 68;
-    doc.setFont('helvetica', 'bold'); doc.text('Sim Scope Inc.', 200, yR, { align: 'right' }); yR += 5;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text('1587 E 19th St', 200, yR, { align: 'right' }); yR += 5;
-    doc.text('Brooklyn, NY 11230', 200, yR, { align: 'right' }); yR += 5;
-    doc.text('(929) 412-9042', 200, yR, { align: 'right' }); yR += 5;
-    doc.text('simscopeinc@gmail.com', 200, yR, { align: 'right' });
-
-    // таблица
-    const serviceRows = rows
-      .filter(r => r.type === 'service')
-      .map(r => [r.name, r.qty, CURRENCY(r.price), CURRENCY(r.qty * r.price)]);
-
-    const materialRows = rows
-      .filter(r => r.type === 'material')
-      .map(r => [r.name, r.qty, CURRENCY(r.price), CURRENCY(r.qty * r.price)]);
-
-    autoTable(doc, {
-      startY: Math.max(yL, yR) + 8,
-      head: [['Description', 'Qty', 'Unit Price', 'Amount']],
-      body: [
-        ...serviceRows,
-        [{ content: 'MATERIALS', colSpan: 4, styles: { halign: 'left', fillColor: [230,230,230], fontStyle: 'bold' } }],
-        ...materialRows,
-      ],
-      styles: { fontSize: 9, halign: 'left', lineWidth: 0.1 },
-      headStyles: { fillColor: [245,245,245], textColor: 0, fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [255,255,255] },
-      margin: { left: 14, right: 20 }, // справа чуть больше отступ
-      columnStyles: { 0: { cellWidth: 122 }, 1: { cellWidth: 18 }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
-    });
-
-    let y = doc.lastAutoTable.finalY + 6;
-
-    // итого
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-    doc.text(`Subtotal: ${CURRENCY(subtotal)}`, 200, y, { align: 'right' }); y += 5;
-    doc.text(`Discount: -${CURRENCY(discount)}`, 200, y, { align: 'right' }); y += 5;
-    doc.text(`Total Due: ${CURRENCY(total)}`, 200, y, { align: 'right' }); y += 7;
-
-    // гарантия
-    if (includeWarranty) {
-      const days = Number(warrantyDays || 0);
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
-      doc.text(`Warranty (${days} ${days === 1 ? 'day' : 'days'}):`, 14, y); y += 5;
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-      const wrapped = doc.splitTextToSize(warrantyText, 182);
-      doc.text(wrapped, 14, y); y += wrapped.length * 4 + 5;
-    }
-
-    doc.setFont('helvetica', 'italic'); doc.setFontSize(10);
-    doc.text('Thank you for your business!', 200, y, { align: 'right' });
-
-    return doc.output('blob');
-  }
-
-  /* ─────────────── render ─────────────── */
-  if (loading) return <div className="p-4">Loading…</div>;
+  if (loading) return <div className="p-4">Загрузка…</div>;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
-      <div className="flex justify-between mb-4 items-center">
-        <img src="/logo_invoice_header.png" alt="Logo" style={{ width: 60, height: 60, objectFit: 'contain' }} />
-        <div className="text-right text-sm">
-          <p><strong>Sim Scope Inc.</strong></p>
-          <p>1587 E 19th St, Brooklyn, NY 11230</p>
-          <p>(929) 412-9042</p>
-          <p>simscopeinc@gmail.com</p>
-        </div>
-      </div>
+      <h1 className="text-xl font-bold mb-3">Invoice</h1>
 
-      {err && <div className="text-red-600 mb-3">{err}</div>}
-
-      <div className="flex flex-wrap gap-4 items-end">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
         <div>
           <label className="block text-sm font-semibold">Invoice #</label>
           <input
-            value={number}
-            onChange={(e) => setNumber(e.target.value)}
-            className="border rounded px-3 py-2 w-48"
-            placeholder="auto"
+            className="border rounded px-3 py-2 w-full"
+            placeholder="авто (оставьте пустым)"
+            value={invoiceNumber}
+            onChange={(e) => setInvoiceNumber(e.target.value.replace(/[^\d]/g, ''))}
           />
-          <div className="text-xs text-gray-500 mt-1">Можно переопределить вручную</div>
+          <div className="text-xs text-gray-500 mt-1">Можно переопределить вручную; если пусто — БД выдаст номер автоматически.</div>
         </div>
 
         <div>
           <label className="block text-sm font-semibold">Date</label>
           <input
             type="date"
+            className="border rounded px-3 py-2 w-full"
             value={invoiceDate}
-            onChange={(e) => setInvoiceDate(e.target.value || ymd())}
-            className="border rounded px-3 py-2 w-44"
+            onChange={(e) => setInvoiceDate(e.target.value)}
           />
         </div>
 
-        <div className="grow" />
-
-        <div className="flex flex-col gap-2 text-sm items-start">
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="checkbox"
-              className="scale-110"
-              checked={includeWarranty}
-              onChange={(e) => setIncludeWarranty(e.target.checked)}
-            />
-            Include warranty block
-          </label>
-
-          {includeWarranty && (
-            <label className="inline-flex items-center gap-2">
-              Days:
-              <input
-                type="number"
-                min={1}
-                className="border rounded px-2 py-1 w-24 text-right"
-                value={warrantyDays}
-                onChange={(e) => setWarrantyDays(Math.max(1, Number(e.target.value || 60)))}
-              />
-            </label>
-          )}
+        <div className="md:col-span-2 border rounded p-3">
+          <div className="font-semibold mb-2">Bill To</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input className="border rounded px-3 py-2" placeholder="Name" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+            <input className="border rounded px-3 py-2" placeholder="Phone" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
+            <input className="border rounded px-3 py-2" placeholder="Address" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
+            <input className="border rounded px-3 py-2" placeholder="Email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} />
+          </div>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-2 text-sm">
-        <div className="font-semibold">Bill To:</div>
-        <input
-          className="border rounded px-2 py-1"
-          placeholder="Full name"
-          value={client.full_name}
-          onChange={(e) => setClient({ ...client, full_name: e.target.value })}
-        />
-        <input
-          className="border rounded px-2 py-1"
-          placeholder="Address"
-          value={client.address}
-          onChange={(e) => setClient({ ...client, address: e.target.value })}
-        />
-        <div className="flex gap-2">
-          <input
-            className="border rounded px-2 py-1 grow"
-            placeholder="Phone"
-            value={client.phone}
-            onChange={(e) => setClient({ ...client, phone: e.target.value })}
-          />
-          <input
-            className="border rounded px-2 py-1 grow"
-            placeholder="Email"
-            value={client.email}
-            onChange={(e) => setClient({ ...client, email: e.target.value })}
-          />
-        </div>
-      </div>
+      <div className="mb-3 flex items-center gap-3">
+        <label className="inline-flex items-center gap-2">
+          <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
+          Include warranty block
+        </label>
 
-      <table className="w-full text-sm mt-4 border-collapse">
-        <thead>
-          <tr className="border-b">
-            <th className="text-left py-2">Type</th>
-            <th className="text-left">Name</th>
-            <th className="w-20">Qty</th>
-            <th className="w-24">Price</th>
-            <th className="w-28">Amount</th>
-            <th className="w-10"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-b">
-              <td className="py-2">
-                <select value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)} className="border rounded px-2 py-1">
-                  <option value="service">service</option>
-                  <option value="material">material</option>
-                </select>
-              </td>
-              <td>
-                <input value={r.name} onChange={(e) => changeRow(i, 'name', e.target.value)} className="border rounded px-2 py-1 w-full" />
-              </td>
-              <td className="text-center">
-                <input type="number" value={r.qty} onChange={(e) => changeRow(i, 'qty', e.target.value)} className="border rounded px-2 py-1 w-20 text-center" />
-              </td>
-              <td className="text-right">
-                <input type="number" value={r.price} onChange={(e) => changeRow(i, 'price', e.target.value)} className="border rounded px-2 py-1 w-24 text-right" />
-              </td>
-              <td className="text-right">{CURRENCY(r.qty * r.price)}</td>
-              <td className="text-center">
-                <button onClick={() => delRow(i)} className="text-red-600 px-2" title="Delete">✕</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <div className="mt-3">
-        <button onClick={addRow} className="bg-gray-200 text-black px-3 py-1 rounded">➕ Add row</button>
-      </div>
-
-      <div className="mt-6 text-right">
-        <div className="text-sm">Subtotal: {CURRENCY(subtotal)}</div>
-        <div className="inline-flex items-center gap-2 mt-2">
-          <label className="font-semibold">Discount $:</label>
+        <div className="flex items-center gap-2">
+          <span className="text-sm">Days:</span>
           <input
             type="number"
-            className="border rounded px-2 py-1 w-24 text-right"
+            className="border rounded px-2 py-1 w-20 text-right"
+            value={warrantyDays}
+            onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
+          />
+        </div>
+      </div>
+
+      {/* Таблица строк */}
+      <div className="overflow-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="bg-gray-100">
+              <th className="text-left border px-2 py-2">Type</th>
+              <th className="text-left border px-2 py-2">Name</th>
+              <th className="text-center border px-2 py-2" style={{ width: 70 }}>Qty</th>
+              <th className="text-right border px-2 py-2" style={{ width: 120 }}>Price</th>
+              <th className="text-right border px-2 py-2" style={{ width: 120 }}>Amount</th>
+              <th className="border px-2 py-2" style={{ width: 40 }} />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td className="border px-2 py-1">
+                  <select
+                    className="border rounded px-2 py-1"
+                    value={r.type}
+                    onChange={(e) => changeRow(i, 'type', e.target.value)}
+                  >
+                    <option value="service">service</option>
+                    <option value="material">material</option>
+                  </select>
+                </td>
+                <td className="border px-2 py-1">
+                  <input
+                    className="border rounded px-2 py-1 w-full"
+                    value={r.name}
+                    onChange={(e) => changeRow(i, 'name', e.target.value)}
+                  />
+                </td>
+                <td className="border px-2 py-1 text-center">
+                  <input
+                    type="number"
+                    className="border rounded px-2 py-1 w-16 text-center"
+                    value={r.qty}
+                    onChange={(e) => changeRow(i, 'qty', e.target.value)}
+                  />
+                </td>
+                <td className="border px-2 py-1 text-right">
+                  <input
+                    type="number"
+                    className="border rounded px-2 py-1 w-24 text-right"
+                    value={r.price}
+                    onChange={(e) => changeRow(i, 'price', e.target.value)}
+                  />
+                </td>
+                <td className="border px-2 py-1 text-right">{toCurrency(n2(r.qty) * n2(r.price))}</td>
+                <td className="border px-2 py-1 text-center">
+                  <button className="text-red-600" onClick={() => delRow(i)}>✕</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-2">
+        <button className="bg-gray-200 px-3 py-1 rounded" onClick={addRow}>+ Add row</button>
+      </div>
+
+      <div className="mt-4 text-right">
+        <div>Subtotal: <strong>{toCurrency(subtotal)}</strong></div>
+        <div className="inline-flex items-center gap-2 mt-2">
+          <span className="font-semibold">Discount $:</span>
+          <input
+            type="number"
+            className="border px-2 py-1 w-24 text-right"
             value={discount}
             onChange={(e) => setDiscount(Number(e.target.value || 0))}
           />
         </div>
-        <div className="font-bold text-lg mt-2">Total Due: {CURRENCY(total)}</div>
+        <div className="font-bold text-lg mt-2">Total Due: {toCurrency(total)}</div>
       </div>
 
-      {includeWarranty && (
-        <div className="mt-6 p-3 border rounded bg-gray-50 text-sm leading-5">
-          <div className="font-semibold mb-1">Warranty ({warrantyDays} {Number(warrantyDays) === 1 ? 'day' : 'days'}):</div>
-          <div>{warrantyText}</div>
-        </div>
-      )}
-
-      <div className="mt-6">
-        <button onClick={handleSaveAndDownload} className="bg-blue-600 text-white px-4 py-2 rounded">
-          💾 Сохранить и скачать PDF
+      <div className="mt-5">
+        <button
+          disabled={saving}
+          onClick={onSaveAndDownload}
+          className={`px-4 py-2 rounded text-white ${saving ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}
+          title="Сохраняет инвойс в БД и сразу скачивает PDF"
+        >
+          {saving ? 'Сохраняю…' : 'Сохранить и скачать PDF'}
         </button>
       </div>
     </div>
