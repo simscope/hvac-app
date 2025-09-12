@@ -5,10 +5,14 @@ import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/* -------------------------- small utils -------------------------- */
-
+/* ─────────────── utils ─────────────── */
 const CURRENCY = (n) => `$${Number(n || 0).toFixed(2)}`;
 const useQuery = () => new URLSearchParams(useLocation().search);
+
+function ymd(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 async function loadLogoOriginalDataURL() {
   const res = await fetch('/logo_invoice_header.png');
@@ -33,31 +37,30 @@ function createPdf() {
   });
 }
 
-/* ----------------------------- component ----------------------------- */
-
+/* ─────────────── component ─────────────── */
 export default function InvoicePage() {
-  const { id } = useParams();                // "new" | <jobId>
-  const q = useQuery();                      // optional ?invoice=<uuid> для редактирования
-  const invoiceIdFromQuery = q.get('invoice'); // режим редактирования сохранённого инвойса
-  const jobIdFromQuery = q.get('jobId');       // для /invoice/new?jobId=...
+  const { id } = useParams(); // "new" | <jobId>
+  const q = useQuery();
+  const invoiceIdFromQuery = q.get('invoice'); // редактирование сохранённого
+  const jobIdFromQuery = q.get('jobId');       // /invoice/new?jobId=...
 
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
-  // данные инвойса
+  // инвойс
   const [invoiceId, setInvoiceId] = useState(null); // uuid в таблице invoices
-  const [number, setNumber] = useState('');          // номер (int/строка)
+  const [number, setNumber] = useState('');
+  const [invoiceDate, setInvoiceDate] = useState(ymd()); // <-- новая дата, YYYY-MM-DD
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
   const [discount, setDiscount] = useState(0);
 
-  // данные клиента/позиций
+  // клиент / позиции
   const [client, setClient] = useState({ full_name: '', address: '', phone: '', email: '' });
-  const [rows, setRows] = useState([]); // [{type:'service'|'material', name, qty, price}]
+  const [rows, setRows] = useState([]);
 
   const warrantyText = useMemo(() => {
     const days = Number(warrantyDays || 0);
-    const plural = days === 1 ? 'day' : 'days';
     return (
       `A ${days}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
       `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, ` +
@@ -72,17 +75,15 @@ export default function InvoicePage() {
   );
   const total = useMemo(() => Math.max(0, subtotal - Number(discount || 0)), [subtotal, discount]);
 
-  /* -------------------------- loaders -------------------------- */
-
+  /* ─────────────── load ─────────────── */
   useEffect(() => {
     let alive = true;
-
     (async () => {
       try {
         setLoading(true);
         setErr('');
 
-        // 1) Режим редактирования сохранённого инвойса
+        // редактирование сохранённого инвойса
         if (invoiceIdFromQuery) {
           const { data, error } = await supabase
             .from('invoices')
@@ -94,6 +95,7 @@ export default function InvoicePage() {
           if (!alive) return;
           setInvoiceId(data.id);
           setNumber(String(data.number ?? ''));
+          setInvoiceDate(data.invoice_date ? String(data.invoice_date).slice(0, 10) : ymd());
           setIncludeWarranty(!!data.include_warranty);
           setWarrantyDays(Number(data.warranty_days ?? 60));
           setDiscount(Number(data.discount ?? 0));
@@ -108,13 +110,17 @@ export default function InvoicePage() {
           return;
         }
 
-        // 2) Автонумерация — берём следующий номер из таблицы invoices
         const nextNum = await getNextInvoiceNumber();
 
-        // 3) Режим "создать по заявке"
+        // создать по заявке или пустой
         const jobId = id === 'new' ? (jobIdFromQuery || null) : id;
         if (jobId) {
-          const { data: j } = await supabase.from('jobs').select('*').eq('id', jobId).maybeSingle();
+          const { data: j } = await supabase
+            .from('jobs')
+            .select('*')
+            .eq('id', jobId)
+            .maybeSingle();
+
           let c = null;
           if (j?.client_id) {
             const { data: cdb } = await supabase
@@ -131,15 +137,15 @@ export default function InvoicePage() {
             email:   c?.email   || j?.client_email   || j?.email   || '',
           });
           setRows([
-            { type: 'service', name: 'Labor',           qty: 1, price: Number(j?.labor_price || 0) },
+            { type: 'service', name: 'Labor',            qty: 1, price: Number(j?.labor_price || 0) },
             { type: 'service', name: 'Service Call Fee', qty: 1, price: Number(j?.scf || 0) },
           ]);
         } else {
-          // 4) Пустой инвойс
           setRows([{ type: 'service', name: 'Labor', qty: 1, price: 0 }]);
         }
 
         setNumber(String(nextNum));
+        setInvoiceDate(ymd()); // сегодня по умолчанию
       } catch (e) {
         console.error(e);
         if (alive) setErr(e.message || 'Load error');
@@ -147,7 +153,6 @@ export default function InvoicePage() {
         if (alive) setLoading(false);
       }
     })();
-
     return () => { alive = false; };
   }, [id, invoiceIdFromQuery, jobIdFromQuery]);
 
@@ -163,8 +168,7 @@ export default function InvoicePage() {
     return Number.isFinite(n) ? n + 1 : 1;
   }
 
-  /* -------------------------- edits -------------------------- */
-
+  /* ─────────────── edits ─────────────── */
   const changeRow = (i, k, v) => {
     setRows((prev) => {
       const cp = [...prev];
@@ -175,28 +179,24 @@ export default function InvoicePage() {
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* -------------------------- save / pdf -------------------------- */
-
-  async function handleSave(alsoGeneratePdf = false) {
+  /* ─────────────── save + pdf ─────────────── */
+  async function handleSaveAndDownload() {
     try {
       setErr('');
+
       const payload = {
-        // core
         number: Number(number || 0) || null,
+        invoice_date: invoiceDate || ymd(), // <-- сохраняем дату
         include_warranty: includeWarranty,
         warranty_days: Number(warrantyDays || 0) || null,
         discount: Number(discount || 0) || 0,
         subtotal,
         total,
-
-        // client
         client_name: client.full_name || '',
         client_address: client.address || '',
         client_phone: client.phone || '',
         client_email: client.email || '',
-
         rows,
-        // если страница открыта по заявке — сохраним связь
         job_id: id && id !== 'new' ? id : (jobIdFromQuery || null),
       };
 
@@ -210,7 +210,6 @@ export default function InvoicePage() {
         if (error) throw error;
         savedId = data.id;
         setInvoiceId(savedId);
-        // если мы создавали из /invoice/new — полезно обновить URL с ?invoice=...
         if (id === 'new' && typeof window !== 'undefined') {
           const url = new URL(window.location.href);
           url.searchParams.set('invoice', savedId);
@@ -218,52 +217,58 @@ export default function InvoicePage() {
         }
       }
 
-      // PDF в хранилище (bucket "invoices")
-      if (alsoGeneratePdf) {
-        const fileName = `${number || savedId}.pdf`;
-        const pdfBlob = await buildPdfBlob();
+      const fileName = `${number || savedId}.pdf`;
+      const pdfBlob = await buildPdfBlob();
+
+      // пробуем сохранить в storage (если бакет есть)
+      try {
         const { error: upErr } = await supabase.storage
           .from('invoices')
           .upload(fileName, pdfBlob, { upsert: true, contentType: 'application/pdf' });
-        if (upErr) throw upErr;
-
-        const { data: pub } = supabase.storage.from('invoices').getPublicUrl(fileName);
-        const pdfUrl = pub?.publicUrl || null;
-        if (pdfUrl) {
-          await supabase.from('invoices').update({ pdf_url: pdfUrl }).eq('id', savedId);
+        if (!upErr) {
+          const { data: pub } = supabase.storage.from('invoices').getPublicUrl(fileName);
+          const pdfUrl = pub?.publicUrl || null;
+          if (pdfUrl) await supabase.from('invoices').update({ pdf_url: pdfUrl }).eq('id', savedId);
         }
-        // скачать локально
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(pdfBlob);
-        a.download = fileName;
-        document.body.appendChild(a); a.click(); a.remove();
-      }
+      } catch (_) { /* игнор, если хранилища нет */ }
 
-      alert('Invoice saved');
+      // локальное скачивание (устойчиво)
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // небольшой таймаут перед revoke — на некоторых браузерах нужно время
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+      alert('Invoice saved & downloaded');
     } catch (e) {
       console.error(e);
       setErr(e.message || 'Save error');
-      alert('Failed to save invoice');
+      alert('Failed to save or download invoice');
     }
   }
 
   async function buildPdfBlob() {
     const doc = createPdf();
 
-    // ЛОГО (всегда оригинал, без ужатия)
+    // логотип — всегда оригинал
     try {
       const { dataUrl, format } = await loadLogoOriginalDataURL();
       doc.addImage(dataUrl, format, 170, 10, 28, 28, undefined, 'FAST');
     } catch {}
 
-    // Шапка
+    // шапка
     doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
     doc.text(`INVOICE #${number || '—'}`, 100, 50, { align: 'center' });
 
+    const printDate = new Date(invoiceDate || ymd());
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text(`Date: ${new Date().toLocaleDateString()}`, 100, 57, { align: 'center' });
+    doc.text(`Date: ${printDate.toLocaleDateString()}`, 100, 57, { align: 'center' });
 
-    // Клиент
+    // клиент
     let yL = 68;
     doc.setFont('helvetica', 'bold'); doc.text('Bill To:', 14, yL); yL += 5;
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
@@ -272,7 +277,7 @@ export default function InvoicePage() {
     if (client?.phone)     { doc.text(String(client.phone),     14, yL); yL += 5; }
     if (client?.email)     { doc.text(String(client.email),     14, yL); yL += 5; }
 
-    // Компания
+    // компания
     let yR = 68;
     doc.setFont('helvetica', 'bold'); doc.text('Sim Scope Inc.', 200, yR, { align: 'right' }); yR += 5;
     doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
@@ -281,7 +286,7 @@ export default function InvoicePage() {
     doc.text('(929) 412-9042', 200, yR, { align: 'right' }); yR += 5;
     doc.text('simscopeinc@gmail.com', 200, yR, { align: 'right' });
 
-    // Таблица
+    // таблица
     const serviceRows = rows
       .filter(r => r.type === 'service')
       .map(r => [r.name, r.qty, CURRENCY(r.price), CURRENCY(r.qty * r.price)]);
@@ -301,24 +306,23 @@ export default function InvoicePage() {
       styles: { fontSize: 9, halign: 'left', lineWidth: 0.1 },
       headStyles: { fillColor: [245,245,245], textColor: 0, fontStyle: 'bold' },
       alternateRowStyles: { fillColor: [255,255,255] },
-      margin: { left: 14, right: 20 }, // небольшой отступ справа
+      margin: { left: 14, right: 20 }, // справа чуть больше отступ
       columnStyles: { 0: { cellWidth: 122 }, 1: { cellWidth: 18 }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
     });
 
     let y = doc.lastAutoTable.finalY + 6;
 
-    // Итого
+    // итого
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
     doc.text(`Subtotal: ${CURRENCY(subtotal)}`, 200, y, { align: 'right' }); y += 5;
     doc.text(`Discount: -${CURRENCY(discount)}`, 200, y, { align: 'right' }); y += 5;
     doc.text(`Total Due: ${CURRENCY(total)}`, 200, y, { align: 'right' }); y += 7;
 
-    // Гарантия
+    // гарантия
     if (includeWarranty) {
       const days = Number(warrantyDays || 0);
-      const plural = days === 1 ? 'day' : 'days';
       doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
-      doc.text(`Warranty (${days} ${plural}):`, 14, y); y += 5;
+      doc.text(`Warranty (${days} ${days === 1 ? 'day' : 'days'}):`, 14, y); y += 5;
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
       const wrapped = doc.splitTextToSize(warrantyText, 182);
       doc.text(wrapped, 14, y); y += wrapped.length * 4 + 5;
@@ -327,13 +331,12 @@ export default function InvoicePage() {
     doc.setFont('helvetica', 'italic'); doc.setFontSize(10);
     doc.text('Thank you for your business!', 200, y, { align: 'right' });
 
-    // -> Blob
     return doc.output('blob');
   }
 
-  /* -------------------------- render -------------------------- */
-
+  /* ─────────────── render ─────────────── */
   if (loading) return <div className="p-4">Loading…</div>;
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex justify-between mb-4 items-center">
@@ -358,6 +361,16 @@ export default function InvoicePage() {
             placeholder="auto"
           />
           <div className="text-xs text-gray-500 mt-1">Можно переопределить вручную</div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold">Date</label>
+          <input
+            type="date"
+            value={invoiceDate}
+            onChange={(e) => setInvoiceDate(e.target.value || ymd())}
+            className="border rounded px-3 py-2 w-44"
+          />
         </div>
 
         <div className="grow" />
@@ -481,12 +494,9 @@ export default function InvoicePage() {
         </div>
       )}
 
-      <div className="mt-6 flex gap-2">
-        <button onClick={() => handleSave(false)} className="bg-gray-800 text-white px-4 py-2 rounded">
-          💾 Save
-        </button>
-        <button onClick={() => handleSave(true)} className="bg-blue-600 text-white px-4 py-2 rounded">
-          💾 Save & Download PDF
+      <div className="mt-6">
+        <button onClick={handleSaveAndDownload} className="bg-blue-600 text-white px-4 py-2 rounded">
+          💾 Сохранить и скачать PDF
         </button>
       </div>
     </div>
