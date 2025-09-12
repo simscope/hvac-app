@@ -1,9 +1,8 @@
 // client/src/pages/AdminTechniciansPage.jsx
-// Прямой fetch на Edge Function (без supabase.functions.invoke) — всегда читаем тело ответа.
-// Показываем понятный JSON с stage/error.
+// Создание сотрудника через Edge Function с прямым fetch и понятной диагностикой.
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../supabaseClient';
+import { supabase, SUPABASE_URL } from '../supabaseClient';
 
 const input = "w-full px-3 py-2 border rounded";
 const btn = "px-3 py-2 border rounded hover:bg-gray-50";
@@ -16,11 +15,14 @@ function genTempPassword(len = 12) {
 }
 
 async function callEdge(path, body) {
-  // получаем access_token текущей сессии
   const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  const url = `${import.meta.env.VITE_SUPABASE_URL ?? (window?.SUPABASE_URL)}/functions/v1/${path}`;
+  const token = session?.access_token || '';
+  const base = SUPABASE_URL || '';
+  if (!base) {
+    return { ok: false, status: 0, json: { error: 'SUPABASE_URL is empty on client', stage: 'client-env' } };
+  }
 
+  const url = `${base.replace(/\/+$/, '')}/functions/v1/${path}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -69,7 +71,10 @@ export default function AdminTechniciansPage() {
         const prof = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
         setMeProfileRole(prof.data?.role ?? null);
 
-        const tech = await supabase.from('technicians').select('role, is_admin').eq('auth_user_id', user.id).maybeSingle();
+        const tech = await supabase.from('technicians')
+          .select('role, is_admin')
+          .eq('auth_user_id', user.id)
+          .maybeSingle();
         setMeTechInfo(tech.data || null);
       }
 
@@ -93,6 +98,7 @@ export default function AdminTechniciansPage() {
     e.preventDefault();
     if (!isAdmin) return alert("Только админ может создавать сотрудников");
     setLoading(true);
+
     const payload = {
       email: email.trim(),
       password,
@@ -101,26 +107,23 @@ export default function AdminTechniciansPage() {
       role,
       org_id: Number(orgId) || 1,
     };
+
     try {
-      // сначала быстрая проверка
+      // Быстрая предварительная проверка
       const dbg = await callEdge('admin-create-user', { action: 'debug', ...payload });
-      if (!dbg.ok) {
-        show("DEBUG failed", { status: dbg.status, ...dbg.json });
-        return;
-      }
-      if (dbg.json?.error) {
-        show("DEBUG reported problem", dbg.json);
+      if (!dbg.ok || dbg.json?.error) {
+        show("DEBUG", { status: dbg.status, ...dbg.json });
         return;
       }
 
-      // основной вызов
+      // Основной вызов
       const res = await callEdge('admin-create-user', payload);
       if (!res.ok || res.json?.error) {
         show("Create failed", { status: res.status, ...res.json });
         return;
       }
 
-      // успех
+      // Успех
       setEmail("");
       setName("");
       setPhone("");
@@ -180,7 +183,9 @@ export default function AdminTechniciansPage() {
           <label className="block text-sm mb-1">Временный пароль *</label>
           <div className="flex gap-2">
             <input className={input} required value={password} onChange={e => setPassword(e.target.value)} />
-            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
+            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>
+              Сгенерировать
+            </button>
           </div>
           <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
         </div>
