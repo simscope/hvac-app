@@ -169,8 +169,7 @@ function Shell() {
           {/* Корень и 404 */}
           <Route index element={<Navigate to="/jobs" replace />} />
           <Route path="*" element={<Navigate to="/jobs" replace />} />
-          <Route path="/register" element={<RegisterPage />} />
-        </Routes>
+          </Routes>
       </div>
     </div>
   );
