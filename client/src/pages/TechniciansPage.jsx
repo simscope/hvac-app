@@ -1,5 +1,6 @@
 // client/src/pages/AdminTechniciansPage.jsx
-// Создание сотрудника с расширенным выводом ошибок из Edge Function.
+// Создаём сотрудника. Если основной вызов упал, автоматически вызываем DEBUG-режим
+// той же edge-функции и показываем точную причину.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
@@ -62,22 +63,23 @@ export default function AdminTechniciansPage() {
     setList(data || []);
   }
 
-  function showEdgeError(prefix, errObj, dataObj) {
-    // Пытаемся вытащить тело ответа Edge Function
-    const msgParts = [prefix];
-    if (errObj?.message) msgParts.push(`message: ${errObj.message}`);
-    // supabase-js кладёт тело в error.context?.response?.text
-    const ctx = errObj?.context as any;
-    const resp = ctx?.response;
-    if (resp?.error) msgParts.push(`resp.error: ${resp.error}`);
-    if (resp?.status) msgParts.push(`status: ${resp.status}`);
-    if (resp?.body) {
-      msgParts.push(`body: ${JSON.stringify(resp.body)}`);
+  function showInfo(title, obj) {
+    alert(`${title}\n` + JSON.stringify(obj, null, 2));
+  }
+
+  async function callDebug(payload) {
+    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+      body: { action: 'debug', ...payload }
+    });
+    if (error) {
+      showInfo("DEBUG call failed", { error: error?.message || error, ctx: error?.context });
+      return;
     }
-    if (dataObj?.error || dataObj?.warning) {
-      msgParts.push(`payload: ${JSON.stringify(dataObj)}`);
+    if (data?.error) {
+      showInfo("DEBUG result (found problem)", data);
+      return;
     }
-    alert(msgParts.join("\n"));
+    showInfo("DEBUG result (ok)", data);
   }
 
   async function createTech(e) {
@@ -85,27 +87,31 @@ export default function AdminTechniciansPage() {
     if (!isAdmin) return alert("Только админ может создавать сотрудников");
 
     setLoading(true);
-    try {
-      const payload = {
-        email: email.trim(),
-        password,
-        name: name.trim(),
-        phone: phone.trim() || null,
-        role,
-        org_id: Number(orgId) || 1,
-      };
+    const payload = {
+      email: email.trim(),
+      password,
+      name: name.trim(),
+      phone: phone.trim() || null,
+      role,
+      org_id: Number(orgId) || 1,
+    };
 
+    try {
       const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
 
       if (error) {
-        showEdgeError("Edge Function error", error, data);
+        // основной вызов упал -> сразу пробуем DEBUG и покажем причину
+        await callDebug(payload);
         return;
       }
       if (data?.error) {
-        showEdgeError("Edge returned error", null, data);
+        // сервер вернул 4xx с телом об ошибке -> покажем и продебажим
+        showInfo("Server error", data);
+        await callDebug(payload);
         return;
       }
 
+      // успех
       setEmail("");
       setName("");
       setPhone("");
@@ -115,7 +121,7 @@ export default function AdminTechniciansPage() {
       await fetchTechnicians();
       alert("Сотрудник создан. Передай ему e-mail и временный пароль.");
     } catch (err) {
-      alert("Unhandled error: " + (err?.message || String(err)));
+      showInfo("Unhandled error", { message: err?.message || String(err) });
     } finally {
       setLoading(false);
     }
@@ -127,7 +133,7 @@ export default function AdminTechniciansPage() {
       body: { action: 'sendPasswordReset', email: emailAddr }
     });
     if (error || data?.error) {
-      showEdgeError("Reset error", error, data);
+      showInfo("Reset error", data || error);
     } else {
       alert("Ссылка на сброс пароля сгенерирована/отправлена (см. настройки проекта).");
     }
