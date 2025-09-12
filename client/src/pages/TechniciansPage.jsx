@@ -1,9 +1,7 @@
-// client/src/pages/TechniciansPage.jsx
 import React, { useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { useAuth } from "../context/AuthContext";
 
-// Должности
 const roleOptions = [
   { value: "admin", label: "Админ" },
   { value: "manager", label: "Менеджер" },
@@ -16,11 +14,8 @@ const td = { padding: "6px 10px", borderBottom: "1px solid #f1f5f9" };
 
 export default function TechniciansPage() {
   const { role: myRole, loading: authLoading } = useAuth();
-
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  // Форма добавления
   const [newRow, setNewRow] = useState({ name: "", phone: "", email: "", role: "tech" });
 
   useEffect(() => {
@@ -96,7 +91,7 @@ export default function TechniciansPage() {
     setItems((prev) => prev.filter((r) => r.id !== id));
   };
 
-  // Создание аккаунта через Edge Function (без .env в фронте)
+  // Создание аккаунта через Edge Function
   const createAccount = async (row) => {
     const email = (row.email || "").trim();
     if (!email) {
@@ -104,7 +99,10 @@ export default function TechniciansPage() {
       return;
     }
     const password = prompt("Задайте временный пароль (не короче 6 символов):", "");
-    if (!password) return;
+    if (!password || password.length < 6) {
+      alert("Пароль должен быть не короче 6 символов");
+      return;
+    }
 
     try {
       const { data, error } = await supabase.functions.invoke("admin-create-user", {
@@ -118,31 +116,11 @@ export default function TechniciansPage() {
       if (error) throw error;
       if (data?.error) throw new Error(data.error);
 
-      alert("Аккаунт создан/привязан");
+      alert("Аккаунт создан и привязан");
       await load();
     } catch (e) {
       console.error(e);
       alert("Не удалось создать аккаунт: " + (e?.message || e));
-    }
-  };
-
-  // Сброс пароля через Edge Function
-  const resetPassword = async (row) => {
-    if (!row.auth_user_id) return alert("У сотрудника ещё нет аккаунта");
-    const newPass = prompt("Новый пароль:", "");
-    if (!newPass) return;
-
-    try {
-      const { data, error } = await supabase.functions.invoke("admin-reset-password", {
-        body: { user_id: row.auth_user_id, new_password: newPass },
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      alert("Пароль обновлён");
-    } catch (e) {
-      console.error(e);
-      alert("Не удалось обновить пароль: " + (e?.message || e));
     }
   };
 
@@ -152,8 +130,6 @@ export default function TechniciansPage() {
   return (
     <div className="p-4">
       <h1 className="text-2xl font-bold mb-4">👥 Сотрудники</h1>
-
-      {/* Форма добавления */}
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1.3fr 2fr 1.2fr auto", gap: 8, marginBottom: 12 }}>
         <input
           style={inputStyle}
@@ -179,52 +155,31 @@ export default function TechniciansPage() {
           onChange={(e) => setNewRow({ ...newRow, role: e.target.value })}
         >
           {roleOptions.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
         <button onClick={addRow} style={{ padding: "6px 12px" }}>
           ➕ Добавить
         </button>
       </div>
-
       <div className="overflow-x-auto">
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ background: "#f8fafc" }}>
             <tr>
-              <th style={th} width="40">
-                #
-              </th>
+              <th style={th} width="40">#</th>
               <th style={th}>Имя</th>
-              <th style={th} width="180">
-                Телефон
-              </th>
-              <th style={th} width="240">
-                Email
-              </th>
-              <th style={th} width="160">
-                Должность
-              </th>
-              <th style={{ ...th, textAlign: "center" }} width="380">
-                Действия
-              </th>
+              <th style={th} width="180">Телефон</th>
+              <th style={th} width="240">Email</th>
+              <th style={th} width="160">Должность</th>
+              <th style={{ ...th, textAlign: "center" }} width="380">Действия</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr>
-                <td style={td} colSpan={6}>
-                  Загрузка…
-                </td>
-              </tr>
+              <tr><td style={td} colSpan={6}>Загрузка…</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr>
-                <td style={td} colSpan={6}>
-                  Сотрудников пока нет
-                </td>
-              </tr>
+              <tr><td style={td} colSpan={6}>Сотрудников пока нет</td></tr>
             )}
             {items.map((row, idx) => (
               <tr key={row.id}>
@@ -257,9 +212,7 @@ export default function TechniciansPage() {
                     onChange={(e) => onChangeCell(row.id, "role", e.target.value)}
                   >
                     {roleOptions.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
+                      <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
                 </td>
@@ -269,9 +222,6 @@ export default function TechniciansPage() {
                   </button>
                   <button title="Создать аккаунт" onClick={() => createAccount(row)} style={{ marginRight: 8 }}>
                     👤 Создать аккаунт
-                  </button>
-                  <button title="Сбросить пароль" onClick={() => resetPassword(row)} style={{ marginRight: 8 }}>
-                    🔑 Сбросить пароль
                   </button>
                   <button title="Удалить" onClick={() => removeRow(row.id)}>
                     🗑️ Удалить
