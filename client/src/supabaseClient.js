@@ -1,46 +1,41 @@
 // client/src/supabaseClient.js
-// Универсальная инициализация Supabase + экспорт URL/KEY для прямых запросов к Edge Functions.
-// Работает и с Vite, и с CRA, и с любым бандлером (где переменные могут быть в window / process.env).
+// Инициализация Supabase для CRA/Vercel без import.meta.
+// Берём значения из process.env (CRA: REACT_APP_*) или из window/HTML.
 
 import { createClient } from '@supabase/supabase-js';
 
-// Пытаемся вытащить значения из разных источников, не падая.
+// Читаем переменную из нескольких мест (без import.meta)
 function pickEnv(key) {
-  // Vite (dev/prod)
-  if (typeof import !== 'undefined' && import.meta && import.meta.env && key in import.meta.env) {
-    return import.meta.env[key];
-  }
-  // CRA / Node-style
-  if (typeof process !== 'undefined' && process.env && key in process.env) {
+  // CRA / Node-style — подставляется на этапе билда
+  if (typeof process !== 'undefined' && process.env && process.env[key]) {
     return process.env[key];
   }
-  // Через window (если проброшено в index.html)
+  // Если проброшено через window (например, в index.html)
   if (typeof window !== 'undefined') {
-    if (window.ENV && key in window.ENV) return window.ENV[key];
-    if (key in window) return window[key];
+    if (window.ENV && window.ENV[key]) return window.ENV[key];
+    if (window[key]) return window[key];
   }
   return undefined;
 }
 
+// CRA: используем REACT_APP_*
+// (оставляю и универсальные имена на случай проброса через window или .env на сервере)
 export const SUPABASE_URL =
-  pickEnv('VITE_SUPABASE_URL') ||
   pickEnv('REACT_APP_SUPABASE_URL') ||
   pickEnv('SUPABASE_URL') ||
   '';
 
 export const SUPABASE_ANON_KEY =
-  pickEnv('VITE_SUPABASE_ANON_KEY') ||
   pickEnv('REACT_APP_SUPABASE_ANON_KEY') ||
   pickEnv('SUPABASE_ANON_KEY') ||
   '';
 
-// Минимальная проверка — чтобы не ловить "undefined".
+// Подсказка в консоль, если что-то не задано
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  // Не бросаем исключение, чтобы приложение грузилось, но логируем понятное сообщение.
   // eslint-disable-next-line no-console
   console.error(
-    '[supabaseClient] Missing SUPABASE_URL / SUPABASE_ANON_KEY. ' +
-    'Set VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY (или пробросьте через window.ENV).'
+    '[supabaseClient] Missing env. Set REACT_APP_SUPABASE_URL and REACT_APP_SUPABASE_ANON_KEY ' +
+    'в настройках окружения (Vercel → Settings → Environment Variables) или пробросьте их в window.ENV.'
   );
 }
 
