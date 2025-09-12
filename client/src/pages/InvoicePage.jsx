@@ -5,18 +5,24 @@ import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/* ───── helpers ───── */
+/* ── helpers ─────────────────────────────────────────────────────────── */
 const pad = (n) => String(n).padStart(2, '0');
-const formatHuman = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; // DD.MM.YYYY
-const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; // YYYY-MM-DD
+const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fromInputDate = (s) => {
   if (!s) return new Date();
   const [y, m, day] = s.split('-').map(Number);
   return new Date(y, (m || 1) - 1, day || 1);
 };
+const formatHuman = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 const num = (v) => Number(v || 0);
 
-/* ───── Логотип из /public без «сжатий» ───── */
+/* значение вида 'EMPTY' считаем пустым */
+const clean = (v) => {
+  const s = String(v ?? '').trim();
+  return s && s.toLowerCase() !== 'empty' ? s : '';
+};
+
+/* загрузка логотипа из /public без сжатия */
 async function loadLogoDataURL() {
   try {
     const res = await fetch('/logo_invoice_header.png', { cache: 'force-cache' });
@@ -32,90 +38,168 @@ async function loadLogoDataURL() {
   }
 }
 
+/* собрать адрес из набора возможных полей */
+function composeAddress(obj = {}) {
+  const parts = [
+    obj.address,
+    obj.address_line1,
+    obj.address_line2,
+    obj.street,
+    obj.street1,
+    obj.street2,
+    obj.city,
+    obj.state,
+    obj.region,
+    obj.zip,
+    obj.postal_code,
+  ]
+    .map(clean)
+    .filter(Boolean);
+  return [...new Set(parts)].join(', ');
+}
+
+/* найти значение по нескольким ключам */
+function pick(obj = {}, keys = []) {
+  for (const k of keys) {
+    const v = clean(obj[k]);
+    if (v) return v;
+  }
+  return '';
+}
+
+/* ── страница ─────────────────────────────────────────────────────────── */
 export default function InvoicePage() {
-  const { id } = useParams(); // job id (может быть пустым для «свободного» инвойса)
+  const { id } = useParams(); // job id (может отсутствовать)
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [job, setJob] = useState(null);
+
+  // Bill To
   const [billName, setBillName] = useState('');
   const [billAddress, setBillAddress] = useState('');
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
+  // строки счёта
   const [rows, setRows] = useState([]);
   const [discount, setDiscount] = useState(0);
 
+  // номер/дата
   const [invoiceNo, setInvoiceNo] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date());
 
+  // гарантия
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
   const [logoDataURL, setLogoDataURL] = useState(null);
-  const [saving, setSaving] = useState(false);
 
-  /* ───── загрузка данных ───── */
+  /* ── загрузка данных ─────────────────────────────────────────────────── */
   useEffect(() => {
+    let alive = true;
     (async () => {
-      // логотип в стейт (для предпросмотра/устойчивости)
-      const l = await loadLogoDataURL();
-      setLogoDataURL(l);
+      setLoading(true);
 
+      const logo = await loadLogoDataURL();
+      if (!alive) return;
+      setLogoDataURL(logo);
+
+      let j = null;
       if (id) {
-        const { data: j } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
-        setJob(j || null);
+        const { data: jData } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
+        if (!alive) return;
+        j = jData || null;
+        setJob(j);
+      }
 
-        if (j?.client_id) {
-          const { data: c } = await supabase
+      // 1) пробуем по client_id
+      let c = null;
+      if (j?.client_id) {
+        const { data: cData } = await supabase
+          .from('clients')
+          .select('full_name,name,phone,email,address,address_line1,address_line2,street,city,state,zip,postal_code')
+          .eq('id', j.client_id)
+          .maybeSingle();
+        if (!alive) return;
+        c = cData || null;
+      }
+
+      // 2) fallback: если client_id нет — ищем по телефону/почте/имени из заявки
+      if (!c && j) {
+        const n = clean(pick(j, ['client_name', 'full_name', 'name']));
+        const p = clean(pick(j, ['client_phone', 'phone']));
+        const e = clean(pick(j, ['client_email', 'email']));
+
+        const filters = [];
+        if (n) filters.push(`full_name.eq.${encodeURIComponent(n)}`);
+        if (p) filters.push(`phone.eq.${encodeURIComponent(p)}`);
+        if (e) filters.push(`email.eq.${encodeURIComponent(e)}`);
+
+        if (filters.length) {
+          const { data: guess } = await supabase
             .from('clients')
-            .select('full_name,address,phone,email,street,city,state,zip')
-            .eq('id', j.client_id)
-            .maybeSingle();
-          if (c) {
-            setBillName(c.full_name || '');
-            setBillAddress(
-              c.address ||
-                [c.street, c.city, c.state, c.zip].filter(Boolean).join(', ') ||
-                ''
-            );
-            setBillPhone(c.phone || '');
-            setBillEmail(c.email || '');
-          }
-        } else {
-          setBillName(j?.client_name || j?.full_name || '');
-          setBillAddress(j?.client_address || j?.address || '');
-          setBillPhone(j?.client_phone || j?.phone || '');
-          setBillEmail(j?.client_email || j?.email || '');
+            .select('full_name,name,phone,email,address,address_line1,address_line2,street,city,state,zip,postal_code,created_at')
+            .or(filters.join(','))
+            .order('created_at', { ascending: false })
+            .limit(1);
+          if (!alive) return;
+          c = guess?.[0] || null;
         }
+      }
 
-        // базовые сервисы
+      // Собираем Bill To
+      const name =
+        pick(c, ['full_name', 'name']) ||
+        pick(j, ['client_name', 'full_name', 'name']) ||
+        '';
+      const addr =
+        composeAddress(c) ||
+        composeAddress(j) ||
+        composeAddress({
+          address: pick(j, ['client_address', 'address']),
+          address_line1: j?.address_line1,
+          address_line2: j?.address_line2,
+          city: j?.city,
+          state: j?.state,
+          zip: j?.zip || j?.postal_code,
+        });
+      const phone = pick(c, ['phone']) || pick(j, ['client_phone', 'phone']) || '';
+      const email = pick(c, ['email']) || pick(j, ['client_email', 'email']) || '';
+
+      setBillName(name);
+      setBillAddress(addr);
+      setBillPhone(phone);
+      setBillEmail(email);
+
+      // Строки
+      if (id) {
         const baseRows = [
           { type: 'service', name: 'Labor', qty: 1, price: num(j?.labor_price) },
           { type: 'service', name: 'Service Call Fee', qty: 1, price: num(j?.scf) },
         ];
-
-        // материалы
         const { data: mats } = await supabase
           .from('materials')
           .select('name,qty,price')
           .eq('job_id', id);
+        if (!alive) return;
         const matRows =
           (mats || []).map((m) => ({
             type: 'material',
-            name: m.name || '',
+            name: clean(m.name),
             qty: num(m.qty) || 1,
             price: num(m.price),
           })) || [];
-
         setRows([...baseRows, ...matRows]);
       } else {
-        // свободный инвойс (без связи с job)
         setRows([
           { type: 'service', name: 'Labor', qty: 1, price: 0 },
           { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
         ]);
       }
 
-      // авто-номер (если возможно)
+      // Авто-номер (максимальный + 1)
       if (!invoiceNo) {
         try {
           const { data } = await supabase
@@ -123,49 +207,50 @@ export default function InvoicePage() {
             .select('invoice_no')
             .order('invoice_no', { ascending: false })
             .limit(1);
+          if (!alive) return;
           const next = (data?.[0]?.invoice_no || 0) + 1;
           setInvoiceNo(String(next));
         } catch {
-          setInvoiceNo(''); // оставим пустым, можно ввести вручную
+          setInvoiceNo('');
         }
       }
 
       setInvoiceDate(new Date());
+      setLoading(false);
     })();
+
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  /* ───── суммы ───── */
+  /* ── вычисления ─────────────────────────────────────────────────────── */
   const subtotal = useMemo(
     () => rows.reduce((s, r) => s + num(r.qty) * num(r.price), 0),
     [rows]
   );
   const total = useMemo(() => Math.max(0, num(subtotal) - num(discount)), [subtotal, discount]);
 
-  /* ───── строки ───── */
   const changeRow = (i, key, val) => {
     setRows((prev) => {
       const cp = [...prev];
-      cp[i] = {
-        ...cp[i],
-        [key]: key === 'name' || key === 'type' ? val : Number(val || 0),
-      };
+      cp[i] = { ...cp[i], [key]: key === 'name' || key === 'type' ? val : Number(val || 0) };
       return cp;
     });
   };
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ───── сохранение в БД (мягко) ───── */
+  /* ── мягкое сохранение в БД (RLS-скрытый фэйл не ломает скачивание) ─── */
   async function persistInvoice() {
     const payload = {
       job_id: id ?? null,
       invoice_no: invoiceNo ? Number(invoiceNo) : null,
-      issued_on: toInputDate(invoiceDate), // YYYY-MM-DD
+      issued_on: toInputDate(invoiceDate),
       subtotal,
       discount: num(discount),
       total_due: total,
-      // ниже поля «по возможности» — если их в схеме нет, insert упадёт, но PDF всё равно скачаем
       rows_json: rows,
       bill_to_name: billName || null,
       bill_to_address: billAddress || null,
@@ -185,13 +270,13 @@ export default function InvoicePage() {
     }
   }
 
-  /* ───── генерация PDF с уменьшенным размером (без изменения лого) ───── */
+  /* ── PDF ─────────────────────────────────────────────────────────────── */
   async function saveAndDownload() {
+    if (loading) return;
     setSaving(true);
     try {
       const saved = await persistInvoice();
 
-      // jsPDF с компрессией и «только используемые шрифты»
       const doc = new jsPDF({
         unit: 'pt',
         format: 'letter',
@@ -199,39 +284,33 @@ export default function InvoicePage() {
         putOnlyUsedFonts: true,
       });
 
-      // загружаем логотип, если ещё не успели в стейт (чтобы не пропал на черновике)
-      const logo = logoDataURL || (await loadLogoDataURL());
-      if (logo) {
-        // вставляем как есть (PNG), без пережатия/конвертации
-        // Размер отображения задаём небольшой (это не сжимает поток данных, но и не раздувает страницу)
-        doc.addImage(logo, 'PNG', 460, 24, 90, 90);
-      }
-
-      // Заголовок
+      // Title + Date
       doc.setFontSize(14);
       doc.setFont(undefined, 'bold');
-      doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 306, 44, { align: 'center' }); // по центру страницы
+      doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 306, 52, { align: 'center' });
       doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
-      doc.text(`Date: ${formatHuman(invoiceDate)}`, 306, 60, { align: 'center' });
+      doc.text(`Date: ${formatHuman(invoiceDate)}`, 306, 68, { align: 'center' });
 
-      // Bill To
+      // Logo (right top)
+      const logo = logoDataURL || (await loadLogoDataURL());
+      if (logo) doc.addImage(logo, 'PNG', 460, 30, 90, 90);
+
+      // Bill To (left)
       const left = 40;
-      let y = 92;
+      let y = 100;
       doc.setFont(undefined, 'bold');
       doc.text('Bill To:', left, y);
       y += 14;
       doc.setFont(undefined, 'normal');
-      [billName, billAddress, billPhone, billEmail]
-        .filter(Boolean)
-        .forEach((line) => {
-          doc.text(String(line), left, y);
-          y += 12;
-        });
+      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
+        doc.text(String(line), left, y);
+        y += 12;
+      });
 
-      // Company (справа)
-      let ry = 92;
-      const right = 572; // 612 - 40
+      // Company (right)
+      const right = 612 - 40;
+      let ry = 100;
       doc.setFont(undefined, 'bold');
       doc.text('Sim Scope Inc.', right, ry, { align: 'right' });
       ry += 14;
@@ -243,8 +322,8 @@ export default function InvoicePage() {
         }
       );
 
-      // Таблица
-      const startY = Math.max(y, ry) + 12;
+      // Table
+      const startY = Math.max(y, ry) + 14;
       const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
         String(num(r.qty)),
@@ -257,9 +336,9 @@ export default function InvoicePage() {
         body,
         styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1 },
         headStyles: { fillColor: [245, 245, 245], textColor: 0, fontStyle: 'bold' },
-        margin: { left: 40, right: 40 }, // небольшой правый отступ, как просили
+        margin: { left: 40, right: 40 },
         columnStyles: {
-          0: { cellWidth: 372 }, // 612 - 40 - 40 - (40+60+60) ≈ 372
+          0: { cellWidth: 372 },
           1: { cellWidth: 40, halign: 'center' },
           2: { cellWidth: 60, halign: 'right' },
           3: { cellWidth: 60, halign: 'right' },
@@ -267,7 +346,6 @@ export default function InvoicePage() {
       });
 
       let endY = doc.lastAutoTable.finalY + 10;
-      // Итоги
       doc.setFont(undefined, 'bold');
       doc.text(`Subtotal: $${num(subtotal).toFixed(2)}`, right, endY, { align: 'right' });
       endY += 14;
@@ -276,25 +354,23 @@ export default function InvoicePage() {
       doc.text(`Total Due: $${num(total).toFixed(2)}`, right, endY, { align: 'right' });
       endY += 18;
 
-      // Гарантия (EN), опционально
       if (includeWarranty && Number(warrantyDays) > 0) {
         doc.setFont(undefined, 'bold');
         doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY);
         endY += 12;
         doc.setFont(undefined, 'normal');
-        const wText =
+        doc.setFontSize(9);
+        const txt =
           `A ${Number(
             warrantyDays
           )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
           `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
           `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
-        const lines = doc.splitTextToSize(wText, 612 - 80);
-        doc.setFontSize(9);
+        const lines = doc.splitTextToSize(txt, 612 - 80);
         doc.text(lines, 40, endY);
         endY += lines.length * 10;
       }
 
-      // Низ страницы
       doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
       doc.text('Thank you for your business!', right, 760, { align: 'right' });
@@ -313,7 +389,9 @@ export default function InvoicePage() {
     }
   }
 
-  /* ───── UI ───── */
+  /* ── UI ──────────────────────────────────────────────────────────────── */
+  const busy = loading || saving;
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold mb-3">Invoice</h1>
@@ -490,13 +568,12 @@ export default function InvoicePage() {
       <div className="mt-4">
         <button
           onClick={saveAndDownload}
-          disabled={saving}
+          disabled={busy}
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
         >
-          {saving ? 'Saving…' : 'Сохранить и скачать PDF'}
+          {busy ? 'Please wait…' : 'Сохранить и скачать PDF'}
         </button>
       </div>
     </div>
   );
 }
-
