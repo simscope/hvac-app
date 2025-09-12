@@ -4,25 +4,25 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-/* ---------- UI стили ---------- */
-const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
-const PAGE = { padding: 16, display: 'grid', gap: 12 };
+/* ---------- UI ---------- */
+const PAGE  = { padding: 16, display: 'grid', gap: 12 };
+const BOX   = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
 const GRID2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
-const ROW  = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' };
+const ROW   = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' };
 const INPUT = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' };
 const SELECT = { ...INPUT };
-const TA = { ...INPUT, minHeight: 80, resize: 'vertical' };
+const TA    = { ...INPUT, minHeight: 80, resize: 'vertical' };
 
 const H1 = { fontWeight: 800, fontSize: 22 };
 const H2 = { fontWeight: 700, fontSize: 16, marginBottom: 8 };
 const MUTED = { color: '#6b7280' };
 
-const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' };
+const BTN     = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' };
 const PRIMARY = { ...BTN, background: '#2563eb', color: '#fff', borderColor: '#2563eb' };
 const DANGER  = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
 const GHOST   = { ...BTN, background: '#f8fafc' };
 
-/* ---------- Хранилище фото ---------- */
+/* ---------- Storage ---------- */
 const PHOTOS_BUCKET = 'job-photos';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 
@@ -38,17 +38,13 @@ const STATUS_OPTIONS = [
   'отменено',
 ];
 const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'invoice'];
-const SYSTEM_OPTIONS = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
+const SYSTEM_OPTIONS  = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || isNaN(v) ? null : Number(v));
-const nOrNull = (v, def = null) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : def;
-};
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
 
-// datetime-local helpers
+// datetime-local
 const toLocal = (iso) => {
   if (!iso) return '';
   const d = new Date(iso);
@@ -79,7 +75,7 @@ const normalizeStatusForDb = (s) => {
   return v;
 };
 
-/* ---------- Санитизация имён файлов ---------- */
+/* ---------- Санитизация имён для Storage ---------- */
 const RU_MAP = {
   а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ё:'e', ж:'zh', з:'z', и:'i', й:'y',
   к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u', ф:'f',
@@ -108,7 +104,8 @@ function makeSafeStorageKey(jobId, originalName) {
   return `${jobId}/${stamp}_${safeName}`;
 }
 
-/* ---------- Компонент ---------- */
+/* ====================================================================== */
+
 export default function JobDetailsPage() {
   const { id } = useParams();
   const jobId = id;
@@ -131,7 +128,7 @@ export default function JobDetailsPage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileRef = useRef(null);
 
-  // выбор фото для скачивания
+  // Выбор фото
   const [checked, setChecked] = useState({}); // { [name]: true }
   const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
 
@@ -140,6 +137,7 @@ export default function JobDetailsPage() {
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
+  /* ---------- загрузка ---------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -231,7 +229,7 @@ export default function JobDetailsPage() {
     setChecked({});
   };
 
-  // Комментарии
+  // Комментарии: тянем, потом имена авторов одним запросом
   const loadComments = async () => {
     setCommentsLoading(true);
     const { data, error } = await supabase
@@ -248,7 +246,9 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-    const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
+    const ids = Array.from(
+      new Set(list.map(c => c.author_user_id).filter(Boolean))
+    );
 
     let map = {};
     if (ids.length) {
@@ -281,7 +281,8 @@ export default function JobDetailsPage() {
       alert('Не удалось сохранить комментарий');
       return;
     }
-    const authorName = profile?.full_name || profile?.name || user?.email || null;
+    const authorName =
+      profile?.full_name || profile?.name || user?.email || null;
     setComments(prev => [...prev, { ...data, author_name: authorName }]);
     setCommentText('');
   };
@@ -355,10 +356,10 @@ export default function JobDetailsPage() {
     }
 
     const patch = {};
-    if ('client_name' in (job || {})) patch.client_name = client.full_name || '';
-    if ('client_phone' in (job || {})) patch.client_phone = client.phone || '';
-    if ('client_email' in (job || {})) patch.client_email = client.email || '';
-    if ('client_address' in (job || {})) patch.client_address = client.address || '';
+    if ('client_name' in (job || {}))   patch.client_name   = client.full_name || '';
+    if ('client_phone' in (job || {}))  patch.client_phone  = client.phone || '';
+    if ('client_email' in (job || {}))  patch.client_email  = client.email || '';
+    if ('client_address' in (job || {}))patch.client_address = client.address || '';
 
     if (Object.keys(patch).length) {
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
@@ -374,11 +375,18 @@ export default function JobDetailsPage() {
     }
   };
 
-  /* ---------- материалы ---------- */
+  /* ---------- материалы (quantity/supplier) ---------- */
   const addMat = () => {
     setMaterials((p) => [
       ...p,
-      { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: 0, qty: 1, vendor: '' },
+      {
+        id: `tmp-${Date.now()}`,
+        job_id: jobId,
+        name: '',
+        price: null,
+        quantity: 1,
+        supplier: '',
+      },
     ]);
   };
 
@@ -393,83 +401,60 @@ export default function JobDetailsPage() {
   const delMat = async (m) => {
     setMaterials((p) => p.filter((x) => x !== m));
     if (!String(m.id).startsWith('tmp-')) {
-      await supabase.from('materials').delete().eq('id', m.id);
+      const { error } = await supabase.from('materials').delete().eq('id', m.id);
+      if (error) console.error('delete material', error);
     }
   };
 
   const saveMats = async () => {
-    const news = materials
-      .filter((m) => String(m.name || '').trim().length > 0)
-      .filter((m) => String(m.id).startsWith('tmp-'));
-
+    const news = materials.filter((m) => String(m.id).startsWith('tmp-'));
     const olds = materials.filter((m) => !String(m.id).startsWith('tmp-'));
 
+    // вставка новых
     if (news.length) {
-      const rows = news.map((m) => ({
+      const payload = news.map((m) => ({
         job_id: jobId,
-        name: String(m.name || '').trim(),
-        price: nOrNull(m.price),
-        qty: nOrNull(m.qty, 1),
-        vendor: String(m.vendor || '').trim(),
+        name: m.name || '',
+        price: m.price === '' || m.price == null ? null : Number(m.price),
+        quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity),
+        supplier: m.supplier || null,
       }));
 
-      let { error } = await supabase.from('materials').insert(rows);
-
-      if (error && /column .*vendor/i.test(error.message)) {
-        const rowsNoVendor = rows.map(({ vendor, ...r }) => r);
-        ({ error } = await supabase.from('materials').insert(rowsNoVendor));
-      }
-      if (error && /column .*qty/i.test(error.message)) {
-        const rowsQuantity = rows.map(({ qty, ...r }) => ({ ...r, quantity: qty ?? 1 }));
-        ({ error } = await supabase.from('materials').insert(rowsQuantity));
-      }
+      const { error } = await supabase.from('materials').insert(payload);
       if (error) {
-        console.error('[materials.insert] rows:', rows);
-        console.error('[materials.insert] error:', error);
-        alert(`Не удалось сохранить новые материалы:\n${error.message || error}`);
+        console.error('insert materials', error);
+        alert(`Не удалось сохранить новые материалы: ${error.message || 'ошибка'}`);
         return;
       }
     }
 
+    // обновление существующих
     for (const m of olds) {
-      let patch = {
-        name: String(m.name || '').trim(),
-        price: nOrNull(m.price),
-        qty: nOrNull(m.qty, 1),
-        vendor: String(m.vendor || '').trim(),
+      const patch = {
+        name: m.name || '',
+        price: m.price === '' || m.price == null ? null : Number(m.price),
+        quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity),
+        supplier: m.supplier || null,
       };
-
-      let { error } = await supabase.from('materials').update(patch).eq('id', m.id);
-
-      if (error && /column .*vendor/i.test(error.message)) {
-        const { vendor, ...p } = patch;
-        ({ error } = await supabase.from('materials').update(p).eq('id', m.id));
-      }
-      if (error && /column .*qty/i.test(error.message)) {
-        const { qty, ...p } = patch;
-        ({ error } = await supabase.from('materials').update({ ...p, quantity: qty ?? 1 }).eq('id', m.id));
-      }
+      const { error } = await supabase.from('materials').update(patch).eq('id', m.id);
       if (error) {
-        console.error('[materials.update] row:', m, 'patch:', patch);
-        console.error('[materials.update] error:', error);
-        alert(`Не удалось сохранить материал (id=${m.id}):\n${error.message || error}`);
+        console.error('update material', error);
+        alert(`Не удалось сохранить материал: ${error.message || 'ошибка'}`);
         return;
       }
     }
 
-    const { data: fresh, error: e2 } = await supabase
+    const { data: fresh, error: reloadErr } = await supabase
       .from('materials')
       .select('*')
       .eq('job_id', jobId)
       .order('id', { ascending: true });
 
-    if (e2) {
-      console.error('[materials.refresh] error:', e2);
-      alert(`Сохранено, но не удалось перечитать материалы:\n${e2.message || e2}`);
-      return;
+    if (reloadErr) {
+      console.error(reloadErr);
+    } else {
+      setMaterials(fresh || []);
     }
-
-    setMaterials(fresh || []);
     alert('Материалы сохранены');
   };
 
@@ -491,7 +476,6 @@ export default function JobDetailsPage() {
       }
 
       const key = makeSafeStorageKey(jobId, f.name);
-
       const { error } = await storage().upload(key, f, {
         cacheControl: '3600',
         upsert: false,
@@ -552,6 +536,8 @@ export default function JobDetailsPage() {
     const names = photos.filter((p) => checked[p.name]).map((p) => p.name);
     if (!names.length) return;
     for (const n of names) {
+      // последовательные загрузки, чтобы не ловить лимиты
+      // (при желании можно Promise.all, но так надёжнее)
       await downloadOne(n);
     }
   };
@@ -729,10 +715,10 @@ export default function JobDetailsPage() {
         <div style={BOX}>
           <div style={H2}>Клиент</div>
           <div style={{ display: 'grid', gap: 10 }}>
-            <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
-            <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
-            <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
-            <Row label="Адрес" value={client.address} onChange={(v) => setClientField('address', v)} />
+            <Row label="ФИО"    value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
+            <Row label="Телефон" value={client.phone}     onChange={(v) => setClientField('phone', v)} />
+            <Row label="Email"   value={client.email}     onChange={(v) => setClientField('email', v)} />
+            <Row label="Адрес"   value={client.address}   onChange={(v) => setClientField('address', v)} />
             <div style={{ display: 'flex', gap: 8 }}>
               <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
               {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
@@ -759,26 +745,34 @@ export default function JobDetailsPage() {
               {materials.map((m, i) => (
                 <tr key={m.id}>
                   <Td>
-                    <input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
-                  </Td>
-                  <Td>
                     <input
                       style={INPUT}
-                      type="number"
-                      value={m.price ?? 0}
-                      onChange={(e) => chMat(i, 'price', toNum(e.target.value))}
+                      value={m.name || ''}
+                      onChange={(e) => chMat(i, 'name', e.target.value)}
                     />
                   </Td>
                   <Td>
                     <input
                       style={INPUT}
                       type="number"
-                      value={m.qty ?? 1}
-                      onChange={(e) => chMat(i, 'qty', toNum(e.target.value))}
+                      value={m.price ?? ''}
+                      onChange={(e) => chMat(i, 'price', e.target.value)}
                     />
                   </Td>
                   <Td>
-                    <input style={INPUT} value={m.vendor || ''} onChange={(e) => chMat(i, 'vendor', e.target.value)} />
+                    <input
+                      style={INPUT}
+                      type="number"
+                      value={m.quantity ?? 1}
+                      onChange={(e) => chMat(i, 'quantity', e.target.value)}
+                    />
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      value={m.supplier || ''}
+                      onChange={(e) => chMat(i, 'supplier', e.target.value)}
+                    />
                   </Td>
                   <Td center>
                     <button style={DANGER} onClick={() => delMat(m)}>🗑</button>
@@ -941,6 +935,8 @@ function Th({ children, center }) {
 }
 function Td({ children, center }) {
   return (
-    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
+    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>
+      {children}
+    </td>
   );
 }
