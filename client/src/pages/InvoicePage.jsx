@@ -1,392 +1,495 @@
+// client/src/pages/InvoicePage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// ------ helpers ------
-const n = (v) => Number(v || 0);
-const money = (v) => `$${Number(v || 0).toFixed(2)}`;
-const todayISO = () => {
-  const d = new Date();
-  const p = (x) => String(x).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+/* ───────────── helpers: dates & numbers ───────────── */
+const pad = (n) => String(n).padStart(2, '0');
+const formatHuman = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; // DD.MM.YYYY
+const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; // YYYY-MM-DD
+const fromInputDate = (s) => {
+  if (!s) return new Date();
+  const [y, m, day] = s.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, day || 1);
 };
+const money = (v) => Number(v || 0);
 
-async function loadLogo() {
+/* ───────────── logo loader ───────────── */
+async function loadLogoDataURL() {
   try {
-    const res = await fetch('/logo_invoice_header.png', { cache: 'no-store' });
-    if (!res.ok) throw new Error();
+    const res = await fetch('/logo_invoice_header.png', { cache: 'force-cache' });
     const blob = await res.blob();
-    return await new Promise((r) => {
-      const fr = new FileReader();
-      fr.onloadend = () => r(fr.result);
-      fr.readAsDataURL(blob);
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
     });
+    return dataUrl; // PNG dataURL
   } catch {
     return null;
   }
 }
 
 export default function InvoicePage() {
-  const { id: jobIdParam } = useParams(); // job id (опционален)
+  const { id } = useParams(); // job id (может быть undefined — инвойс «непривязанный» тоже поддерживаем)
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [logoDataURL, setLogoDataURL] = useState(null);
-  const [jobId, setJobId] = useState(null);
+  // Источники
+  const [job, setJob] = useState(null);
+  const [client, setClient] = useState(null);
 
-  // Шапка
-  const [invoiceNumber, setInvoiceNumber] = useState(''); // печатаем в PDF (в БД номера нет)
-  const [invoiceDate, setInvoiceDate] = useState(todayISO());
+  // Редактируемые поля «Bill To» — подтягиваем из клиента и даём править
+  const [billName, setBillName] = useState('');
+  const [billAddress, setBillAddress] = useState('');
+  const [billPhone, setBillPhone] = useState('');
+  const [billEmail, setBillEmail] = useState('');
 
-  // Клиент (в БД нет — только для PDF)
-  const [customerName, setCustomerName] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerEmail, setCustomerEmail] = useState('');
-
-  // Строки
-  const [rows, setRows] = useState([
-    { type: 'service', name: 'Labor', qty: 1, price: 0 },
-    { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
-  ]);
-
-  // Скидка и тех %
+  // Строки счёта
+  const [rows, setRows] = useState([]); // [{type:'service'|'material', name:'', qty:1, price:0}]
   const [discount, setDiscount] = useState(0);
-  const [techPercent, setTechPercent] = useState(0);
+
+  // Номер и дата инвойса
+  const [invoiceNo, setInvoiceNo] = useState('');
+  const [invoiceDate, setInvoiceDate] = useState(new Date());
 
   // Гарантия
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
-  // ----- загрузка лого + (опционально) подтянуть заявку -----
+  const [saving, setSaving] = useState(false);
+
+  /* ───────────── загрузка данных ───────────── */
   useEffect(() => {
     (async () => {
-      setLoading(true);
-      setLogoDataURL(await loadLogo());
-
-      const id = jobIdParam || null;
-      setJobId(id);
-
+      // 1) job + client + материалы
       if (id) {
-        const { data: job } = await supabase
-          .from('jobs')
-          .select('*')
-          .eq('id', id)
-          .maybeSingle();
+        const { data: j } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
+        setJob(j || null);
 
-        // клиент из clients (если есть), иначе — fallback из jobs
-        if (job?.client_id) {
+        if (j?.client_id) {
           const { data: c } = await supabase
             .from('clients')
-            .select('full_name,address,phone,email')
-            .eq('id', job.client_id)
+            .select('*')
+            .eq('id', j.client_id)
             .maybeSingle();
-          if (c) {
-            setCustomerName(c.full_name || '');
-            setCustomerAddress(c.address || '');
-            setCustomerPhone(c.phone || '');
-            setCustomerEmail(c.email || '');
-          }
-        } else {
-          setCustomerName(job?.client_name || job?.full_name || '');
-          setCustomerAddress(job?.client_address || job?.address || '');
-          setCustomerPhone(job?.client_phone || job?.phone || '');
-          setCustomerEmail(job?.client_email || job?.email || '');
-        }
+          setClient(c || null);
 
-        // Проставим Labor/SCF из заявки
-        const labor = n(job?.labor_price);
-        const scf = n(job?.scf);
-        setRows((p) => {
-          const cp = [...p];
-          cp[0] = { type: 'service', name: 'Labor', qty: 1, price: labor };
-          cp[1] = { type: 'service', name: 'Service Call Fee', qty: 1, price: scf };
-          return cp;
-        });
+          setBillName(c?.full_name || c?.name || '');
+          setBillAddress(
+            c?.address ||
+              [c?.street, c?.city, c?.state, c?.zip].filter(Boolean).join(', ') ||
+              ''
+          );
+          setBillPhone(c?.phone || '');
+          setBillEmail(c?.email || '');
+        }
 
         // Материалы
-        const { data: mats } = await supabase
-          .from('materials')
-          .select('name,qty,price')
-          .eq('job_id', id);
+        const { data: mats } = await supabase.from('materials').select('*').eq('job_id', id);
+        const materialsRows =
+          (mats || []).map((m) => ({
+            type: 'material',
+            name: m.name || '',
+            qty: Number(m.qty || 1),
+            price: Number(m.price || 0),
+          })) || [];
 
-        if (mats?.length) {
-          setRows((p) => [
-            ...p,
-            ...mats.map((m) => ({
-              type: 'material',
-              name: m.name || '',
-              qty: n(m.qty) || 1,
-              price: n(m.price),
-            })),
-          ]);
+        // Базовые сервисные позиции: labor + scf по job
+        const serviceRows = [
+          { type: 'service', name: 'Labor', qty: 1, price: Number(j?.labor_price || 0) },
+          { type: 'service', name: 'Service Call Fee', qty: 1, price: Number(j?.scf || 0) },
+        ];
+
+        setRows([...serviceRows, ...materialsRows]);
+      }
+
+      // 2) авто-номер (можно вручную поменять)
+      if (!invoiceNo) {
+        try {
+          const { data } = await supabase
+            .from('invoices')
+            .select('invoice_no')
+            .order('invoice_no', { ascending: false })
+            .limit(1);
+          const next = (data?.[0]?.invoice_no || 0) + 1;
+          setInvoiceNo(String(next));
+        } catch {
+          // если RLS/нет колонки — тихо игнорим, оставим пустым («DRAFT»)
+          setInvoiceNo('');
         }
       }
 
-      setLoading(false);
+      // 3) дата по умолчанию — сегодня (локально)
+      setInvoiceDate(new Date());
     })();
-  }, [jobIdParam]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
-  // ----- суммы -----
-  const laborCost = useMemo(
-    () => rows.filter((r) => r.type === 'service').reduce((s, r) => s + n(r.qty) * n(r.price), 0),
+  /* ───────────── вычисления ───────────── */
+  const subtotal = useMemo(
+    () => rows.reduce((sum, r) => sum + money(r.qty) * money(r.price), 0),
     [rows]
   );
-  const partsCost = useMemo(
-    () => rows.filter((r) => r.type === 'material').reduce((s, r) => s + n(r.qty) * n(r.price), 0),
-    [rows]
-  );
-  const subtotal = useMemo(() => laborCost + partsCost, [laborCost, partsCost]);
-  const total = useMemo(() => Math.max(0, subtotal - n(discount)), [subtotal, discount]);
-  const techTotal = useMemo(() => (laborCost * n(techPercent)) / 100, [laborCost, techPercent]);
+  const total = useMemo(() => Math.max(0, money(subtotal) - money(discount)), [subtotal, discount]);
 
-  // ----- строки -----
-  const changeRow = (idx, field, value) => {
-    setRows((p) => {
-      const cp = [...p];
-      cp[idx] = {
-        ...cp[idx],
-        [field]: field === 'qty' || field === 'price' ? Number(value || 0) : value,
-      };
-      return cp;
+  /* ───────────── изменение строк ───────────── */
+  const changeRow = (i, key, val) => {
+    setRows((prev) => {
+      const copy = [...prev];
+      copy[i] = { ...copy[i], [key]: key === 'name' || key === 'type' ? val : Number(val || 0) };
+      if (key === 'qty' || key === 'price') {
+        copy[i].qty = Number(copy[i].qty || 0);
+        copy[i].price = Number(copy[i].price || 0);
+      }
+      return copy;
     });
   };
-  const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
+  const addRow = () =>
+    setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  // ----- save + PDF -----
-  const onSaveAndDownload = async () => {
+  /* ───────────── сохранение в БД (мягко) ───────────── */
+  async function persistInvoice() {
+    // Подстраиваемся под любую схему: если какие-то поля отсутствуют — БД откажет,
+    // но мы не сорвём скачивание PDF.
+    const payload = {
+      job_id: id ?? null,
+      invoice_no: invoiceNo ? Number(invoiceNo) : null,
+      issued_on: toInputDate(invoiceDate), // строка 'YYYY-MM-DD' — совместима с date/timestamp/date text
+      subtotal,
+      discount: money(discount),
+      total_due: total,
+      rows_json: rows, // JSON, если в схеме нет — будет ошибка, но PDF продолжим
+      bill_to_name: billName || null,
+      bill_to_address: billAddress || null,
+      bill_to_phone: billPhone || null,
+      bill_to_email: billEmail || null,
+      include_warranty: includeWarranty,
+      warranty_days: Number(warrantyDays || 0),
+    };
+
     try {
-      setSaving(true);
+      const { error } = await supabase.from('invoices').insert(payload);
+      if (error) throw error;
+      return true;
+    } catch (e) {
+      // Логи для диагностики, но не блокируем выгрузку PDF
+      console.warn('[Invoices] save skipped:', e?.message || e);
+      return false;
+    }
+  }
 
-      // 1) вставляем только те колонки, что есть в твоей таблице
-      const insertPayload = {
-        job_id: jobId ?? null,
-        labor_cost: laborCost,
-        parts_cost: partsCost,
-        technician_percent: n(techPercent),
-        technician_total: techTotal, // если нужна другая формула — скажи
-        created_at: invoiceDate || todayISO(),
-      };
+  /* ───────────── генерация PDF ───────────── */
+  async function saveAndDownload() {
+    setSaving(true);
+    let saved = false;
+    try {
+      // 1) попытка сохранить (мягко)
+      saved = await persistInvoice();
 
-      const { error: insErr } = await supabase.from('invoices').insert(insertPayload);
-      if (insErr) {
-        console.error(insErr);
-        alert(insErr.message || 'Не удалось сохранить инвойс');
-        setSaving(false);
-        return;
+      // 2) делаем PDF
+      const doc = new jsPDF();
+      const tableMargin = { left: 14, right: 14 }; // небольшой отступ справа, как просили
+
+      // логотип (без сжатия — как есть)
+      try {
+        const logo = await loadLogoDataURL();
+        if (logo) {
+          // Картинку немного уменьшим (визуально), но без какой-либо перекодировки.
+          doc.addImage(logo, 'PNG', 165, 12, 30, 30);
+        }
+      } catch {
+        /* пусто */
       }
 
-      // 2) генерируем PDF
-      const doc = new jsPDF({ unit: 'pt', format: 'letter' });
-      const W = doc.internal.pageSize.getWidth();
-      const margin = 40;
-      let y = 40;
-
-      if (logoDataURL) doc.addImage(logoDataURL, 'PNG', W - 110, y, 70, 70);
-
-      doc.setFontSize(16);
+      // заголовок
       doc.setFont(undefined, 'bold');
-      doc.text(`INVOICE #${invoiceNumber || '—'}`, W / 2, y + 20, { align: 'center' });
-      doc.setFontSize(10);
+      doc.setFontSize(14);
+      doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 100, 50, { align: 'center' });
       doc.setFont(undefined, 'normal');
-      doc.text(`Date: ${new Date(invoiceDate).toLocaleDateString()}`, W / 2, y + 36, { align: 'center' });
+      doc.setFontSize(10);
+      doc.text(`Date: ${formatHuman(invoiceDate)}`, 100, 58, { align: 'center' });
 
-      y += 80;
+      // левая колонка (Bill To)
+      let ly = 70;
       doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', margin, y);
-      doc.setFont(undefined, 'normal'); y += 14;
-      if (customerName) { doc.text(String(customerName), margin, y); y += 14; }
-      if (customerAddress) { doc.text(String(customerAddress), margin, y); y += 14; }
-      if (customerPhone) { doc.text(String(customerPhone), margin, y); y += 14; }
-      if (customerEmail) { doc.text(String(customerEmail), margin, y); y += 14; }
+      doc.text('Bill To:', tableMargin.left, ly);
+      ly += 6;
+      doc.setFont(undefined, 'normal');
+      [billName, billAddress, billPhone, billEmail]
+        .filter(Boolean)
+        .forEach((line) => {
+          doc.text(String(line), tableMargin.left, ly);
+          ly += 6;
+        });
 
-      const rx = W - margin; let yR = 120;
-      doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', rx, yR, { align: 'right' });
-      doc.setFont(undefined, 'normal'); yR += 14; doc.text('1587 E 19th St', rx, yR, { align: 'right' });
-      yR += 14; doc.text('Brooklyn, NY 11230', rx, yR, { align: 'right' });
-      yR += 14; doc.text('(929) 412-9042', rx, yR, { align: 'right' });
-      yR += 14; doc.text('simscopeinc@gmail.com', rx, yR, { align: 'right' });
+      // правая колонка (Company)
+      let ry = 70;
+      doc.setFont(undefined, 'bold');
+      doc.text('Sim Scope Inc.', 200 - tableMargin.right, ry, { align: 'right' });
+      ry += 6;
+      doc.setFont(undefined, 'normal');
+      [
+        '1587 E 19th St',
+        'Brooklyn, NY 11230',
+        '(929) 412-9042',
+        'simscopeinc@gmail.com',
+      ].forEach((line) => {
+        doc.text(line, 200 - tableMargin.right, ry, { align: 'right' });
+        ry += 6;
+      });
 
-      const serviceRows = rows.filter((r) => r.type === 'service');
-      const materialRows = rows.filter((r) => r.type === 'material');
+      // табличка
+      const startY = Math.max(ly, ry) + 10;
 
-      const body = [
-        ...serviceRows.map((r) => [r.name, String(r.qty), money(r.price), money(n(r.qty) * n(r.price))]),
-      ];
-      if (materialRows.length) {
-        body.push([{ content: 'MATERIALS', colSpan: 4, styles: { fillColor: [238,238,238], halign: 'left', fontStyle: 'bold' } }]);
-        materialRows.forEach((r) => body.push([r.name, String(r.qty), money(r.price), money(n(r.qty) * n(r.price))]));
-      }
+      const tableBody = rows.map((r) => [
+        r.name || (r.type === 'service' ? 'Service' : 'Item'),
+        String(r.qty || 0),
+        `$${money(r.price).toFixed(2)}`,
+        `$${(money(r.qty) * money(r.price)).toFixed(2)}`,
+      ]);
 
       autoTable(doc, {
-        startY: Math.max(y, yR) + 10,
+        startY,
         head: [['Description', 'Qty', 'Unit Price', 'Amount']],
-        body,
-        styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1 },
+        body: tableBody,
+        styles: { fontSize: 10, halign: 'left', lineWidth: 0.1 },
         headStyles: { fillColor: [245, 245, 245], textColor: 0, fontStyle: 'bold' },
-        margin: { left: margin, right: margin },
+        alternateRowStyles: { fillColor: [255, 255, 255] },
+        margin: tableMargin,
         columnStyles: {
-          0: { cellWidth: W - margin*2 - 150 },
-          1: { cellWidth: 40, halign: 'center' },
-          2: { cellWidth: 55, halign: 'right' },
-          3: { cellWidth: 55, halign: 'right' },
+          0: { cellWidth: 120 },
+          1: { cellWidth: 20, halign: 'center' },
+          2: { cellWidth: 28, halign: 'right' },
+          3: { cellWidth: 28, halign: 'right' },
         },
       });
 
-      let endY = doc.lastAutoTable.finalY + 12;
-      doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: ${money(subtotal)}`, rx, endY, { align: 'right' }); endY += 14;
-      doc.text(`Discount: -${money(discount)}`, rx, endY, { align: 'right' }); endY += 14;
-      doc.text(`Total Due: ${money(total)}`, rx, endY, { align: 'right' }); endY += 14;
-      doc.setFont(undefined, 'normal');
-      doc.text(`Tech %: ${n(techPercent)}%  •  Tech Total: ${money(techTotal)}`, rx, endY, { align: 'right' });
+      let y = doc.lastAutoTable.finalY + 8;
 
-      endY += 20;
-      if (includeWarranty) {
+      // итоговый блок справа
+      doc.setFont(undefined, 'bold');
+      doc.text(`Subtotal: $${money(subtotal).toFixed(2)}`, 200 - tableMargin.right, y, {
+        align: 'right',
+      });
+      y += 6;
+      doc.text(`Discount: -$${money(discount).toFixed(2)}`, 200 - tableMargin.right, y, {
+        align: 'right',
+      });
+      y += 6;
+      doc.text(`Total Due: $${money(total).toFixed(2)}`, 200 - tableMargin.right, y, {
+        align: 'right',
+      });
+      y += 12;
+
+      // гарантия (опционально), маленький кегль
+      if (includeWarranty && Number(warrantyDays) > 0) {
         doc.setFont(undefined, 'bold');
-        doc.text(`Warranty (${Number(warrantyDays || 60)} days):`, margin, endY);
-        doc.setFont(undefined, 'normal'); endY += 14;
-        const t =
-          'A limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ' +
-          'The warranty does not cover other components or the appliance as a whole, normal wear, consumables, ' +
-          'damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ' +
-          'The warranty starts on the job completion date and is valid only when the invoice is paid in full.';
-        const lines = doc.splitTextToSize(t, W - margin*2);
-        doc.text(lines, margin, endY); endY += lines.length * 12;
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, tableMargin.left, y);
+        y += 6;
+        doc.setFont(undefined, 'normal');
+
+        const lines = doc.splitTextToSize(
+          `A ${Number(
+            warrantyDays
+          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. The warranty starts on the job completion date and is valid only when the invoice is paid in full.`,
+          200 - tableMargin.left - tableMargin.right
+        );
+        doc.setFontSize(9);
+        doc.text(lines, tableMargin.left, y);
+        y += lines.length * 5 + 4;
       }
 
-      endY += 20;
-      doc.setFont(undefined, 'italic');
-      doc.text('Thank you for your business!', margin, endY);
+      // подпись внизу
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text('Thank you for your business!', 200 - tableMargin.right, 285, {
+        align: 'right',
+      });
 
-      doc.save(`invoice_${invoiceNumber || 'new'}.pdf`);
+      const filename = `invoice_${invoiceNo || (id ? `job_${id}` : 'draft')}.pdf`;
+      doc.save(filename);
+
+      // сообщение
+      if (!saved) {
+        alert('PDF is downloaded. Saving to database was skipped (RLS/schema). See console for details.');
+      }
     } catch (e) {
       console.error(e);
-      alert(e?.message || 'Failed to save or download invoice');
+      alert('Failed to save or download invoice');
     } finally {
       setSaving(false);
     }
-  };
-
-  if (loading) return <div className="p-4">Загрузка…</div>;
+  }
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold mb-3">Invoice</h1>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-        <div>
-          <label className="block text-sm font-semibold">Invoice #</label>
-          <input
-            className="border rounded px-3 py-2 w-full"
-            placeholder="печатается только в PDF"
-            value={invoiceNumber}
-            onChange={(e) => setInvoiceNumber(e.target.value.replace(/[^\d]/g, ''))}
-          />
-        </div>
+      {/* Информация / настройки */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <label className="font-semibold">Invoice #</label>
+        <input
+          className="border px-2 py-1 w-32"
+          value={invoiceNo}
+          onChange={(e) => setInvoiceNo(e.target.value.replace(/[^\d]/g, ''))}
+          placeholder="auto"
+        />
 
-        <div>
-          <label className="block text-sm font-semibold">Date</label>
-          <input
-            type="date"
-            className="border rounded px-3 py-2 w-full"
-            value={invoiceDate}
-            onChange={(e) => setInvoiceDate(e.target.value)}
-          />
-        </div>
+        <label className="font-semibold ml-2">Date</label>
+        <input
+          type="date"
+          className="border px-2 py-1"
+          value={toInputDate(invoiceDate)}
+          onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
+        />
 
-        <div>
-          <label className="block text-sm font-semibold">Tech %</label>
+        <label className="ml-4 inline-flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={includeWarranty}
+            onChange={(e) => setIncludeWarranty(e.target.checked)}
+          />
+          <span>Include warranty</span>
+        </label>
+
+        <label className="inline-flex items-center gap-2">
+          Days:
           <input
             type="number"
-            className="border rounded px-3 py-2 w-full text-right"
-            value={techPercent}
-            onChange={(e) => setTechPercent(Number(e.target.value || 0))}
+            className="border px-2 py-1 w-20"
+            value={warrantyDays}
+            onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
+            min={0}
           />
-        </div>
+        </label>
       </div>
 
-      <div className="md:grid md:grid-cols-2 md:gap-3 mb-4">
-        <div className="border rounded p-3">
-          <div className="font-semibold mb-2">Bill To</div>
-          <div className="grid grid-cols-1 gap-2">
-            <input className="border rounded px-3 py-2" placeholder="Name" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-            <input className="border rounded px-3 py-2" placeholder="Address" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
-            <input className="border rounded px-3 py-2" placeholder="Phone" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
-            <input className="border rounded px-3 py-2" placeholder="Email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} />
-          </div>
-        </div>
-
-        <div className="border rounded p-3 mt-3 md:mt-0">
-          <div className="font-semibold mb-2">Warranty</div>
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
-            Include warranty block
-          </label>
-          <div className="mt-2 flex items-center gap-2">
-            <span>Days:</span>
+      {/* Bill To (редактируемо) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <div>
+          <div className="font-semibold mb-1">Bill To</div>
+          <input
+            className="border px-2 py-1 w-full mb-2"
+            placeholder="Full name / Company"
+            value={billName}
+            onChange={(e) => setBillName(e.target.value)}
+          />
+          <input
+            className="border px-2 py-1 w-full mb-2"
+            placeholder="Address"
+            value={billAddress}
+            onChange={(e) => setBillAddress(e.target.value)}
+          />
+          <div className="flex gap-2">
             <input
-              type="number"
-              className="border rounded px-2 py-1 w-24 text-right"
-              value={warrantyDays}
-              onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
+              className="border px-2 py-1 w-full"
+              placeholder="Phone"
+              value={billPhone}
+              onChange={(e) => setBillPhone(e.target.value)}
+            />
+            <input
+              className="border px-2 py-1 w-full"
+              placeholder="Email"
+              value={billEmail}
+              onChange={(e) => setBillEmail(e.target.value)}
             />
           </div>
         </div>
+        <div>
+          <div className="font-semibold mb-1">Job</div>
+          <div className="text-sm text-gray-600 whitespace-pre-line">
+            {job
+              ? [
+                  job?.job_number ? `Job #${job.job_number}` : '',
+                  job?.system_type ? `System: ${job.system_type}` : '',
+                  job?.issue ? `Issue: ${job.issue}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              : 'No job linked'}
+          </div>
+        </div>
       </div>
 
-      {/* таблица строк */}
-      <div className="overflow-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="text-left border px-2 py-2">Type</th>
-              <th className="text-left border px-2 py-2">Name</th>
-              <th className="text-center border px-2 py-2" style={{ width: 70 }}>Qty</th>
-              <th className="text-right border px-2 py-2" style={{ width: 120 }}>Price</th>
-              <th className="text-right border px-2 py-2" style={{ width: 120 }}>Amount</th>
-              <th className="border px-2 py-2" style={{ width: 40 }} />
+      {/* Таблица строк */}
+      <table className="w-full text-sm border-collapse mb-3">
+        <thead>
+          <tr className="bg-gray-100">
+            <th className="text-left p-2 border">Type</th>
+            <th className="text-left p-2 border">Name</th>
+            <th className="text-center p-2 border">Qty</th>
+            <th className="text-right p-2 border">Price</th>
+            <th className="text-right p-2 border">Amount</th>
+            <th className="p-2 border"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td className="border p-1">
+                <select
+                  className="border px-2 py-1 w-full"
+                  value={r.type}
+                  onChange={(e) => changeRow(i, 'type', e.target.value)}
+                >
+                  <option value="service">service</option>
+                  <option value="material">material</option>
+                </select>
+              </td>
+              <td className="border p-1">
+                <input
+                  className="border px-2 py-1 w-full"
+                  value={r.name}
+                  onChange={(e) => changeRow(i, 'name', e.target.value)}
+                  placeholder={r.type === 'service' ? 'Service' : 'Item'}
+                />
+              </td>
+              <td className="border p-1 text-center">
+                <input
+                  type="number"
+                  className="border px-2 py-1 w-20 text-center"
+                  value={r.qty}
+                  onChange={(e) => changeRow(i, 'qty', e.target.value)}
+                />
+              </td>
+              <td className="border p-1 text-right">
+                <input
+                  type="number"
+                  className="border px-2 py-1 w-28 text-right"
+                  value={r.price}
+                  onChange={(e) => changeRow(i, 'price', e.target.value)}
+                />
+              </td>
+              <td className="border p-1 text-right">
+                ${(money(r.qty) * money(r.price)).toFixed(2)}
+              </td>
+              <td className="border p-1 text-center">
+                <button
+                  className="text-red-600 px-2"
+                  onClick={() => delRow(i)}
+                  title="Remove"
+                >
+                  ✕
+                </button>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={i}>
-                <td className="border px-2 py-1">
-                  <select className="border rounded px-2 py-1" value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)}>
-                    <option value="service">service</option>
-                    <option value="material">material</option>
-                  </select>
-                </td>
-                <td className="border px-2 py-1">
-                  <input className="border rounded px-2 py-1 w-full" value={r.name} onChange={(e) => changeRow(i, 'name', e.target.value)} />
-                </td>
-                <td className="border px-2 py-1 text-center">
-                  <input type="number" className="border rounded px-2 py-1 w-16 text-center" value={r.qty} onChange={(e) => changeRow(i, 'qty', e.target.value)} />
-                </td>
-                <td className="border px-2 py-1 text-right">
-                  <input type="number" className="border rounded px-2 py-1 w-24 text-right" value={r.price} onChange={(e) => changeRow(i, 'price', e.target.value)} />
-                </td>
-                <td className="border px-2 py-1 text-right">{money(n(r.qty) * n(r.price))}</td>
-                <td className="border px-2 py-1 text-center"><button className="text-red-600" onClick={() => delRow(i)}>✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="mb-3">
+        <button className="bg-gray-200 text-black px-3 py-1 rounded" onClick={addRow}>
+          ➕ Add row
+        </button>
       </div>
 
-      <div className="mt-2">
-        <button className="bg-gray-200 px-3 py-1 rounded" onClick={addRow}>+ Add row</button>
-      </div>
-
-      <div className="mt-4 text-right">
-        <div>Labor: <strong>{money(laborCost)}</strong></div>
-        <div>Materials: <strong>{money(partsCost)}</strong></div>
-        <div className="mt-1">Subtotal: <strong>{money(subtotal)}</strong></div>
-        <div className="inline-flex items-center gap-2 mt-2">
-          <span className="font-semibold">Discount $:</span>
+      {/* Итоги */}
+      <div className="text-right">
+        <div>Subtotal: ${money(subtotal).toFixed(2)}</div>
+        <div className="inline-flex items-center gap-2 mt-1">
+          <label className="font-semibold">Discount $:</label>
           <input
             type="number"
             className="border px-2 py-1 w-24 text-right"
@@ -394,17 +497,16 @@ export default function InvoicePage() {
             onChange={(e) => setDiscount(Number(e.target.value || 0))}
           />
         </div>
-        <div className="font-bold text-lg mt-2">Total Due: {money(total)}</div>
+        <div className="font-bold text-lg mt-2">Total Due: ${money(total).toFixed(2)}</div>
       </div>
 
-      <div className="mt-5">
+      <div className="mt-4">
         <button
+          onClick={saveAndDownload}
           disabled={saving}
-          onClick={onSaveAndDownload}
-          className={`px-4 py-2 rounded text-white ${saving ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}
-          title="Сохраняет в public.invoices и скачивает PDF"
+          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
         >
-          {saving ? 'Сохраняю…' : 'Сохранить и скачать PDF'}
+          {saving ? 'Saving…' : 'Сохранить и скачать PDF'}
         </button>
       </div>
     </div>
