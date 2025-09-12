@@ -1,17 +1,38 @@
-// client/src/pages/AdminTechniciansPage.jsx
-// Ничего глобально не ломаем: используем ТВОЙ рабочий supabaseClient и обычный functions.invoke.
+// src/pages/AdminTechniciansPage.jsx
+// Всё как у тебя, только: если supabase.functions.invoke() вернул FunctionsHttpError,
+// делаем вторым шагом "сырой" fetch на функцию и показываем JSON тела (status, stage, error, details).
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../supabaseClient'; // оставь как у тебя в проекте
+import { supabase, supabaseUrl } from '../supabaseClient';
 
 const input = "w-full px-3 py-2 border rounded";
-const btn = "px-3 py-2 border rounded hover:bg-gray-50";
-const th = "px-3 py-2 text-left border-b";
-const td = "px-3 py-2 border-b";
+const btn   = "px-3 py-2 border rounded hover:bg-gray-50";
+const th    = "px-3 py-2 text-left border-b";
+const td    = "px-3 py-2 border-b";
 
 function genTempPassword(len = 12) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+// Сырой вызов функции для получения тела ошибки при 4xx/5xx
+async function rawCallFunction(path, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || '';
+  const url = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/${path}`;
+
+  const res  = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  return { ok: res.ok, status: res.status, json };
 }
 
 export default function AdminTechniciansPage() {
@@ -81,16 +102,18 @@ export default function AdminTechniciansPage() {
     };
 
     try {
-      // (необязательно) быстрый дебаг
-      const dbg = await supabase.functions.invoke('admin-create-user', { body: { action: 'debug', ...payload } });
-      if (dbg.error || dbg.data?.error) {
-        return show("DEBUG", dbg.data || dbg.error);
-      }
-
+      // 1) основной вызов через invoke
       const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
 
       if (error || data?.error) {
-        return show("Create failed", data || error);
+        // 2) fallback: сырой запрос, чтобы прочитать тело при 400/500
+        const raw = await rawCallFunction('admin-create-user', payload);
+        if (!raw.ok || raw.json?.error || raw.json?.warning) {
+          return show("Create failed", { status: raw.status, ...raw.json });
+        }
+        // на всякий — если raw ок, считаем успехом
+      } else {
+        // успех через invoke — ничего не делаем
       }
 
       setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword(genTempPassword());
@@ -104,11 +127,16 @@ export default function AdminTechniciansPage() {
   }
 
   async function sendReset(emailAddr) {
-    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+    // сначала invoke
+    const inv = await supabase.functions.invoke('admin-create-user', {
       body: { action: 'sendPasswordReset', email: emailAddr }
     });
-    if (error || data?.error) show("Reset error", data || error);
-    else alert("Ссылка на сброс пароля сгенерирована/отправлена.");
+    if (inv.error || inv.data?.error) {
+      // fallback — сырой вызов
+      const raw = await rawCallFunction('admin-create-user', { action: 'sendPasswordReset', email: emailAddr });
+      if (!raw.ok || raw.json?.error) return show("Reset error", { status: raw.status, ...raw.json });
+    }
+    alert("Ссылка на сброс пароля сгенерирована/отправлена.");
   }
 
   return (
@@ -150,7 +178,9 @@ export default function AdminTechniciansPage() {
           <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
         </div>
         <div className="md:col-span-2">
-          <button disabled={loading} className={btn} type="submit">{loading ? "Создаю..." : "Создать сотрудника"}</button>
+          <button disabled={loading} className={btn} type="submit">
+            {loading ? "Создаю..." : "Создать сотрудника"}
+          </button>
         </div>
       </form>
 
