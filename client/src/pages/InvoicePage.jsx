@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/* ───────────── helpers: dates & numbers ───────────── */
+/* ───── helpers ───── */
 const pad = (n) => String(n).padStart(2, '0');
 const formatHuman = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; // DD.MM.YYYY
 const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; // YYYY-MM-DD
@@ -14,55 +14,52 @@ const fromInputDate = (s) => {
   const [y, m, day] = s.split('-').map(Number);
   return new Date(y, (m || 1) - 1, day || 1);
 };
-const money = (v) => Number(v || 0);
+const num = (v) => Number(v || 0);
 
-/* ───────────── logo loader ───────────── */
+/* ───── Логотип из /public без «сжатий» ───── */
 async function loadLogoDataURL() {
   try {
     const res = await fetch('/logo_invoice_header.png', { cache: 'force-cache' });
+    if (!res.ok) throw new Error('logo fetch failed');
     const blob = await res.blob();
-    const dataUrl = await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
+    return await new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onloadend = () => resolve(fr.result);
+      fr.readAsDataURL(blob);
     });
-    return dataUrl; // PNG dataURL
   } catch {
     return null;
   }
 }
 
 export default function InvoicePage() {
-  const { id } = useParams(); // job id (может быть undefined — инвойс «непривязанный» тоже поддерживаем)
+  const { id } = useParams(); // job id (может быть пустым для «свободного» инвойса)
 
-  // Источники
   const [job, setJob] = useState(null);
-  const [client, setClient] = useState(null);
-
-  // Редактируемые поля «Bill To» — подтягиваем из клиента и даём править
   const [billName, setBillName] = useState('');
   const [billAddress, setBillAddress] = useState('');
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
-  // Строки счёта
-  const [rows, setRows] = useState([]); // [{type:'service'|'material', name:'', qty:1, price:0}]
+  const [rows, setRows] = useState([]);
   const [discount, setDiscount] = useState(0);
 
-  // Номер и дата инвойса
   const [invoiceNo, setInvoiceNo] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date());
 
-  // Гарантия
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
+  const [logoDataURL, setLogoDataURL] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  /* ───────────── загрузка данных ───────────── */
+  /* ───── загрузка данных ───── */
   useEffect(() => {
     (async () => {
-      // 1) job + client + материалы
+      // логотип в стейт (для предпросмотра/устойчивости)
+      const l = await loadLogoDataURL();
+      setLogoDataURL(l);
+
       if (id) {
         const { data: j } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
         setJob(j || null);
@@ -70,41 +67,55 @@ export default function InvoicePage() {
         if (j?.client_id) {
           const { data: c } = await supabase
             .from('clients')
-            .select('*')
+            .select('full_name,address,phone,email,street,city,state,zip')
             .eq('id', j.client_id)
             .maybeSingle();
-          setClient(c || null);
-
-          setBillName(c?.full_name || c?.name || '');
-          setBillAddress(
-            c?.address ||
-              [c?.street, c?.city, c?.state, c?.zip].filter(Boolean).join(', ') ||
-              ''
-          );
-          setBillPhone(c?.phone || '');
-          setBillEmail(c?.email || '');
+          if (c) {
+            setBillName(c.full_name || '');
+            setBillAddress(
+              c.address ||
+                [c.street, c.city, c.state, c.zip].filter(Boolean).join(', ') ||
+                ''
+            );
+            setBillPhone(c.phone || '');
+            setBillEmail(c.email || '');
+          }
+        } else {
+          setBillName(j?.client_name || j?.full_name || '');
+          setBillAddress(j?.client_address || j?.address || '');
+          setBillPhone(j?.client_phone || j?.phone || '');
+          setBillEmail(j?.client_email || j?.email || '');
         }
 
-        // Материалы
-        const { data: mats } = await supabase.from('materials').select('*').eq('job_id', id);
-        const materialsRows =
+        // базовые сервисы
+        const baseRows = [
+          { type: 'service', name: 'Labor', qty: 1, price: num(j?.labor_price) },
+          { type: 'service', name: 'Service Call Fee', qty: 1, price: num(j?.scf) },
+        ];
+
+        // материалы
+        const { data: mats } = await supabase
+          .from('materials')
+          .select('name,qty,price')
+          .eq('job_id', id);
+        const matRows =
           (mats || []).map((m) => ({
             type: 'material',
             name: m.name || '',
-            qty: Number(m.qty || 1),
-            price: Number(m.price || 0),
+            qty: num(m.qty) || 1,
+            price: num(m.price),
           })) || [];
 
-        // Базовые сервисные позиции: labor + scf по job
-        const serviceRows = [
-          { type: 'service', name: 'Labor', qty: 1, price: Number(j?.labor_price || 0) },
-          { type: 'service', name: 'Service Call Fee', qty: 1, price: Number(j?.scf || 0) },
-        ];
-
-        setRows([...serviceRows, ...materialsRows]);
+        setRows([...baseRows, ...matRows]);
+      } else {
+        // свободный инвойс (без связи с job)
+        setRows([
+          { type: 'service', name: 'Labor', qty: 1, price: 0 },
+          { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
+        ]);
       }
 
-      // 2) авто-номер (можно вручную поменять)
+      // авто-номер (если возможно)
       if (!invoiceNo) {
         try {
           const { data } = await supabase
@@ -115,52 +126,47 @@ export default function InvoicePage() {
           const next = (data?.[0]?.invoice_no || 0) + 1;
           setInvoiceNo(String(next));
         } catch {
-          // если RLS/нет колонки — тихо игнорим, оставим пустым («DRAFT»)
-          setInvoiceNo('');
+          setInvoiceNo(''); // оставим пустым, можно ввести вручную
         }
       }
 
-      // 3) дата по умолчанию — сегодня (локально)
       setInvoiceDate(new Date());
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  /* ───────────── вычисления ───────────── */
+  /* ───── суммы ───── */
   const subtotal = useMemo(
-    () => rows.reduce((sum, r) => sum + money(r.qty) * money(r.price), 0),
+    () => rows.reduce((s, r) => s + num(r.qty) * num(r.price), 0),
     [rows]
   );
-  const total = useMemo(() => Math.max(0, money(subtotal) - money(discount)), [subtotal, discount]);
+  const total = useMemo(() => Math.max(0, num(subtotal) - num(discount)), [subtotal, discount]);
 
-  /* ───────────── изменение строк ───────────── */
+  /* ───── строки ───── */
   const changeRow = (i, key, val) => {
     setRows((prev) => {
-      const copy = [...prev];
-      copy[i] = { ...copy[i], [key]: key === 'name' || key === 'type' ? val : Number(val || 0) };
-      if (key === 'qty' || key === 'price') {
-        copy[i].qty = Number(copy[i].qty || 0);
-        copy[i].price = Number(copy[i].price || 0);
-      }
-      return copy;
+      const cp = [...prev];
+      cp[i] = {
+        ...cp[i],
+        [key]: key === 'name' || key === 'type' ? val : Number(val || 0),
+      };
+      return cp;
     });
   };
-  const addRow = () =>
-    setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
+  const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ───────────── сохранение в БД (мягко) ───────────── */
+  /* ───── сохранение в БД (мягко) ───── */
   async function persistInvoice() {
-    // Подстраиваемся под любую схему: если какие-то поля отсутствуют — БД откажет,
-    // но мы не сорвём скачивание PDF.
     const payload = {
       job_id: id ?? null,
       invoice_no: invoiceNo ? Number(invoiceNo) : null,
-      issued_on: toInputDate(invoiceDate), // строка 'YYYY-MM-DD' — совместима с date/timestamp/date text
+      issued_on: toInputDate(invoiceDate), // YYYY-MM-DD
       subtotal,
-      discount: money(discount),
+      discount: num(discount),
       total_due: total,
-      rows_json: rows, // JSON, если в схеме нет — будет ошибка, но PDF продолжим
+      // ниже поля «по возможности» — если их в схеме нет, insert упадёт, но PDF всё равно скачаем
+      rows_json: rows,
       bill_to_name: billName || null,
       bill_to_address: billAddress || null,
       bill_to_phone: billPhone || null,
@@ -174,146 +180,130 @@ export default function InvoicePage() {
       if (error) throw error;
       return true;
     } catch (e) {
-      // Логи для диагностики, но не блокируем выгрузку PDF
-      console.warn('[Invoices] save skipped:', e?.message || e);
+      console.warn('[invoices] save skipped:', e?.message || e);
       return false;
     }
   }
 
-  /* ───────────── генерация PDF ───────────── */
+  /* ───── генерация PDF с уменьшенным размером (без изменения лого) ───── */
   async function saveAndDownload() {
     setSaving(true);
-    let saved = false;
     try {
-      // 1) попытка сохранить (мягко)
-      saved = await persistInvoice();
+      const saved = await persistInvoice();
 
-      // 2) делаем PDF
-      const doc = new jsPDF();
-      const tableMargin = { left: 14, right: 14 }; // небольшой отступ справа, как просили
+      // jsPDF с компрессией и «только используемые шрифты»
+      const doc = new jsPDF({
+        unit: 'pt',
+        format: 'letter',
+        compress: true,
+        putOnlyUsedFonts: true,
+      });
 
-      // логотип (без сжатия — как есть)
-      try {
-        const logo = await loadLogoDataURL();
-        if (logo) {
-          // Картинку немного уменьшим (визуально), но без какой-либо перекодировки.
-          doc.addImage(logo, 'PNG', 165, 12, 30, 30);
-        }
-      } catch {
-        /* пусто */
+      // загружаем логотип, если ещё не успели в стейт (чтобы не пропал на черновике)
+      const logo = logoDataURL || (await loadLogoDataURL());
+      if (logo) {
+        // вставляем как есть (PNG), без пережатия/конвертации
+        // Размер отображения задаём небольшой (это не сжимает поток данных, но и не раздувает страницу)
+        doc.addImage(logo, 'PNG', 460, 24, 90, 90);
       }
 
-      // заголовок
-      doc.setFont(undefined, 'bold');
+      // Заголовок
       doc.setFontSize(14);
-      doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 100, 50, { align: 'center' });
-      doc.setFont(undefined, 'normal');
-      doc.setFontSize(10);
-      doc.text(`Date: ${formatHuman(invoiceDate)}`, 100, 58, { align: 'center' });
-
-      // левая колонка (Bill To)
-      let ly = 70;
       doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', tableMargin.left, ly);
-      ly += 6;
+      doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 306, 44, { align: 'center' }); // по центру страницы
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text(`Date: ${formatHuman(invoiceDate)}`, 306, 60, { align: 'center' });
+
+      // Bill To
+      const left = 40;
+      let y = 92;
+      doc.setFont(undefined, 'bold');
+      doc.text('Bill To:', left, y);
+      y += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail]
         .filter(Boolean)
         .forEach((line) => {
-          doc.text(String(line), tableMargin.left, ly);
-          ly += 6;
+          doc.text(String(line), left, y);
+          y += 12;
         });
 
-      // правая колонка (Company)
-      let ry = 70;
+      // Company (справа)
+      let ry = 92;
+      const right = 572; // 612 - 40
       doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', 200 - tableMargin.right, ry, { align: 'right' });
-      ry += 6;
+      doc.text('Sim Scope Inc.', right, ry, { align: 'right' });
+      ry += 14;
       doc.setFont(undefined, 'normal');
-      [
-        '1587 E 19th St',
-        'Brooklyn, NY 11230',
-        '(929) 412-9042',
-        'simscopeinc@gmail.com',
-      ].forEach((line) => {
-        doc.text(line, 200 - tableMargin.right, ry, { align: 'right' });
-        ry += 6;
-      });
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach(
+        (line) => {
+          doc.text(line, right, ry, { align: 'right' });
+          ry += 12;
+        }
+      );
 
-      // табличка
-      const startY = Math.max(ly, ry) + 10;
-
-      const tableBody = rows.map((r) => [
+      // Таблица
+      const startY = Math.max(y, ry) + 12;
+      const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
-        String(r.qty || 0),
-        `$${money(r.price).toFixed(2)}`,
-        `$${(money(r.qty) * money(r.price)).toFixed(2)}`,
+        String(num(r.qty)),
+        `$${num(r.price).toFixed(2)}`,
+        `$${(num(r.qty) * num(r.price)).toFixed(2)}`,
       ]);
-
       autoTable(doc, {
         startY,
         head: [['Description', 'Qty', 'Unit Price', 'Amount']],
-        body: tableBody,
-        styles: { fontSize: 10, halign: 'left', lineWidth: 0.1 },
+        body,
+        styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1 },
         headStyles: { fillColor: [245, 245, 245], textColor: 0, fontStyle: 'bold' },
-        alternateRowStyles: { fillColor: [255, 255, 255] },
-        margin: tableMargin,
+        margin: { left: 40, right: 40 }, // небольшой правый отступ, как просили
         columnStyles: {
-          0: { cellWidth: 120 },
-          1: { cellWidth: 20, halign: 'center' },
-          2: { cellWidth: 28, halign: 'right' },
-          3: { cellWidth: 28, halign: 'right' },
+          0: { cellWidth: 372 }, // 612 - 40 - 40 - (40+60+60) ≈ 372
+          1: { cellWidth: 40, halign: 'center' },
+          2: { cellWidth: 60, halign: 'right' },
+          3: { cellWidth: 60, halign: 'right' },
         },
       });
 
-      let y = doc.lastAutoTable.finalY + 8;
-
-      // итоговый блок справа
+      let endY = doc.lastAutoTable.finalY + 10;
+      // Итоги
       doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${money(subtotal).toFixed(2)}`, 200 - tableMargin.right, y, {
-        align: 'right',
-      });
-      y += 6;
-      doc.text(`Discount: -$${money(discount).toFixed(2)}`, 200 - tableMargin.right, y, {
-        align: 'right',
-      });
-      y += 6;
-      doc.text(`Total Due: $${money(total).toFixed(2)}`, 200 - tableMargin.right, y, {
-        align: 'right',
-      });
-      y += 12;
+      doc.text(`Subtotal: $${num(subtotal).toFixed(2)}`, right, endY, { align: 'right' });
+      endY += 14;
+      doc.text(`Discount: -$${num(discount).toFixed(2)}`, right, endY, { align: 'right' });
+      endY += 14;
+      doc.text(`Total Due: $${num(total).toFixed(2)}`, right, endY, { align: 'right' });
+      endY += 18;
 
-      // гарантия (опционально), маленький кегль
+      // Гарантия (EN), опционально
       if (includeWarranty && Number(warrantyDays) > 0) {
         doc.setFont(undefined, 'bold');
-        doc.text(`Warranty (${Number(warrantyDays)} days):`, tableMargin.left, y);
-        y += 6;
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY);
+        endY += 12;
         doc.setFont(undefined, 'normal');
-
-        const lines = doc.splitTextToSize(
+        const wText =
           `A ${Number(
             warrantyDays
-          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. The warranty starts on the job completion date and is valid only when the invoice is paid in full.`,
-          200 - tableMargin.left - tableMargin.right
-        );
+          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
+          `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
+          `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
+        const lines = doc.splitTextToSize(wText, 612 - 80);
         doc.setFontSize(9);
-        doc.text(lines, tableMargin.left, y);
-        y += lines.length * 5 + 4;
+        doc.text(lines, 40, endY);
+        endY += lines.length * 10;
       }
 
-      // подпись внизу
+      // Низ страницы
       doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
-      doc.text('Thank you for your business!', 200 - tableMargin.right, 285, {
-        align: 'right',
-      });
+      doc.text('Thank you for your business!', right, 760, { align: 'right' });
 
       const filename = `invoice_${invoiceNo || (id ? `job_${id}` : 'draft')}.pdf`;
       doc.save(filename);
 
-      // сообщение
       if (!saved) {
-        alert('PDF is downloaded. Saving to database was skipped (RLS/schema). See console for details.');
+        alert('PDF downloaded. Saving to DB was skipped (RLS/schema). See console for details.');
       }
     } catch (e) {
       console.error(e);
@@ -323,11 +313,11 @@ export default function InvoicePage() {
     }
   }
 
+  /* ───── UI ───── */
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-xl font-bold mb-3">Invoice</h1>
 
-      {/* Информация / настройки */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <label className="font-semibold">Invoice #</label>
         <input
@@ -366,7 +356,7 @@ export default function InvoicePage() {
         </label>
       </div>
 
-      {/* Bill To (редактируемо) */}
+      {/* Bill To */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
         <div>
           <div className="font-semibold mb-1">Bill To</div>
@@ -397,6 +387,7 @@ export default function InvoicePage() {
             />
           </div>
         </div>
+
         <div>
           <div className="font-semibold mb-1">Job</div>
           <div className="text-sm text-gray-600 whitespace-pre-line">
@@ -463,14 +454,10 @@ export default function InvoicePage() {
                 />
               </td>
               <td className="border p-1 text-right">
-                ${(money(r.qty) * money(r.price)).toFixed(2)}
+                ${(num(r.qty) * num(r.price)).toFixed(2)}
               </td>
               <td className="border p-1 text-center">
-                <button
-                  className="text-red-600 px-2"
-                  onClick={() => delRow(i)}
-                  title="Remove"
-                >
+                <button className="text-red-600 px-2" onClick={() => delRow(i)} title="Remove">
                   ✕
                 </button>
               </td>
@@ -487,7 +474,7 @@ export default function InvoicePage() {
 
       {/* Итоги */}
       <div className="text-right">
-        <div>Subtotal: ${money(subtotal).toFixed(2)}</div>
+        <div>Subtotal: ${num(subtotal).toFixed(2)}</div>
         <div className="inline-flex items-center gap-2 mt-1">
           <label className="font-semibold">Discount $:</label>
           <input
@@ -497,7 +484,7 @@ export default function InvoicePage() {
             onChange={(e) => setDiscount(Number(e.target.value || 0))}
           />
         </div>
-        <div className="font-bold text-lg mt-2">Total Due: ${money(total).toFixed(2)}</div>
+        <div className="font-bold text-lg mt-2">Total Due: ${num(total).toFixed(2)}</div>
       </div>
 
       <div className="mt-4">
@@ -512,3 +499,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
