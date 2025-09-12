@@ -42,6 +42,10 @@ const SYSTEM_OPTIONS = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || isNaN(v) ? null : Number(v));
+const nOrNull = (v, def = null) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+};
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
 
 // datetime-local helpers
@@ -119,6 +123,7 @@ export default function JobDetailsPage() {
   const [materials, setMaterials] = useState([]);
 
   // Клиент
+  thead;
   const [client, setClient] = useState({ id: null, full_name: '', phone: '', email: '', address: '' });
   const [clientDirty, setClientDirty] = useState(false);
 
@@ -381,6 +386,7 @@ export default function JobDetailsPage() {
       { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: 0, qty: 1, vendor: '' },
     ]);
   };
+
   const chMat = (idx, field, val) => {
     setMaterials((p) => {
       const n = [...p];
@@ -388,57 +394,107 @@ export default function JobDetailsPage() {
       return n;
     });
   };
+
   const delMat = async (m) => {
     setMaterials((p) => p.filter((x) => x !== m));
     if (!String(m.id).startsWith('tmp-')) {
       await supabase.from('materials').delete().eq('id', m.id);
     }
   };
+
+  // <-- ПЕРЕПИСАНО ПОЛНОСТЬЮ
   const saveMats = async () => {
-    const news = materials.filter((m) => String(m.id).startsWith('tmp-'));
-    const olds = materials.filter((m) => !String(m.id).startsWith('tmp-'));
+    // новые (с временными id) и существующие
+    const news = materials
+      // не вставляем пустые строки без названия
+      .filter((m) => String(m.name || '').trim().length > 0)
+      .filter((m) => String(m.id).startsWith('tmp-'));
 
+    const olds = materials
+      .filter((m) => !String(m.id).startsWith('tmp-'));
+
+    // --- вставка новых
     if (news.length) {
-      const payload = news.map((m) => ({
+      const rows = news.map((m) => ({
         job_id: jobId,
-        name: m.name || '',
-        price: toNum(m.price),
-        qty: toNum(m.qty) || 1,
-        vendor: m.vendor || '',
+        name: String(m.name || '').trim(),
+        price: nOrNull(m.price),
+        qty: nOrNull(m.qty, 1),
+        vendor: String(m.vendor || '').trim(),
       }));
-      const { error } = await supabase.from('materials').insert(payload);
+
+      // 1-я попытка: как есть
+      let { error } = await supabase.from('materials').insert(rows);
+
+      // если в схеме нет vendor — пробуем без него
+      if (error && /column .*vendor/i.test(error.message)) {
+        const rowsNoVendor = rows.map(({ vendor, ...r }) => r);
+        ({ error } = await supabase.from('materials').insert(rowsNoVendor));
+      }
+
+      // если в схеме нет qty — пробуем с quantity
+      if (error && /column .*qty/i.test(error.message)) {
+        const rowsQuantity = rows.map(({ qty, ...r }) => ({ ...r, quantity: qty ?? 1 }));
+        ({ error } = await supabase.from('materials').insert(rowsQuantity));
+      }
+
       if (error) {
-        alert('Не удалось сохранить новые материалы');
-        console.error(error);
+        console.error('[materials.insert] rows:', rows);
+        console.error('[materials.insert] error:', error);
+        alert(`Не удалось сохранить новые материалы:\n${error.message || error}`);
         return;
       }
     }
 
+    // --- обновление существующих
     for (const m of olds) {
-      const { error } = await supabase
-        .from('materials')
-        .update({
-          name: m.name || '',
-          price: toNum(m.price),
-          qty: toNum(m.qty) || 1,
-          vendor: m.vendor || '',
-        })
-        .eq('id', m.id);
+      let patch = {
+        name: String(m.name || '').trim(),
+        price: nOrNull(m.price),
+        qty: nOrNull(m.qty, 1),
+        vendor: String(m.vendor || '').trim(),
+      };
+
+      // 1-я попытка
+      let { error } = await supabase.from('materials').update(patch).eq('id', m.id);
+
+      // нет vendor — без него
+      if (error && /column .*vendor/i.test(error.message)) {
+        const { vendor, ...p } = patch;
+        ({ error } = await supabase.from('materials').update(p).eq('id', m.id));
+      }
+
+      // нет qty — используем quantity
+      if (error && /column .*qty/i.test(error.message)) {
+        const { qty, ...p } = patch;
+        ({ error } = await supabase.from('materials').update({ ...p, quantity: qty ?? 1 }).eq('id', m.id));
+      }
+
       if (error) {
-        alert('Не удалось сохранить материал');
-        console.error(error);
+        console.error('[materials.update] row:', m, 'patch:', patch);
+        console.error('[materials.update] error:', error);
+        alert(`Не удалось сохранить материал (id=${m.id}):\n${error.message || error}`);
         return;
       }
     }
 
-    const { data: fresh } = await supabase
+    // перечитываем свежее состояние
+    const { data: fresh, error: e2 } = await supabase
       .from('materials')
       .select('*')
       .eq('job_id', jobId)
       .order('id', { ascending: true });
+
+    if (e2) {
+      console.error('[materials.refresh] error:', e2);
+      alert(`Сохранено, но не удалось перечитать материалы:\n${e2.message || e2}`);
+      return;
+    }
+
     setMaterials(fresh || []);
     alert('Материалы сохранены');
   };
+  // --> КОНЕЦ БЛОКА МАТЕРИАЛОВ
 
   /* ---------- файлы ---------- */
   const onPick = async (e) => {
