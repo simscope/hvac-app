@@ -1,6 +1,6 @@
 // src/pages/AdminTechniciansPage.jsx
-// Чистый CSS. Левая колонка фикс 360px, правая — резиновая.
-// org_id и is_admin отсутствуют. Fallback на raw fetch при ошибке invoke.
+// Чистый CSS, без Tailwind. Фикс переполнения, видимость пароля,
+// и управление уволенными (is_active).
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
@@ -46,9 +46,7 @@ function Banner({ title, text, details }) {
         )}
       </div>
       {text && <div className="mt4">{text}</div>}
-      {open && details && (
-        <pre className="pre">{JSON.stringify(details, null, 2)}</pre>
-      )}
+      {open && details && <pre className="pre">{JSON.stringify(details, null, 2)}</pre>}
     </div>
   );
 }
@@ -61,16 +59,21 @@ export default function AdminTechniciansPage() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // форма
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech");
   const [password, setPassword] = useState(genTempPassword());
+  const [showPwd, setShowPwd] = useState(false);
 
+  // UI
   const [banner, setBanner] = useState(null);
 
+  // фильтры
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("active"); // active | inactive | all
 
   const isAdmin = useMemo(() => {
     if (!me) return false;
@@ -103,7 +106,7 @@ export default function AdminTechniciansPage() {
   async function fetchTechnicians() {
     const { data, error } = await supabase
       .from("technicians")
-      .select("id, name, phone, role, auth_user_id, email")
+      .select("id, name, phone, role, auth_user_id, email, is_active")
       .order("name", { ascending: true });
 
     if (error) setBanner({ title: "Ошибка загрузки", text: error.message });
@@ -118,7 +121,13 @@ export default function AdminTechniciansPage() {
           : [r.name, r.email, r.phone]
               .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
       )
-      .filter(r => (roleFilter === "all" ? true : r.role === roleFilter));
+      .filter(r => (roleFilter === "all" ? true : r.role === roleFilter))
+      .filter(r => {
+        if (statusFilter === "all") return true;
+        if (statusFilter === "active") return r.is_active !== false;
+        if (statusFilter === "inactive") return r.is_active === false;
+        return true;
+      });
   }
 
   function resetForm() {
@@ -127,6 +136,7 @@ export default function AdminTechniciansPage() {
     setPhone("");
     setRole("tech");
     setPassword(genTempPassword());
+    setShowPwd(false);
   }
 
   async function createTech(e) {
@@ -206,6 +216,30 @@ export default function AdminTechniciansPage() {
     });
   }
 
+  async function deactivateTech(row) {
+    if (!confirm(`Уволить сотрудника «${row.name}»? Доступ будет закрыт.`)) return;
+    const updates = { is_active: false, auth_user_id: null };
+    const { error } = await supabase.from("technicians").update(updates).eq("id", row.id);
+    if (error) {
+      setBanner({ title: "Ошибка", text: error.message });
+    } else {
+      setBanner({ title: "Сотрудник уволен", text: "Статус изменён на «уволен», доступ отозван." });
+      await fetchTechnicians();
+    }
+  }
+
+  async function restoreTech(row) {
+    if (!confirm(`Вернуть сотрудника «${row.name}» в активные?`)) return;
+    const updates = { is_active: true };
+    const { error } = await supabase.from("technicians").update(updates).eq("id", row.id);
+    if (error) {
+      setBanner({ title: "Ошибка", text: error.message });
+    } else {
+      setBanner({ title: "Сотрудник восстановлен", text: "Теперь он снова активный." });
+      await fetchTechnicians();
+    }
+  }
+
   const disableSubmit = loading || !email.trim() || !name.trim() || !password;
 
   return (
@@ -215,7 +249,7 @@ export default function AdminTechniciansPage() {
         h1{font-size:28px;margin:0 0 12px 0;font-weight:700}
         .input,.select,.btn{
           height:28px;border:1px solid #cfd4d9;border-radius:3px;background:#fff;
-          padding:0 8px;font-size:14px;line-height:26px;
+          padding:0 8px;font-size:14px;line-height:26px; box-sizing:border-box;
         }
         .btn{cursor:pointer}
         .btn:hover{background:#f7f7f7}
@@ -228,15 +262,17 @@ export default function AdminTechniciansPage() {
         .mt4{margin-top:4px}
         .pre{background:#fff;border:1px solid #eee;padding:8px;border-radius:3px;overflow:auto;max-height:280px}
 
-        /* новая раскладка — fixed left, flexible right */
-        .two-cols{display:flex;gap:16px;align-items:flex-start}
-        .col-left{flex:0 0 360px;max-width:360px}
+        .two-cols{display:flex;gap:20px;align-items:flex-start}
+        .col-left{flex:0 0 400px;max-width:400px}
         .col-right{flex:1;min-width:0}
-        /* гарантируем, что таблица формы не шире колонки */
         .col-left .table{table-layout:fixed}
         .col-left .table td:nth-child(1){width:140px}
+        .col-left .table .input,
+        .col-left .table .select{width:100%}
         .row-inline{display:flex;gap:8px;align-items:center}
-        .row-inline .input{flex:1;min-width:0}
+        .row-inline .input{flex:1;min-width:140px}
+        .dim{color:#8a8f98}
+        .strike{opacity:.6}
       `}</style>
 
       <h1>Техники / Сотрудники</h1>
@@ -246,7 +282,7 @@ export default function AdminTechniciansPage() {
       )}
 
       <div className="two-cols">
-        {/* левая колонка — форма в таблице */}
+        {/* левая колонка — форма */}
         <div className="col-left">
           <form onSubmit={createTech}>
             <table className="table" style={{ marginBottom: 12 }}>
@@ -280,8 +316,19 @@ export default function AdminTechniciansPage() {
                   <td>Временный пароль *</td>
                   <td>
                     <div className="row-inline">
-                      <input className="input" required value={password} onChange={e => setPassword(e.target.value)} />
-                      <button type="button" className="btn" onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
+                      <input
+                        className="input"
+                        type={showPwd ? "text" : "password"}
+                        required
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                      />
+                      <button type="button" className="btn" onClick={() => setShowPwd(s => !s)}>
+                        {showPwd ? "Скрыть" : "Показать"}
+                      </button>
+                      <button type="button" className="btn" onClick={() => setPassword(genTempPassword())}>
+                        Сгенерировать
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -321,6 +368,11 @@ export default function AdminTechniciansPage() {
               <option value="manager">Менеджер</option>
               <option value="tech">Техник</option>
             </select>
+            <select className="select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+              <option value="active">Активные</option>
+              <option value="inactive">Уволенные</option>
+              <option value="all">Все</option>
+            </select>
             <button className="btn" onClick={fetchTechnicians}>Обновить список</button>
           </div>
 
@@ -335,24 +387,35 @@ export default function AdminTechniciansPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows().map((row) => (
-                <tr key={row.id}>
-                  <td>{row.name}</td>
-                  <td>{row.email || "—"}</td>
-                  <td>{row.phone || "—"}</td>
-                  <td>{row.role}</td>
-                  <td>
-                    <button
-                      className="btn"
-                      onClick={() => row.email && sendReset(row.email)}
-                      disabled={!row.email}
-                      title={!row.email ? "У сотрудника нет email" : "Отправить/сгенерировать ссылку на сброс"}
-                    >
-                      Сброс пароля
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {filteredRows().map((row) => {
+                const inactive = row.is_active === false;
+                return (
+                  <tr key={row.id} className={inactive ? "strike" : ""}>
+                    <td>{row.name}</td>
+                    <td>{row.email || "—"}</td>
+                    <td>{row.phone || "—"}</td>
+                    <td>
+                      {row.role}
+                      {inactive && <span className="dim"> · уволен</span>}
+                    </td>
+                    <td className="row-inline">
+                      <button
+                        className="btn"
+                        onClick={() => row.email && !inactive && sendReset(row.email)}
+                        disabled={!row.email || inactive}
+                        title={inactive ? "Уволенный: сброс отключён" : (!row.email ? "Нет email" : "Сброс пароля")}
+                      >
+                        Сброс пароля
+                      </button>
+                      {!inactive ? (
+                        <button className="btn" onClick={() => deactivateTech(row)}>Уволить</button>
+                      ) : (
+                        <button className="btn" onClick={() => restoreTech(row)}>Вернуть</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {filteredRows().length === 0 && (
                 <tr><td colSpan={5}>Нет сотрудников</td></tr>
               )}
