@@ -380,7 +380,7 @@ const JoAllJobsPage = () => {
                             navigate(`/job/${job.id}`);
                           }
                         }
-                      })}
+                      }}
                       title="Открыть редактирование заявки"
                       style={{ cursor: 'pointer' }}
                     >
@@ -511,3 +511,4 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
+
