@@ -1,23 +1,28 @@
 // src/pages/AdminTechniciansPage.jsx
+// Вариант B (ledger): «классический леджер» — тонкие границы, серый заголовок,
+// без лишней декоративности. Org ID и is_admin убраны. Если invoke даёт
+// FunctionsHttpError — делаем raw fetch и показываем JSON (status, stage, error, details).
+
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
 
-/* базовые классы под «ваш» стиль */
-const input = "w-full px-2.5 py-1.5 border rounded text-sm";
+/* —— стиль «ledger» —— */
+const input  = "w-full px-2.5 py-1.5 border rounded text-sm";
 const select = input;
-const btn = "px-2.5 py-1.5 border rounded text-sm hover:bg-gray-50";
-const th = "px-2.5 py-1.5 text-left border-b text-sm whitespace-nowrap";
-const td = "px-2.5 py-1.5 border-b text-sm align-top";
-const label = "block text-[12px] mb-0.5 text-gray-700";
+const btn    = "px-2.5 py-1.5 border rounded text-sm hover:bg-gray-50";
+const th     = "px-2.5 py-1.5 text-left border-b border-gray-300 text-sm bg-gray-50 whitespace-nowrap";
+const td     = "px-2.5 py-1.5 border-b border-gray-200 text-sm align-top";
+const label  = "block text-[12px] mb-0.5 text-gray-700";
+const table  = "w-full border border-gray-300 text-sm";
 
-/* утилита паролей */
+/* генератор временного пароля */
 function genTempPassword(len = 12) {
   const chars =
     "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
-/* сырой вызов функции (чтобы увидеть тело ошибки при 4xx/5xx) */
+/* сырой вызов Edge-функции — чтобы получить тело ошибки при 4xx/5xx */
 async function rawCallFunction(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || "";
@@ -38,7 +43,7 @@ async function rawCallFunction(path, body) {
   return { ok: res.ok, status: res.status, json };
 }
 
-/* тонкий баннер */
+/* тонкий баннер с опциональными «деталями» */
 function Banner({ title, text, details, onToggle, open }) {
   if (!title && !text) return null;
   return (
@@ -113,7 +118,7 @@ export default function AdminTechniciansPage() {
   async function fetchTechnicians() {
     const { data, error } = await supabase
       .from("technicians")
-      .select("id, name, phone, role, auth_user_id, email") // is_admin/org_id убраны
+      .select("id, name, phone, role, auth_user_id, email") // is_admin и org_id убраны
       .order("name", { ascending: true });
 
     if (error) setBanner({ title: "Ошибка загрузки", text: error.message });
@@ -150,7 +155,7 @@ export default function AdminTechniciansPage() {
       name: name.trim(),
       phone: phone.trim() || null,
       role,
-      link_if_exists: true,     // org_id не отправляем
+      link_if_exists: true, // org_id не отправляем
     };
 
     setLoading(true);
@@ -159,19 +164,19 @@ export default function AdminTechniciansPage() {
       const { data, error } = await supabase.functions.invoke("admin-create-user", { body: payload });
 
       if (error || data?.error || data?.warning) {
-        // 2) raw fetch + показать JSON
+        // 2) raw fetch — показать JSON
         const raw = await rawCallFunction("admin-create-user", payload);
         setBanner({
           title: raw.ok ? "Сотрудник создан" : "Не удалось создать сотрудника",
-          text: raw.ok ? "Учётка зарегистрирована/привязана." : "Edge-функция вернула ошибку.",
-          details: { status: raw.status, ...raw.json }
+          text:  raw.ok ? "Учётка зарегистрирована/привязана." : "Edge-функция вернула ошибку.",
+          details: { status: raw.status, ...raw.json },
         });
-        if (!raw.ok) return; // стоп на ошибке
+        if (!raw.ok) return;
       } else {
         setBanner({
           title: "Сотрудник создан",
           text: "Передайте e-mail и временный пароль.",
-          details: data
+          details: data,
         });
       }
 
@@ -188,15 +193,15 @@ export default function AdminTechniciansPage() {
     setBanner(null); setOpenDetails(false);
 
     const inv = await supabase.functions.invoke("admin-create-user", {
-      body: { action: "sendPasswordReset", email: emailAddr }
+      body: { action: "sendPasswordReset", email: emailAddr },
     });
 
     if (inv.error || inv.data?.error) {
       const raw = await rawCallFunction("admin-create-user", { action: "sendPasswordReset", email: emailAddr });
       setBanner({
         title: raw.ok ? "Ссылка на сброс готова" : "Сброс не выполнен",
-        text: raw.ok ? "Письмо отправлено либо ссылка сгенерирована." : "Edge-функция вернула ошибку.",
-        details: { status: raw.status, ...raw.json }
+        text:  raw.ok ? "Письмо отправлено либо ссылка сгенерирована." : "Edge-функция вернула ошибку.",
+        details: { status: raw.status, ...raw.json },
       });
       return;
     }
@@ -204,7 +209,7 @@ export default function AdminTechniciansPage() {
     setBanner({
       title: "Ссылка на сброс готова",
       text: "Письмо отправлено либо ссылка сгенерирована.",
-      details: inv.data
+      details: inv.data,
     });
   }
 
@@ -214,7 +219,7 @@ export default function AdminTechniciansPage() {
     <div className="p-4 max-w-5xl mx-auto">
       <h1 className="text-2xl font-semibold mb-3">Техники / Сотрудники</h1>
 
-      {/* баннер/детали */}
+      {/* баннер */}
       {banner && (
         <Banner
           title={banner.title}
@@ -225,7 +230,7 @@ export default function AdminTechniciansPage() {
         />
       )}
 
-      {/* форма — мелкая, плотная сетка */}
+      {/* форма */}
       <form onSubmit={createTech} className="border rounded p-3 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <div>
@@ -253,7 +258,9 @@ export default function AdminTechniciansPage() {
             <label className={label}>Временный пароль *</label>
             <div className="flex gap-2">
               <input className={input} required value={password} onChange={e => setPassword(e.target.value)} />
-              <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
+              <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>
+                Сгенерировать
+              </button>
             </div>
             <div className="text-[12px] text-gray-500 mt-1">
               Выдай сотруднику этот пароль для первого входа.
@@ -271,9 +278,14 @@ export default function AdminTechniciansPage() {
         </div>
       </form>
 
-      {/* панель поиска/фильтра — узкая, на одной строке */}
+      {/* панель фильтров */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
-        <input className={input} placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} />
+        <input
+          className={input}
+          placeholder="Поиск (имя, email, телефон)"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+        />
         <select className={select} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
           <option value="all">Все роли</option>
           <option value="admin">Админ</option>
@@ -285,9 +297,9 @@ export default function AdminTechniciansPage() {
         </div>
       </div>
 
-      {/* таблица — мелкий кегль, зебра */}
+      {/* таблица */}
       <div className="overflow-x-auto">
-        <table className="w-full border text-sm">
+        <table className={table}>
           <thead>
             <tr>
               <th className={th}>Имя</th>
@@ -298,8 +310,8 @@ export default function AdminTechniciansPage() {
             </tr>
           </thead>
           <tbody>
-            {filteredRows().map((row, i) => (
-              <tr key={row.id} className={i % 2 ? "bg-gray-50" : ""}>
+            {filteredRows().map((row) => (
+              <tr key={row.id}>
                 <td className={td}>{row.name}</td>
                 <td className={td}>{row.email || "—"}</td>
                 <td className={td}>{row.phone || "—"}</td>
