@@ -29,7 +29,6 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // куда вести после входа
   const fromState = location.state && location.state.from;
   const safeFrom =
     fromState && typeof fromState.pathname === 'string' && fromState.pathname !== '/login'
@@ -41,19 +40,15 @@ export default function LoginPage() {
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
-  const [info, setInfo] = useState('');
 
   // Редирект только в эффекте
   useEffect(() => {
-    if (user) {
-      navigate(safeFrom, { replace: true });
-    }
+    if (user) navigate(safeFrom, { replace: true });
   }, [user, safeFrom, navigate]);
 
   const onLogin = async (e) => {
     e.preventDefault();
     setErr('');
-    setInfo('');
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({
@@ -61,29 +56,11 @@ export default function LoginPage() {
         password,
       });
       if (error) throw error;
-      // навигация произойдёт в useEffect, когда появится user
+      // переход произойдёт в useEffect
     } catch (error) {
-      setErr(error.message || 'Login error');
+      setErr(error.message || 'Ошибка входа');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const onResetPassword = async () => {
-    setErr('');
-    setInfo('');
-    if (!email.trim()) {
-      setErr('Укажи email для сброса пароля.');
-      return;
-    }
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: window.location.origin + '/reset',
-      });
-      if (error) throw error;
-      setInfo('Мы отправили письмо со ссылкой для сброса пароля.');
-    } catch (error) {
-      setErr(error.message || 'Ошибка при отправке письма.');
     }
   };
 
@@ -101,7 +78,7 @@ export default function LoginPage() {
       <div
         style={{
           width: 420,
-          maxWidth: '94vw', // чтобы на узких экранах не выходило за край
+          maxWidth: '94vw',
           background: '#fff',
           border: '1px solid #e5e7eb',
           borderRadius: 16,
@@ -145,7 +122,7 @@ export default function LoginPage() {
                   position: 'absolute',
                   right: 8,
                   top: '50%',
-                  transform: 'translateY(-50%)', // центрируем по высоте
+                  transform: 'translateY(-50%)',
                   border: '1px solid #e5e7eb',
                   background: '#fff',
                   borderRadius: 8,
@@ -160,7 +137,6 @@ export default function LoginPage() {
           </div>
 
           {err && <div style={{ marginTop: 12, color: '#ef4444' }}>{err}</div>}
-          {info && <div style={{ marginTop: 12, color: '#16a34a' }}>{info}</div>}
 
           <button
             type="submit"
@@ -170,14 +146,6 @@ export default function LoginPage() {
             {loading ? 'Входим…' : 'Войти'}
           </button>
         </form>
-
-        <button
-          type="button"
-          onClick={onResetPassword}
-          style={{ ...btnStyle, background: '#e5e7eb', color: '#111827', marginTop: 10 }}
-        >
-          Сбросить пароль
-        </button>
 
         <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
           Доступ выдаёт администратор. Если нет аккаунта — обратись к менеджеру.
