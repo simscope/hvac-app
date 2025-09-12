@@ -1,82 +1,96 @@
 // src/pages/AdminTechniciansPage.jsx
-// Минималистичный стиль как в проекте.
-// Если invoke вернул FunctionsHttpError — делаем raw fetch к Edge функции
-// и показываем JSON (status, stage, error, details) под формой.
+import React, { useEffect, useMemo, useState } from "react";
+import { supabase, supabaseUrl } from "../supabaseClient";
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { supabase, supabaseUrl } from '../supabaseClient';
+/* базовые классы под «ваш» стиль */
+const input = "w-full px-2.5 py-1.5 border rounded text-sm";
+const select = input;
+const btn = "px-2.5 py-1.5 border rounded text-sm hover:bg-gray-50";
+const th = "px-2.5 py-1.5 text-left border-b text-sm whitespace-nowrap";
+const td = "px-2.5 py-1.5 border-b text-sm align-top";
+const label = "block text-[12px] mb-0.5 text-gray-700";
 
-const input = "w-full px-3 py-2 border rounded";
-const btn   = "px-3 py-2 border rounded hover:bg-gray-50";
-const th    = "px-3 py-2 text-left border-b";
-const td    = "px-3 py-2 border-b";
-
+/* утилита паролей */
 function genTempPassword(len = 12) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
-  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
-// Сырой вызов edge-функции (чтобы увидеть тело ошибки при 4xx/5xx)
+/* сырой вызов функции (чтобы увидеть тело ошибки при 4xx/5xx) */
 async function rawCallFunction(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token || '';
-  const url = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/${path}`;
+  const token = session?.access_token || "";
+  const url = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${path}`;
 
-  const res  = await fetch(url, {
-    method: 'POST',
+  const res = await fetch(url, {
+    method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
+      "content-type": "application/json",
     },
     body: JSON.stringify(body),
   });
 
   const text = await res.text();
-  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  let json;
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
   return { ok: res.ok, status: res.status, json };
 }
 
-function Alert({ kind = 'info', title, children }) {
-  const color =
-    kind === 'error'   ? 'border-red-300 bg-red-50' :
-    kind === 'success' ? 'border-green-300 bg-green-50' :
-    'border-gray-300 bg-gray-50';
+/* тонкий баннер */
+function Banner({ title, text, details, onToggle, open }) {
+  if (!title && !text) return null;
   return (
-    <div className={`border rounded px-3 py-2 ${color}`}>
-      {title && <div className="font-medium mb-1">{title}</div>}
-      {children && <div className="text-sm">{children}</div>}
+    <div className="border rounded px-3 py-2 mb-3">
+      <div className="flex items-center gap-2">
+        <div className="font-medium text-sm">{title}</div>
+        {details && (
+          <button className={btn} onClick={onToggle}>
+            {open ? "Скрыть детали" : "Показать детали"}
+          </button>
+        )}
+      </div>
+      {text && <div className="text-sm mt-1">{text}</div>}
+      {open && details && (
+        <pre className="mt-2 max-h-72 overflow-auto border rounded p-2 text-[12px] bg-white">
+          {JSON.stringify(details, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }
 
 export default function AdminTechniciansPage() {
+  /* auth */
   const [me, setMe] = useState(null);
   const [meProfileRole, setMeProfileRole] = useState(null);
   const [meTechInfo, setMeTechInfo] = useState(null);
 
+  /* data */
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // форма
+  /* form */
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech");
   const [password, setPassword] = useState(genTempPassword());
 
-  // баннер и детали ответа функции
-  const [banner, setBanner] = useState(null); // { kind, title, text, details? }
-  const [showDetails, setShowDetails] = useState(false);
+  /* ui */
+  const [banner, setBanner] = useState(null); // {title, text, details}
+  const [openDetails, setOpenDetails] = useState(false);
 
-  // простые фильтры
+  /* filters */
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
 
   const isAdmin = useMemo(() => {
     if (!me) return false;
-    if (me.app_metadata?.role === 'admin') return true;
-    if (meProfileRole === 'admin') return true;
-    if (meTechInfo?.role === 'admin' || meTechInfo?.is_admin) return true;
+    if (me.app_metadata?.role === "admin") return true;
+    if (meProfileRole === "admin") return true;
+    if (meTechInfo?.role === "admin" || meTechInfo?.is_admin) return true;
     return false;
   }, [me, meProfileRole, meTechInfo]);
 
@@ -86,45 +100,47 @@ export default function AdminTechniciansPage() {
       setMe(user || null);
 
       if (user) {
-        const prof = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+        const prof = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
         setMeProfileRole(prof.data?.role ?? null);
 
-        const tech = await supabase.from('technicians').select('role, is_admin').eq('auth_user_id', user.id).maybeSingle();
+        const tech = await supabase.from("technicians").select("role, is_admin").eq("auth_user_id", user.id).maybeSingle();
         setMeTechInfo(tech.data || null);
       }
-
       await fetchTechnicians();
     })();
   }, []);
 
   async function fetchTechnicians() {
     const { data, error } = await supabase
-      .from('technicians')
-      .select('id, name, phone, role, auth_user_id, email') // is_admin и org_id убраны
-      .order('name', { ascending: true });
-    if (error) {
-      setBanner({ kind: 'error', title: 'Ошибка загрузки', text: error.message });
-    }
+      .from("technicians")
+      .select("id, name, phone, role, auth_user_id, email") // is_admin/org_id убраны
+      .order("name", { ascending: true });
+
+    if (error) setBanner({ title: "Ошибка загрузки", text: error.message });
     setList(data || []);
   }
 
   function filteredRows() {
     return (list || [])
-      .filter(r => !q ? true : [r.name, r.email, r.phone].some(v => String(v || '').toLowerCase().includes(q.toLowerCase())))
-      .filter(r => roleFilter === 'all' ? true : r.role === roleFilter);
+      .filter(r =>
+        !q
+          ? true
+          : [r.name, r.email, r.phone]
+              .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
+      )
+      .filter(r => (roleFilter === "all" ? true : r.role === roleFilter));
   }
 
   function resetForm() {
-    setEmail(""); setName(""); setPhone("");
-    setRole("tech"); setPassword(genTempPassword());
+    setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword(genTempPassword());
   }
 
   async function createTech(e) {
     e.preventDefault();
-    setBanner(null); setShowDetails(false);
+    setBanner(null); setOpenDetails(false);
 
     if (!isAdmin) {
-      setBanner({ kind: 'error', title: 'Нет прав', text: 'Только администратор может создавать сотрудников.' });
+      setBanner({ title: "Нет прав", text: "Только администратор может создавать сотрудников." });
       return;
     }
 
@@ -134,66 +150,61 @@ export default function AdminTechniciansPage() {
       name: name.trim(),
       phone: phone.trim() || null,
       role,
-      // org_id не отправляем — на Edge-функции подставится 1 по умолчанию
-      link_if_exists: true,
+      link_if_exists: true,     // org_id не отправляем
     };
 
     setLoading(true);
     try {
-      // 1) обычный вызов
-      const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
+      // 1) invoke
+      const { data, error } = await supabase.functions.invoke("admin-create-user", { body: payload });
 
       if (error || data?.error || data?.warning) {
-        // 2) fallback: raw fetch — покажем JSON с полями status/stage/error/details
-        const raw = await rawCallFunction('admin-create-user', payload);
+        // 2) raw fetch + показать JSON
+        const raw = await rawCallFunction("admin-create-user", payload);
         setBanner({
-          kind: raw.ok ? 'success' : 'error',
-          title: raw.ok ? 'Сотрудник создан' : 'Не удалось создать сотрудника',
-          text: raw.ok ? 'Учётка зарегистрирована/привязана.' : 'Функция вернула ошибку.',
-          details: { status: raw.status, ...raw.json },
+          title: raw.ok ? "Сотрудник создан" : "Не удалось создать сотрудника",
+          text: raw.ok ? "Учётка зарегистрирована/привязана." : "Edge-функция вернула ошибку.",
+          details: { status: raw.status, ...raw.json }
         });
-        if (!raw.ok) return; // выходим на ошибке
+        if (!raw.ok) return; // стоп на ошибке
       } else {
         setBanner({
-          kind: 'success',
-          title: 'Сотрудник создан',
-          text: 'Передайте e-mail и временный пароль.',
-          details: data,
+          title: "Сотрудник создан",
+          text: "Передайте e-mail и временный пароль.",
+          details: data
         });
       }
 
       resetForm();
       await fetchTechnicians();
     } catch (err) {
-      setBanner({ kind: 'error', title: 'Необработанная ошибка', text: String(err?.message || err) });
+      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
       setLoading(false);
     }
   }
 
   async function sendReset(emailAddr) {
-    setBanner(null); setShowDetails(false);
+    setBanner(null); setOpenDetails(false);
 
-    const inv = await supabase.functions.invoke('admin-create-user', {
-      body: { action: 'sendPasswordReset', email: emailAddr }
+    const inv = await supabase.functions.invoke("admin-create-user", {
+      body: { action: "sendPasswordReset", email: emailAddr }
     });
 
     if (inv.error || inv.data?.error) {
-      const raw = await rawCallFunction('admin-create-user', { action: 'sendPasswordReset', email: emailAddr });
+      const raw = await rawCallFunction("admin-create-user", { action: "sendPasswordReset", email: emailAddr });
       setBanner({
-        kind: raw.ok ? 'success' : 'error',
-        title: raw.ok ? 'Ссылка на сброс готова' : 'Сброс не выполнен',
-        text: raw.ok ? 'Письмо отправлено либо ссылка сгенерирована.' : 'Функция вернула ошибку.',
-        details: { status: raw.status, ...raw.json },
+        title: raw.ok ? "Ссылка на сброс готова" : "Сброс не выполнен",
+        text: raw.ok ? "Письмо отправлено либо ссылка сгенерирована." : "Edge-функция вернула ошибку.",
+        details: { status: raw.status, ...raw.json }
       });
       return;
     }
 
     setBanner({
-      kind: 'success',
-      title: 'Ссылка на сброс готова',
-      text: 'Письмо отправлено либо ссылка сгенерирована.',
-      details: inv.data,
+      title: "Ссылка на сброс готова",
+      text: "Письмо отправлено либо ссылка сгенерирована.",
+      details: inv.data
     });
   }
 
@@ -201,69 +212,69 @@ export default function AdminTechniciansPage() {
 
   return (
     <div className="p-4 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Техники / Сотрудники</h1>
+      <h1 className="text-2xl font-semibold mb-3">Техники / Сотрудники</h1>
 
+      {/* баннер/детали */}
       {banner && (
-        <div className="mb-4">
-          <Alert kind={banner.kind} title={banner.title}>
-            {banner.text}
-            {banner.details && (
-              <>
-                <button className={`${btn} ml-2`} onClick={() => setShowDetails(v => !v)}>
-                  {showDetails ? 'Скрыть детали' : 'Показать детали'}
-                </button>
-                {showDetails && (
-                  <pre className="mt-2 max-h-72 overflow-auto bg-white border rounded p-2 text-xs">
-                    {JSON.stringify(banner.details, null, 2)}
-                  </pre>
-                )}
-              </>
-            )}
-          </Alert>
-        </div>
+        <Banner
+          title={banner.title}
+          text={banner.text}
+          details={banner.details}
+          open={openDetails}
+          onToggle={() => setOpenDetails(v => !v)}
+        />
       )}
 
-      {/* форма — без Орг. ID */}
-      <form onSubmit={createTech} className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded p-3 mb-6">
-        <div>
-          <label className="block text-sm mb-1">E-mail *</label>
-          <input className={input} type="email" required value={email} onChange={e => setEmail(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Телефон</label>
-          <input className={input} value={phone} onChange={e => setPhone(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Имя / ФИО *</label>
-          <input className={input} required value={name} onChange={e => setName(e.target.value)} />
-        </div>
-        <div>
-          <label className="block text-sm mb-1">Роль *</label>
-          <select className={input} value={role} onChange={e => setRole(e.target.value)}>
-            <option value="tech">Техник</option>
-            <option value="manager">Менеджер</option>
-            <option value="admin">Админ</option>
-          </select>
-        </div>
-        <div className="md:col-span-2">
-          <label className="block text-sm mb-1">Временный пароль *</label>
-          <div className="flex gap-2">
-            <input className={input} required value={password} onChange={e => setPassword(e.target.value)} />
-            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
+      {/* форма — мелкая, плотная сетка */}
+      <form onSubmit={createTech} className="border rounded p-3 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div>
+            <label className={label}>E-mail *</label>
+            <input className={input} type="email" required value={email} onChange={e => setEmail(e.target.value)} />
           </div>
-          <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
-        </div>
-        <div className="md:col-span-2">
-          <button disabled={disableSubmit} className={btn} type="submit">
-            {loading ? "Создаю..." : "Создать сотрудника"}
-          </button>
+          <div>
+            <label className={label}>Телефон</label>
+            <input className={input} value={phone} onChange={e => setPhone(e.target.value)} />
+          </div>
+          <div>
+            <label className={label}>Имя / ФИО *</label>
+            <input className={input} required value={name} onChange={e => setName(e.target.value)} />
+          </div>
+          <div>
+            <label className={label}>Роль *</label>
+            <select className={select} value={role} onChange={e => setRole(e.target.value)}>
+              <option value="tech">Техник</option>
+              <option value="manager">Менеджер</option>
+              <option value="admin">Админ</option>
+            </select>
+          </div>
+
+          <div className="md:col-span-3">
+            <label className={label}>Временный пароль *</label>
+            <div className="flex gap-2">
+              <input className={input} required value={password} onChange={e => setPassword(e.target.value)} />
+              <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
+            </div>
+            <div className="text-[12px] text-gray-500 mt-1">
+              Выдай сотруднику этот пароль для первого входа.
+            </div>
+          </div>
+
+          <div className="md:col-span-1 flex items-end gap-2">
+            <button disabled={disableSubmit} className={btn} type="submit">
+              {loading ? "Создаю..." : "Создать"}
+            </button>
+            <button type="button" className={btn} disabled={loading} onClick={resetForm}>
+              Очистить
+            </button>
+          </div>
         </div>
       </form>
 
-      {/* небольшой поиск/фильтр — в том же стиле */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+      {/* панель поиска/фильтра — узкая, на одной строке */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
         <input className={input} placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} />
-        <select className={input} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+        <select className={select} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
           <option value="all">Все роли</option>
           <option value="admin">Админ</option>
           <option value="manager">Менеджер</option>
@@ -274,9 +285,9 @@ export default function AdminTechniciansPage() {
         </div>
       </div>
 
-      {/* таблица — колонка is_admin убрана */}
+      {/* таблица — мелкий кегль, зебра */}
       <div className="overflow-x-auto">
-        <table className="w-full border">
+        <table className="w-full border text-sm">
           <thead>
             <tr>
               <th className={th}>Имя</th>
@@ -287,14 +298,19 @@ export default function AdminTechniciansPage() {
             </tr>
           </thead>
           <tbody>
-            {filteredRows().map(row => (
-              <tr key={row.id}>
+            {filteredRows().map((row, i) => (
+              <tr key={row.id} className={i % 2 ? "bg-gray-50" : ""}>
                 <td className={td}>{row.name}</td>
-                <td className={td}>{row.email || "-"}</td>
-                <td className={td}>{row.phone || "-"}</td>
+                <td className={td}>{row.email || "—"}</td>
+                <td className={td}>{row.phone || "—"}</td>
                 <td className={td}>{row.role}</td>
                 <td className={td}>
-                  <button className={btn} onClick={() => row.email && sendReset(row.email)} disabled={!row.email}>
+                  <button
+                    className={btn}
+                    onClick={() => row.email && sendReset(row.email)}
+                    disabled={!row.email}
+                    title={!row.email ? "У сотрудника нет email" : "Отправить/сгенерировать ссылку на сброс"}
+                  >
                     Сброс пароля
                   </button>
                 </td>
