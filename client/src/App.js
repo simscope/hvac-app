@@ -27,9 +27,7 @@ import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Гард для доступа к конкретной заявке:
-//  - admin/manager: доступ всегда
-//  - tech: только если job.technician_id (или tech_id) совпадает с profile.id
+// Гард на доступ к конкретной заявке для техника
 // ───────────────────────────────────────────────────────────────────────────────
 function JobAccess({ children }) {
   const { role, profile, user, loading } = useAuth();
@@ -43,7 +41,7 @@ function JobAccess({ children }) {
     let alive = true;
 
     async function run() {
-      if (loading) return; // дождаться загрузки контекста
+      if (loading) return;
       if (!user) {
         if (alive) setOk(false);
         return;
@@ -85,7 +83,7 @@ function JobAccess({ children }) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Layout с верхним меню (скрыт на /login и /no-access)
+// Оболочка с верхним меню
 // ───────────────────────────────────────────────────────────────────────────────
 function Shell() {
   const { pathname } = useLocation();
@@ -101,75 +99,108 @@ function Shell() {
           <Route path="/no-access" element={<NoAccessPage />} />
 
           {/* Менеджер + Админ */}
-          <Route path="/jobs" element={
-            <RequireRole allow={['admin','manager']}>
-              <JobsPage />
-            </RequireRole>
-          } />
-          <Route path="/jobs/all" element={
-            <RequireRole allow={['admin','manager']}>
-              <AllJobsPage />
-            </RequireRole>
-          } />
-          <Route path="/calendar" element={
-            <RequireRole allow={['admin','manager']}>
-              <CalendarPage />
-            </RequireRole>
-          } />
-          <Route path="/materials" element={
-            <RequireRole allow={['admin','manager']}>
-              <MaterialsPage />
-            </RequireRole>
-          } />
-          <Route path="/chat" element={
-            <RequireRole allow={['admin','manager']}>
-              <ChatPage />
-            </RequireRole>
-          } />
-          <Route path="/invoice/:id" element={<InvoicePage />}
-            <RequireRole allow={['admin','manager']}>
-              <InvoicePage />
-            </RequireRole>
-          } />
+          <Route
+            path="/jobs"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <JobsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/jobs/all"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <AllJobsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/calendar"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <CalendarPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/materials"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <MaterialsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/chat"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <ChatPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/invoice/:id"
+            element={
+              <RequireRole allow={['admin', 'manager']}>
+                <InvoicePage />
+              </RequireRole>
+            }
+          />
 
           {/* Только Админ */}
-          <Route path="/technicians" element={
-            <RequireRole allow={['admin']}>
-              <TechniciansPage />
-            </RequireRole>
-          } />
-          <Route path="/finance" element={
-            <RequireRole allow={['admin']}>
-              <FinancePage />
-            </RequireRole>
-          } />
-          <Route path="/chat-admin" element={
-            <RequireRole allow={['admin']}>
-              <ChatAdminPage />
-            </RequireRole>
-          } />
+          <Route
+            path="/technicians"
+            element={
+              <RequireRole allow={['admin']}>
+                <TechniciansPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/finance"
+            element={
+              <RequireRole allow={['admin']}>
+                <FinancePage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/chat-admin"
+            element={
+              <RequireRole allow={['admin']}>
+                <ChatAdminPage />
+              </RequireRole>
+            }
+          />
 
-          {/* Детали заявки: admin/manager всегда, tech — только свою */}
-          <Route path="/jobs/:id" element={
-            <RequireRole allow={['admin','manager','tech']}>
-              <JobAccess>
-                <JobDetailsPage />
-              </JobAccess>
-            </RequireRole>
-          } />
+          {/* Детали заявки: admin/manager — всегда; tech — только свою */}
+          <Route
+            path="/jobs/:id"
+            element={
+              <RequireRole allow={['admin', 'manager', 'tech']}>
+                <JobAccess>
+                  <JobDetailsPage />
+                </JobAccess>
+              </RequireRole>
+            }
+          />
           {/* Алиас для старых ссылок /job/:id */}
-          <Route path="/job/:id" element={
-            <RequireRole allow={['admin','manager','tech']}>
-              <JobAccess>
-                <JobDetailsPage />
-              </JobAccess>
-            </RequireRole>
-          } />
+          <Route
+            path="/job/:id"
+            element={
+              <RequireRole allow={['admin', 'manager', 'tech']}>
+                <JobAccess>
+                  <JobDetailsPage />
+                </JobAccess>
+              </RequireRole>
+            }
+          />
 
           {/* Корень и 404 */}
           <Route index element={<Navigate to="/jobs" replace />} />
           <Route path="*" element={<Navigate to="/jobs" replace />} />
-          </Routes>
+        </Routes>
       </div>
     </div>
   );
