@@ -19,7 +19,22 @@ function createPdf() {
   });
 }
 
-// keep logo crisp; compress but don't degrade too much
+// 1) ОРИГИНАЛ — без сжатия/скейла
+async function loadLogoOriginalDataURL() {
+  const res = await fetch('/logo_invoice_header.png');
+  if (!res.ok) throw new Error('Logo not found');
+  const blob = await res.blob();
+  const dataUrl = await new Promise((resolve) => {
+    const fr = new FileReader();
+    fr.onloadend = () => resolve(fr.result);
+    fr.readAsDataURL(blob);
+  });
+  // Определим формат из dataURL (PNG чаще всего)
+  const fmt = (dataUrl || '').slice(5, 14).toUpperCase().includes('PNG') ? 'PNG' : 'JPEG';
+  return { dataUrl, format: fmt };
+}
+
+// 2) СЖАТЫЙ ВАРИАНТ — уменьшение и перекодирование
 async function loadSmallLogoDataURL(maxWidth = 260) {
   const res = await fetch('/logo_invoice_header.png');
   if (!res.ok) throw new Error('Logo not found');
@@ -57,16 +72,25 @@ export default function InvoicePage() {
   const [client, setClient] = useState(null);
   const [rows, setRows] = useState([]);
   const [discount, setDiscount] = useState(0);
-  const [includeWarranty, setIncludeWarranty] = useState(true); // ← NEW
+
+  // NEW:
+  const [includeWarranty, setIncludeWarranty] = useState(true);
+  const [warrantyDays, setWarrantyDays] = useState(60); // по умолчанию 60
+  const [compressLogo, setCompressLogo] = useState(false); // по умолчанию НЕ сжимаем
+
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // English warranty text
-  const warrantyText =
-    'A 60-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ' +
-    'The warranty does not cover other components or the appliance as a whole, normal wear, consumables, ' +
-    'damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ' +
-    'The warranty starts on the job completion date and is valid only when the invoice is paid in full.';
+  const warrantyText = useMemo(() => {
+    const days = Number(warrantyDays || 0);
+    const plural = days === 1 ? 'day' : 'days';
+    return (
+      `A ${days}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
+      `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, ` +
+      `damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
+      `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`
+    );
+  }, [warrantyDays]);
 
   useEffect(() => {
     let alive = true;
@@ -154,13 +178,16 @@ export default function InvoicePage() {
     try {
       const doc = createPdf();
 
-      // logo
+      // ЛОГО: либо оригинал, либо сжатый вариант
       try {
-        const { dataUrl, format } = await loadSmallLogoDataURL(260);
+        const { dataUrl, format } = compressLogo
+          ? await loadSmallLogoDataURL(260)
+          : await loadLogoOriginalDataURL();
+        // размер на странице оставим одинаковый (28x28mm), чтобы не «расползалось»
         doc.addImage(dataUrl, format, 170, 10, 28, 28, undefined, 'FAST');
       } catch {}
 
-      // header
+      // Шапка
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(13);
       doc.text(`INVOICE #${job?.job_number || id}`, 100, 50, { align: 'center' });
@@ -169,7 +196,7 @@ export default function InvoicePage() {
       doc.setFontSize(9);
       doc.text(`Date: ${new Date().toLocaleDateString()}`, 100, 57, { align: 'center' });
 
-      // client (left)
+      // Клиент
       let yL = 68;
       doc.setFont('helvetica', 'bold'); doc.text('Bill To:', 14, yL); yL += 5;
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
@@ -178,7 +205,7 @@ export default function InvoicePage() {
       if (client?.phone)     { doc.text(String(client.phone),     14, yL); yL += 5; }
       if (client?.email)     { doc.text(String(client.email),     14, yL); yL += 5; }
 
-      // company (right)
+      // Компания
       let yR = 68;
       doc.setFont('helvetica', 'bold'); doc.text('Sim Scope Inc.', 200, yR, { align: 'right' }); yR += 5;
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
@@ -206,22 +233,24 @@ export default function InvoicePage() {
         styles: { fontSize: 9, halign: 'left', lineWidth: 0.1 },
         headStyles: { fillColor: [245,245,245], textColor: 0, fontStyle: 'bold' },
         alternateRowStyles: { fillColor: [255,255,255] },
-        margin: { left: 14, right: 20 },       // extra right gutter
+        margin: { left: 14, right: 20 }, // небольшой «воздух» справа
         columnStyles: { 0: { cellWidth: 122 }, 1: { cellWidth: 18 }, 2: { cellWidth: 22 }, 3: { cellWidth: 22 } },
       });
 
       let y = doc.lastAutoTable.finalY + 6;
 
-      // totals
+      // Итого
       doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
       doc.text(`Subtotal: ${CURRENCY(subtotal)}`, 200, y, { align: 'right' }); y += 5;
       doc.text(`Discount: -${CURRENCY(discount)}`, 200, y, { align: 'right' }); y += 5;
-      doc.text(`Total Due: ${CURRENCY(total)}`, 200, y, { align: 'right' }); y += 7;
+      doc.text(`Total Due: ${CURRENCY(Math.max(0, subtotal - Number(discount || 0)))}`, 200, y, { align: 'right' }); y += 7;
 
-      // warranty — only if enabled
+      // Гарантия (если включена)
       if (includeWarranty) {
+        const days = Number(warrantyDays || 0);
+        const plural = days === 1 ? 'day' : 'days';
         doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
-        doc.text('Warranty (60 days):', 14, y); y += 5;
+        doc.text(`Warranty (${days} ${plural}):`, 14, y); y += 5;
         doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
         const wrapped = doc.splitTextToSize(warrantyText, 182);
         doc.text(wrapped, 14, y); y += wrapped.length * 4 + 5;
@@ -262,15 +291,40 @@ export default function InvoicePage() {
 
         <div className="grow" />
 
-        <label className="inline-flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="scale-110"
-            checked={includeWarranty}
-            onChange={(e) => setIncludeWarranty(e.target.checked)}
-          />
-          Include 60-day warranty in invoice
-        </label>
+        <div className="flex flex-col gap-2 text-sm items-start">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="scale-110"
+              checked={includeWarranty}
+              onChange={(e) => setIncludeWarranty(e.target.checked)}
+            />
+            Include warranty block
+          </label>
+
+          {includeWarranty && (
+            <label className="inline-flex items-center gap-2">
+              Days:
+              <input
+                type="number"
+                min={1}
+                className="border rounded px-2 py-1 w-24 text-right"
+                value={warrantyDays}
+                onChange={(e) => setWarrantyDays(Math.max(1, Number(e.target.value || 60)))}
+              />
+            </label>
+          )}
+
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              className="scale-110"
+              checked={compressLogo}
+              onChange={(e) => setCompressLogo(e.target.checked)}
+            />
+            Compress logo (smaller PDF)
+          </label>
+        </div>
       </div>
 
       <div className="mt-3 text-sm">
@@ -339,7 +393,7 @@ export default function InvoicePage() {
 
       {includeWarranty && (
         <div className="mt-6 p-3 border rounded bg-gray-50 text-sm leading-5">
-          <div className="font-semibold mb-1">Warranty (60 days):</div>
+          <div className="font-semibold mb-1">Warranty ({warrantyDays} {Number(warrantyDays) === 1 ? 'day' : 'days'}):</div>
           <div>{warrantyText}</div>
         </div>
       )}
