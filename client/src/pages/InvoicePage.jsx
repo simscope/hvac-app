@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-// Загрузка логотипа из /public в dataURL для jsPDF
+// Загружаем логотип из /public в dataURL для jsPDF
 async function loadLogoDataURL() {
   const res = await fetch('/logo_invoice_header.png');
   const blob = await res.blob();
@@ -24,59 +24,52 @@ export default function InvoicePage() {
 
   const [job, setJob] = useState(null);
   const [client, setClient] = useState(null);
+
+  // строки инвойса
   const [rows, setRows] = useState([]);
   const [discount, setDiscount] = useState(0);
 
-  // устойчивый поиск заявки и связанных данных
+  // --- загрузка заявки/клиента/материалов ---
   useEffect(() => {
-    const fetchData = async () => {
+    const run = async () => {
+      setLoading(true);
+      setErr('');
+
       try {
-        setLoading(true);
-        setErr('');
-
-        // 1) Заявка
-        const isUuid = /^[0-9a-fA-F-]{36}$/.test(id);
-        const isNum = /^\d+$/.test(id);
-
+        // 1) Находим заявку: сначала пробуем как uuid id, если не получилось — как job_number (число)
         let jobData = null;
-        let jobErr = null;
 
-        if (isUuid) {
-          ({ data: jobData, error: jobErr } = await supabase
+        // пробуем по id (uuid)
+        try {
+          const { data, error } = await supabase
             .from('jobs')
             .select('*')
             .eq('id', id)
-            .maybeSingle());
-        } else if (isNum) {
-          ({ data: jobData, error: jobErr } = await supabase
+            .maybeSingle();
+          if (!error && data) jobData = data;
+        } catch (_) {
+          // если ошибся uuid — просто идём дальше
+        }
+
+        // если не нашли и id похоже на число — пробуем по job_number
+        if (!jobData && /^\d+$/.test(id)) {
+          const { data, error } = await supabase
             .from('jobs')
             .select('*')
             .eq('job_number', Number(id))
-            .maybeSingle());
+            .maybeSingle();
+          if (!error && data) jobData = data;
         }
 
-        // Запасной комбинированный поиск, если выше ничего не нашли
-        if (!jobData && !jobErr) {
-          const { data: anyJobs, error: anyErr } = await supabase
-            .from('jobs')
-            .select('*')
-            .or(`id.eq.${id},uid.eq.${id},uuid.eq.${id}`)
-            .limit(1);
-          jobErr = anyErr || null;
-          jobData = (anyJobs && anyJobs[0]) || null;
-        }
-
-        if (jobErr || !jobData) {
-          console.error('jobs lookup failed', { id, jobErr, jobData });
+        if (!jobData) {
           setErr('Не удалось загрузить заявку');
           setLoading(false);
           return;
         }
-
         setJob(jobData);
 
-        // 2) Клиент с мягким фолбэком из полей jobs
-        let clientObj = {
+        // 2) Клиент: либо из clients по client_id, либо поля из заявки
+        let cl = {
           full_name: jobData.client_name || jobData.full_name || '',
           address: jobData.client_address || jobData.address || '',
           phone: jobData.client_phone || jobData.phone || '',
@@ -84,40 +77,40 @@ export default function InvoicePage() {
         };
 
         if (jobData.client_id) {
-          const { data: clientData } = await supabase
+          const { data: cData } = await supabase
             .from('clients')
             .select('full_name,address,phone,email')
             .eq('id', jobData.client_id)
             .maybeSingle();
-          if (clientData) {
-            clientObj = {
-              full_name: clientData.full_name || '',
-              address: clientData.address || '',
-              phone: clientData.phone || '',
-              email: clientData.email || '',
+          if (cData) {
+            cl = {
+              full_name: cData.full_name || '',
+              address: cData.address || '',
+              phone: cData.phone || '',
+              email: cData.email || '',
             };
           }
         }
-        setClient(clientObj);
+        setClient(cl);
 
-        // 3) Материалы (materials.job_id — UUID из jobs.id)
-        const materialsJobId = jobData.id;
-        const { data: materialData } = await supabase
+        // 3) Материалы (берём только реально существующие поля)
+        const { data: mats } = await supabase
           .from('materials')
           .select('name, quantity, price')
-          .eq('job_id', materialsJobId);
+          .eq('job_id', jobData.id);
 
-        const initialRows = [
-          { type: 'service', name: 'Labor',            qty: 1, price: Number(jobData.labor_price || 0) },
+        // 4) Стартовые строки инвойса
+        const startRows = [
+          { type: 'service', name: 'Labor', qty: 1, price: Number(jobData.labor_price || 0) },
           { type: 'service', name: 'Service Call Fee', qty: 1, price: Number(jobData.scf || 0) },
-          ...((materialData || [])).map((m) => ({
+          ...((mats || []).map((m) => ({
             type: 'material',
             name: m.name || '',
             qty: Number(m.quantity || 0),
             price: Number(m.price || 0),
-          })),
+          }))),
         ];
-        setRows(initialRows);
+        setRows(startRows);
       } catch (e) {
         console.error(e);
         setErr('Не удалось загрузить заявку');
@@ -126,49 +119,40 @@ export default function InvoicePage() {
       }
     };
 
-    fetchData();
+    run();
   }, [id]);
 
-  // ---- расчёты
-  const subtotal = rows.reduce(
-    (sum, item) => sum + Number(item.qty || 0) * Number(item.price || 0),
-    0
-  );
+  // --- расчёты ---
+  const subtotal = rows.reduce((acc, r) => acc + Number(r.qty || 0) * Number(r.price || 0), 0);
   const total = subtotal - Number(discount || 0);
 
-  // ---- изменения строк
-  const handleChange = (index, key, value) => {
+  // --- управление строками ---
+  const changeRow = (i, key, value) => {
     setRows((prev) => {
-      const updated = [...prev];
-      updated[index] =
+      const copy = [...prev];
+      copy[i] =
         key === 'name' || key === 'type'
-          ? { ...updated[index], [key]: value }
-          : { ...updated[index], [key]: parseFloat(value) || 0 };
-      return updated;
+          ? { ...copy[i], [key]: value }
+          : { ...copy[i], [key]: parseFloat(value) || 0 };
+      return copy;
     });
   };
+  const addRow = () => setRows((prev) => [...prev, { type: 'material', name: '', qty: 1, price: 0 }]);
+  const delRow = (i) => setRows((prev) => prev.filter((_, idx) => idx !== i));
 
-  const addRow = () =>
-    setRows((prev) => [...prev, { type: 'material', name: '', qty: 1, price: 0 }]);
-
-  const deleteRow = (index) =>
-    setRows((prev) => prev.filter((_, i) => i !== index));
-
-  // ---- экспорт PDF
-  const handleDownload = async () => {
+  // --- PDF ---
+  const downloadPdf = async () => {
     const doc = new jsPDF();
 
-    const serviceRows = rows.filter((r) => r.type === 'service');
-    const materialRows = rows.filter((r) => r.type === 'material');
-
+    // Логотип
     try {
-      const logoDataUrl = await loadLogoDataURL();
-      doc.addImage(logoDataUrl, 'PNG', 170, 10, 30, 30);
+      const logo = await loadLogoDataURL();
+      doc.addImage(logo, 'PNG', 170, 10, 30, 30);
     } catch (e) {
-      console.warn('Logo load failed, continue without logo', e);
+      console.warn('Logo not loaded, continue', e);
     }
 
-    // INVOICE + дата
+    // Заголовок
     doc.setFont(undefined, 'bold');
     doc.setFontSize(14);
     doc.text(`INVOICE #${job?.job_number || id}`, 100, 50, { align: 'center' });
@@ -176,78 +160,70 @@ export default function InvoicePage() {
     doc.setFontSize(10);
     doc.text(`Date: ${new Date().toLocaleDateString()}`, 100, 58, { align: 'center' });
 
-    // Клиент
-    let yLeft = 70;
+    // Клиент слева
+    let yL = 70;
     doc.setFont(undefined, 'bold');
-    doc.text('Bill To:', 14, yLeft); yLeft += 6;
+    doc.text('Bill To:', 14, yL); yL += 6;
     doc.setFont(undefined, 'normal');
-    doc.text(client?.full_name || '', 14, yLeft); yLeft += 6;
-    doc.text(client?.address || '', 14, yLeft); yLeft += 6;
-    doc.text(client?.phone || '', 14, yLeft); yLeft += 6;
-    doc.text(client?.email || '', 14, yLeft); yLeft += 8;
+    doc.text(client?.full_name || '', 14, yL); yL += 6;
+    doc.text(client?.address || '', 14, yL); yL += 6;
+    doc.text(client?.phone || '', 14, yL); yL += 6;
+    doc.text(client?.email || '', 14, yL); yL += 8;
 
-    // Компания
-    let yRight = 70;
+    // Компания справа
+    let yR = 70;
     doc.setFont(undefined, 'bold');
-    doc.text('Sim Scope Inc.', 200, yRight, { align: 'right' }); yRight += 6;
+    doc.text('Sim Scope Inc.', 200, yR, { align: 'right' }); yR += 6;
     doc.setFont(undefined, 'normal');
-    doc.text('1587 E 19th St', 200, yRight, { align: 'right' }); yRight += 6;
-    doc.text('Brooklyn, NY 11230', 200, yRight, { align: 'right' }); yRight += 6;
-    doc.text('(929) 412-9042', 200, yRight, { align: 'right' }); yRight += 6;
-    doc.text('simscopeinc@gmail.com', 200, yRight, { align: 'right' });
+    doc.text('1587 E 19th St', 200, yR, { align: 'right' }); yR += 6;
+    doc.text('Brooklyn, NY 11230', 200, yR, { align: 'right' }); yR += 6;
+    doc.text('(929) 412-9042', 200, yR, { align: 'right' }); yR += 6;
+    doc.text('simscopeinc@gmail.com', 200, yR, { align: 'right' });
+
+    // Таблица
+    const head = [['Service', 'Qty', 'Unit Price', 'Amount']];
+    const serviceRows = rows.filter((r) => r.type === 'service').map((r) => [
+      r.name,
+      r.qty,
+      `$${Number(r.price).toFixed(2)}`,
+      `$${(Number(r.qty) * Number(r.price)).toFixed(2)}`
+    ]);
+    const materialsHeader = [{ content: 'MATERIALS', colSpan: 4, styles: { halign: 'left', fillColor: [230,230,230], fontStyle: 'bold' } }];
+    const materialRows = rows.filter((r) => r.type === 'material').map((r) => [
+      r.name,
+      r.qty,
+      `$${Number(r.price).toFixed(2)}`,
+      `$${(Number(r.qty) * Number(r.price)).toFixed(2)}`
+    ]);
 
     autoTable(doc, {
-      startY: Math.max(yLeft, yRight) + 10,
-      head: [['Service', 'Qty', 'Unit Price', 'Amount']],
-      body: [
-        ...serviceRows.map((r) => [
-          r.name,
-          r.qty,
-          `$${Number(r.price).toFixed(2)}`,
-          `$${(Number(r.qty) * Number(r.price)).toFixed(2)}`
-        ]),
-        [{ content: 'MATERIALS', colSpan: 4, styles: { halign: 'left', fillColor: [230,230,230], fontStyle: 'bold' } }],
-        ...materialRows.map((r) => [
-          r.name,
-          r.qty,
-          `$${Number(r.price).toFixed(2)}`,
-          `$${(Number(r.qty) * Number(r.price)).toFixed(2)}`
-        ]),
-      ],
+      startY: Math.max(yL, yR) + 10,
+      head,
+      body: [...serviceRows, materialsHeader, ...materialRows],
       styles: { fontSize: 10, halign: 'left', lineWidth: 0.1 },
       headStyles: { fillColor: [245,245,245], textColor: 0, fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [255,255,255] },
       margin: { left: 14, right: 14 },
-      columnStyles: {
-        0: { cellWidth: 130 },
-        1: { cellWidth: 20 },
-        2: { cellWidth: 25 },
-        3: { cellWidth: 25 },
-      },
+      columnStyles: { 0: { cellWidth: 130 }, 1: { cellWidth: 20 }, 2: { cellWidth: 25 }, 3: { cellWidth: 25 } }
     });
 
-    let endY = doc.lastAutoTable.finalY + 10;
-    doc.setFontSize(12);
+    let y = doc.lastAutoTable.finalY + 10;
     doc.setFont(undefined, 'bold');
-    doc.text(`Subtotal: $${subtotal.toFixed(2)}`, 200, endY, { align: 'right' }); endY += 6;
-    doc.text(`Discount: -$${Number(discount || 0).toFixed(2)}`, 200, endY, { align: 'right' }); endY += 6;
-    doc.text(`Total Due: $${total.toFixed(2)}`, 200, endY, { align: 'right' });
+    doc.setFontSize(12);
+    doc.text(`Subtotal: $${subtotal.toFixed(2)}`, 200, y, { align: 'right' }); y += 6;
+    doc.text(`Discount: -$${Number(discount || 0).toFixed(2)}`, 200, y, { align: 'right' }); y += 6;
+    doc.text(`Total Due: $${(subtotal - Number(discount || 0)).toFixed(2)}`, 200, y, { align: 'right' });
 
     doc.save(`invoice_${job?.job_number || id}.pdf`);
   };
 
-  // ---- отображение
+  // --- UI ---
   if (loading) return <div className="p-4">Загрузка…</div>;
   if (err) return <div className="p-4">{err}</div>;
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex justify-between mb-4">
-        <img
-          src="/logo_invoice_header.png"
-          alt="Logo"
-          style={{ width: 60, height: 60, objectFit: 'contain' }}
-        />
+        <img src="/logo_invoice_header.png" alt="Logo" style={{ width: 60, height: 60, objectFit: 'contain' }} />
         <div className="text-right text-sm">
           <p><strong>Sim Scope Inc.</strong></p>
           <p>1587 E 19th St, Brooklyn, NY 11230</p>
@@ -279,7 +255,7 @@ export default function InvoicePage() {
               <td>
                 <select
                   value={r.type}
-                  onChange={(e) => handleChange(i, 'type', e.target.value)}
+                  onChange={(e) => changeRow(i, 'type', e.target.value)}
                   className="border px-2"
                 >
                   <option value="service">service</option>
@@ -289,7 +265,7 @@ export default function InvoicePage() {
               <td>
                 <input
                   value={r.name}
-                  onChange={(e) => handleChange(i, 'name', e.target.value)}
+                  onChange={(e) => changeRow(i, 'name', e.target.value)}
                   className="border px-2"
                 />
               </td>
@@ -297,7 +273,7 @@ export default function InvoicePage() {
                 <input
                   type="number"
                   value={r.qty}
-                  onChange={(e) => handleChange(i, 'qty', e.target.value)}
+                  onChange={(e) => changeRow(i, 'qty', e.target.value)}
                   className="border w-16 text-center"
                 />
               </td>
@@ -305,13 +281,13 @@ export default function InvoicePage() {
                 <input
                   type="number"
                   value={r.price}
-                  onChange={(e) => handleChange(i, 'price', e.target.value)}
+                  onChange={(e) => changeRow(i, 'price', e.target.value)}
                   className="border w-20 text-right"
                 />
               </td>
               <td>${(Number(r.qty) * Number(r.price)).toFixed(2)}</td>
               <td>
-                <button onClick={() => deleteRow(i)} className="text-red-600 px-2">✕</button>
+                <button onClick={() => delRow(i)} className="text-red-600 px-2">✕</button>
               </td>
             </tr>
           ))}
@@ -335,14 +311,11 @@ export default function InvoicePage() {
             onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
           />
         </div>
-        <p className="font-bold text-lg mt-2">Total Due: ${total.toFixed(2)}</p>
+        <p className="font-bold text-lg mt-2">Total Due: ${(subtotal - Number(discount || 0)).toFixed(2)}</p>
       </div>
 
       <div className="mt-4">
-        <button
-          onClick={handleDownload}
-          className="bg-blue-600 text-white px-4 py-2 rounded"
-        >
+        <button onClick={downloadPdf} className="bg-blue-600 text-white px-4 py-2 rounded">
           📄 Скачать PDF
         </button>
       </div>
