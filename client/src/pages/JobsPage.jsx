@@ -5,7 +5,7 @@ import CreateJob from '../components/CreateJob';
 import { supabase } from '../supabaseClient';
 
 const STATUS_ORDER = [
-  'recall',
+  'ReCall',
   'диагностика',
   'в работе',
   'заказ деталей',
@@ -18,6 +18,7 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
   const [clients, setClients] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [savingId, setSavingId] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -45,44 +46,84 @@ export default function JobsPage() {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
     const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(
-      d.getMinutes()
-    )}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
+      d.getHours()
+    )}:${p(d.getMinutes())}`;
   };
 
-  // Подмешаем имя клиента, телефон и т.п. для таблицы
-  const jobsView = useMemo(() => {
-    return (jobs || []).map((j) => {
-      const c = clients.find((x) => x.id === j.client_id);
-      return {
-        ...j,
-        client_name: c?.full_name || c?.name || '—',
-        client_phone: c?.phone || '',
-        created_at_fmt: fmtDate(j.created_at),
-      };
-    });
-  }, [jobs, clients]);
+  // представление для таблицы
+  const jobsView = useMemo(
+    () =>
+      (jobs || []).map((j) => {
+        const c = clients.find((x) => x.id === j.client_id);
+        return {
+          ...j,
+          client_name: c?.full_name || c?.name || '—',
+          client_phone: c?.phone || '',
+          created_at_fmt: fmtDate(j.created_at),
+        };
+      }),
+    [jobs, clients]
+  );
 
-  // сортировка: по статусу (по приоритету) + новее сверху
-  const orderMap = useMemo(() => new Map(STATUS_ORDER.map((s, i) => [s, i])), []);
+  // сортировка: приоритет статуса + новее выше
+  const orderMap = useMemo(
+    () => new Map(STATUS_ORDER.map((s, i) => [s.toLowerCase(), i])),
+    []
+  );
+
   const sortedJobs = useMemo(() => {
     return [...jobsView].sort((a, b) => {
-      const ar = orderMap.has(String(a.status).toLowerCase())
-        ? orderMap.get(String(a.status).toLowerCase())
+      const ar = orderMap.has(String(a.status || '').toLowerCase())
+        ? orderMap.get(String(a.status || '').toLowerCase())
         : 999;
-      const br = orderMap.has(String(b.status).toLowerCase())
-        ? orderMap.get(String(b.status).toLowerCase())
+      const br = orderMap.has(String(b.status || '').toLowerCase())
+        ? orderMap.get(String(b.status || '').toLowerCase())
         : 999;
       if (ar !== br) return ar - br;
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     });
   }, [jobsView, orderMap]);
 
-  const openJob = (jobId) => navigate(`/job/${jobId}`);
+  // локальное редактирование ячеек
+  const handleChange = (id, field, value) => {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
+  };
+
+  // сохранение (минимально нужные поля)
+  const handleSave = async (job) => {
+    setSavingId(job.id);
+    try {
+      const payload = {
+        technician_id:
+          job.technician_id === '' || job.technician_id == null
+            ? null
+            : job.technician_id,
+        status: job.status ?? null,
+        scf:
+          job.scf === '' || job.scf == null
+            ? null
+            : Number.isNaN(Number(job.scf))
+            ? null
+            : Number(job.scf),
+      };
+      const { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
+      if (error) throw error;
+      await fetchAll();
+      alert('Сохранено');
+    } catch (e) {
+      console.error(e);
+      alert('Ошибка при сохранении');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const openJob = (id) => navigate(`/job/${id}`);
 
   return (
     <div className="p-4">
-      {/* Стили совпадают с «Все заявки», плюс адаптивные скрытия колонок на телефоне */}
+      {/* Стили как у «Все заявки», адаптивность: скрываем только Систему и Дату */}
       <style>{`
         .jobs-table { width:100%; table-layout:fixed; border-collapse:collapse; }
         .jobs-table thead th { background:#f3f4f6; font-weight:600; }
@@ -92,36 +133,35 @@ export default function JobsPage() {
         .row-click { cursor:pointer; }
         .row-click:hover { background:#f9fafb; }
 
-        /* Адаптивность:
-           - скрываем менее важные колонки на небольших экранах
-           - сделано классами, чтобы было прозрачно и управляемо
-        */
+        .jobs-table input, .jobs-table select {
+          width: 100%;
+          height: 28px;
+          font-size: 14px;
+          padding: 2px 6px;
+          box-sizing: border-box;
+        }
+
+        /* адаптив: оставляем колонки с редактированием видимыми */
         @media (max-width: 1024px) {
           .col-system, .col-date { display:none; }
         }
-        @media (max-width: 820px) {
-          .col-scf, .col-status { display:none; }
-        }
-        @media (max-width: 640px) {
-          .col-tech { display:none; }
-        }
       `}</style>
 
-      {/* форма добавления заявки оставляем как есть */}
+      {/* форма создания заявки — без изменений */}
       <CreateJob onCreated={fetchAll} />
 
       <div className="overflow-x-auto" style={{ marginTop: 16 }}>
         <table className="jobs-table">
           <colgroup>
             <col style={{ width: 70 }} />
-            <col style={{ width: 220 }} />
-            <col style={{ width: 120 }} className="col-system" />
+            <col style={{ width: 240 }} />
+            <col style={{ width: 140 }} className="col-system" />
             <col style={{ width: 300 }} />
-            <col style={{ width: 90 }} className="col-scf" />
-            <col style={{ width: 150 }} className="col-tech" />
+            <col style={{ width: 100 }} />
+            <col style={{ width: 170 }} />
             <col style={{ width: 160 }} className="col-date" />
-            <col style={{ width: 140 }} className="col-status" />
-            <col style={{ width: 120 }} />
+            <col style={{ width: 160 }} />
+            <col style={{ width: 140 }} />
           </colgroup>
 
           <thead>
@@ -130,17 +170,16 @@ export default function JobsPage() {
               <th>Клиент</th>
               <th className="col-system">Система</th>
               <th>Проблема</th>
-              <th className="col-scf">SCF</th>
-              <th className="col-tech">Техник</th>
+              <th>SCF</th>
+              <th>Техник</th>
               <th className="col-date">Дата</th>
-              <th className="col-status">Статус</th>
+              <th>Статус</th>
               <th>Действия</th>
             </tr>
           </thead>
 
           <tbody>
             {sortedJobs.map((job) => {
-              const tech = technicians.find((t) => String(t.id) === String(job.technician_id));
               return (
                 <tr
                   key={job.id}
@@ -163,6 +202,7 @@ export default function JobsPage() {
                   }}
                   title="Открыть заявку"
                 >
+                  {/* Job # */}
                   <td>
                     <div
                       className="cell-wrap num-link"
@@ -175,6 +215,7 @@ export default function JobsPage() {
                     </div>
                   </td>
 
+                  {/* Клиент (имя + телефон) */}
                   <td>
                     <div className="cell-wrap">
                       {job.client_name}
@@ -182,38 +223,74 @@ export default function JobsPage() {
                     </div>
                   </td>
 
+                  {/* Система (только просмотр) */}
                   <td className="col-system">
                     <div className="cell-wrap">{job.system_type || '—'}</div>
                   </td>
 
+                  {/* Проблема (только просмотр) */}
                   <td>
                     <div className="cell-wrap">{job.issue || '—'}</div>
                   </td>
 
-                  <td className="col-scf">
-                    <div className="cell-wrap">{job.scf ?? '—'}</div>
+                  {/* SCF (editable) */}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="number"
+                      value={job.scf ?? ''}
+                      onChange={(e) => handleChange(job.id, 'scf', e.target.value)}
+                      placeholder="—"
+                    />
                   </td>
 
-                  <td className="col-tech">
-                    <div className="cell-wrap">{tech?.name || '—'}</div>
+                  {/* Техник (editable select) */}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <select
+                      value={job.technician_id || ''}
+                      onChange={(e) => handleChange(job.id, 'technician_id', e.target.value || null)}
+                    >
+                      <option value="">—</option>
+                      {technicians.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
                   </td>
 
+                  {/* Дата (только просмотр) */}
                   <td className="col-date">
                     <div className="cell-wrap">{job.created_at_fmt}</div>
                   </td>
 
-                  <td className="col-status">
-                    <div className="cell-wrap">{job.status || '—'}</div>
+                  {/* Статус (editable select) */}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <select
+                      value={job.status || ''}
+                      onChange={(e) => handleChange(job.id, 'status', e.target.value)}
+                    >
+                      <option value="">—</option>
+                      {STATUS_ORDER.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
                   </td>
 
-                  <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                  {/* Действия */}
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <button
+                        title="Сохранить"
+                        onClick={() => handleSave(job)}
+                        disabled={savingId === job.id}
+                      >
+                        {savingId === job.id ? '…' : '💾'}
+                      </button>
                       <button
                         title="Редактировать"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openJob(job.id);
-                        }}
+                        onClick={() => openJob(job.id)}
                       >
                         ✏️
                       </button>
