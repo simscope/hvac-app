@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/* ── helpers ─────────────────────────────────────────────────────────── */
+/* ========== helpers ========== */
 const pad = (n) => String(n).padStart(2, '0');
 const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fromInputDate = (s) => {
@@ -15,14 +15,10 @@ const fromInputDate = (s) => {
 };
 const formatHuman = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 const num = (v) => Number(v || 0);
-
-/* значение вида 'EMPTY' считаем пустым */
 const clean = (v) => {
   const s = String(v ?? '').trim();
   return s && s.toLowerCase() !== 'empty' ? s : '';
 };
-
-/* загрузка логотипа из /public без сжатия */
 async function loadLogoDataURL() {
   try {
     const res = await fetch('/logo_invoice_header.png', { cache: 'force-cache' });
@@ -37,8 +33,6 @@ async function loadLogoDataURL() {
     return null;
   }
 }
-
-/* собрать адрес из набора возможных полей */
 function composeAddress(obj = {}) {
   const parts = [
     obj.address,
@@ -57,8 +51,6 @@ function composeAddress(obj = {}) {
     .filter(Boolean);
   return [...new Set(parts)].join(', ');
 }
-
-/* найти значение по нескольким ключам */
 function pick(obj = {}, keys = []) {
   for (const k of keys) {
     const v = clean(obj[k]);
@@ -67,9 +59,27 @@ function pick(obj = {}, keys = []) {
   return '';
 }
 
-/* ── страница ─────────────────────────────────────────────────────────── */
+/* ========== inline styles (как на других страницах) ========== */
+const S = {
+  page: { maxWidth: 920, margin: '0 auto', padding: 16 },
+  h1: { fontWeight: 800, fontSize: 24, margin: '4px 0 14px' },
+  row: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' },
+  input: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' },
+  select: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%', height: 36 },
+  card: { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 },
+  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+  muted: { color: '#6b7280' },
+  btn: { padding: '9px 14px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' },
+  primary: { padding: '10px 16px', borderRadius: 10, border: '1px solid #2563eb', background: '#2563eb', color: '#fff', cursor: 'pointer' },
+  ghost: { padding: '9px 14px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#f8fafc', cursor: 'pointer' },
+  table: { width: '100%', borderCollapse: 'collapse' },
+  th: { textAlign: 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 },
+  td: { borderBottom: '1px solid #f1f5f9', padding: 6 },
+};
+
+/* ========== component ========== */
 export default function InvoicePage() {
-  const { id } = useParams(); // job id (может отсутствовать)
+  const { id } = useParams(); // job id
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -82,7 +92,7 @@ export default function InvoicePage() {
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
-  // строки счёта
+  // строки
   const [rows, setRows] = useState([]);
   const [discount, setDiscount] = useState(0);
 
@@ -96,7 +106,7 @@ export default function InvoicePage() {
 
   const [logoDataURL, setLogoDataURL] = useState(null);
 
-  /* ── загрузка данных ─────────────────────────────────────────────────── */
+  /* ------ load ------ */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -108,13 +118,13 @@ export default function InvoicePage() {
 
       let j = null;
       if (id) {
-        const { data: jData } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
+        const { data } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
         if (!alive) return;
-        j = jData || null;
+        j = data || null;
         setJob(j);
       }
 
-      // 1) пробуем по client_id
+      // клиент
       let c = null;
       if (j?.client_id) {
         const { data: cData } = await supabase
@@ -125,18 +135,14 @@ export default function InvoicePage() {
         if (!alive) return;
         c = cData || null;
       }
-
-      // 2) fallback: если client_id нет — ищем по телефону/почте/имени из заявки
       if (!c && j) {
         const n = clean(pick(j, ['client_name', 'full_name', 'name']));
         const p = clean(pick(j, ['client_phone', 'phone']));
         const e = clean(pick(j, ['client_email', 'email']));
-
         const filters = [];
         if (n) filters.push(`full_name.eq.${encodeURIComponent(n)}`);
         if (p) filters.push(`phone.eq.${encodeURIComponent(p)}`);
         if (e) filters.push(`email.eq.${encodeURIComponent(e)}`);
-
         if (filters.length) {
           const { data: guess } = await supabase
             .from('clients')
@@ -149,40 +155,29 @@ export default function InvoicePage() {
         }
       }
 
-      // Собираем Bill To
-      const name =
-        pick(c, ['full_name', 'name']) ||
-        pick(j, ['client_name', 'full_name', 'name']) ||
-        '';
-      const addr =
+      setBillName(pick(c, ['full_name', 'name']) || pick(j, ['client_name', 'full_name', 'name']) || '');
+      setBillAddress(
         composeAddress(c) ||
-        composeAddress(j) ||
-        composeAddress({
-          address: pick(j, ['client_address', 'address']),
-          address_line1: j?.address_line1,
-          address_line2: j?.address_line2,
-          city: j?.city,
-          state: j?.state,
-          zip: j?.zip || j?.postal_code,
-        });
-      const phone = pick(c, ['phone']) || pick(j, ['client_phone', 'phone']) || '';
-      const email = pick(c, ['email']) || pick(j, ['client_email', 'email']) || '';
+          composeAddress(j) ||
+          composeAddress({
+            address: pick(j, ['client_address', 'address']),
+            address_line1: j?.address_line1,
+            address_line2: j?.address_line2,
+            city: j?.city,
+            state: j?.state,
+            zip: j?.zip || j?.postal_code,
+          })
+      );
+      setBillPhone(pick(c, ['phone']) || pick(j, ['client_phone', 'phone']) || '');
+      setBillEmail(pick(c, ['email']) || pick(j, ['client_email', 'email']) || '');
 
-      setBillName(name);
-      setBillAddress(addr);
-      setBillPhone(phone);
-      setBillEmail(email);
-
-      // Строки
+      // строки
       if (id) {
         const baseRows = [
           { type: 'service', name: 'Labor', qty: 1, price: num(j?.labor_price) },
           { type: 'service', name: 'Service Call Fee', qty: 1, price: num(j?.scf) },
         ];
-        const { data: mats } = await supabase
-          .from('materials')
-          .select('name,qty,price')
-          .eq('job_id', id);
+        const { data: mats } = await supabase.from('materials').select('name,qty,price').eq('job_id', id);
         if (!alive) return;
         const matRows =
           (mats || []).map((m) => ({
@@ -199,37 +194,24 @@ export default function InvoicePage() {
         ]);
       }
 
-      // Авто-номер (максимальный + 1)
+      // авто номер
       if (!invoiceNo) {
         try {
-          const { data } = await supabase
-            .from('invoices')
-            .select('invoice_no')
-            .order('invoice_no', { ascending: false })
-            .limit(1);
+          const { data } = await supabase.from('invoices').select('invoice_no').order('invoice_no', { ascending: false }).limit(1);
           if (!alive) return;
           const next = (data?.[0]?.invoice_no || 0) + 1;
           setInvoiceNo(String(next));
-        } catch {
-          setInvoiceNo('');
-        }
+        } catch { /* noop */ }
       }
-
       setInvoiceDate(new Date());
       setLoading(false);
     })();
-
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  /* ── вычисления ─────────────────────────────────────────────────────── */
-  const subtotal = useMemo(
-    () => rows.reduce((s, r) => s + num(r.qty) * num(r.price), 0),
-    [rows]
-  );
+  /* ------ calc ------ */
+  const subtotal = useMemo(() => rows.reduce((s, r) => s + num(r.qty) * num(r.price), 0), [rows]);
   const total = useMemo(() => Math.max(0, num(subtotal) - num(discount)), [subtotal, discount]);
 
   const changeRow = (i, key, val) => {
@@ -242,7 +224,6 @@ export default function InvoicePage() {
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ── мягкое сохранение в БД (RLS-скрытый фэйл не ломает скачивание) ─── */
   async function persistInvoice() {
     const payload = {
       job_id: id ?? null,
@@ -259,7 +240,6 @@ export default function InvoicePage() {
       include_warranty: includeWarranty,
       warranty_days: Number(warrantyDays || 0),
     };
-
     try {
       const { error } = await supabase.from('invoices').insert(payload);
       if (error) throw error;
@@ -270,21 +250,15 @@ export default function InvoicePage() {
     }
   }
 
-  /* ── PDF ─────────────────────────────────────────────────────────────── */
   async function saveAndDownload() {
     if (loading) return;
     setSaving(true);
     try {
       const saved = await persistInvoice();
 
-      const doc = new jsPDF({
-        unit: 'pt',
-        format: 'letter',
-        compress: true,
-        putOnlyUsedFonts: true,
-      });
+      const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
 
-      // Title + Date
+      // заголовок/дата
       doc.setFontSize(14);
       doc.setFont(undefined, 'bold');
       doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 306, 52, { align: 'center' });
@@ -292,37 +266,31 @@ export default function InvoicePage() {
       doc.setFont(undefined, 'normal');
       doc.text(`Date: ${formatHuman(invoiceDate)}`, 306, 68, { align: 'center' });
 
-      // Logo (right top)
+      // логотип
       const logo = logoDataURL || (await loadLogoDataURL());
       if (logo) doc.addImage(logo, 'PNG', 460, 30, 90, 90);
 
-      // Bill To (left)
+      // Bill To
       const left = 40;
       let y = 100;
       doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', left, y);
-      y += 14;
+      doc.text('Bill To:', left, y); y += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), left, y);
-        y += 12;
+        doc.text(String(line), left, y); y += 12;
       });
 
-      // Company (right)
+      // Компания (справа)
       const right = 612 - 40;
       let ry = 100;
       doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', right, ry, { align: 'right' });
-      ry += 14;
+      doc.text('Sim Scope Inc.', right, ry, { align: 'right' }); ry += 14;
       doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach(
-        (line) => {
-          doc.text(line, right, ry, { align: 'right' });
-          ry += 12;
-        }
-      );
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
+        doc.text(line, right, ry, { align: 'right' }); ry += 12;
+      });
 
-      // Table
+      // Таблица
       const startY = Math.max(y, ry) + 14;
       const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
@@ -347,19 +315,14 @@ export default function InvoicePage() {
 
       let endY = doc.lastAutoTable.finalY + 10;
       doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${num(subtotal).toFixed(2)}`, right, endY, { align: 'right' });
-      endY += 14;
-      doc.text(`Discount: -$${num(discount).toFixed(2)}`, right, endY, { align: 'right' });
-      endY += 14;
-      doc.text(`Total Due: $${num(total).toFixed(2)}`, right, endY, { align: 'right' });
-      endY += 18;
+      doc.text(`Subtotal: $${num(subtotal).toFixed(2)}`, right, endY, { align: 'right' }); endY += 14;
+      doc.text(`Discount: -$${num(discount).toFixed(2)}`, right, endY, { align: 'right' }); endY += 14;
+      doc.text(`Total Due: $${num(total).toFixed(2)}`, right, endY, { align: 'right' }); endY += 18;
 
       if (includeWarranty && Number(warrantyDays) > 0) {
         doc.setFont(undefined, 'bold');
-        doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY);
-        endY += 12;
-        doc.setFont(undefined, 'normal');
-        doc.setFontSize(9);
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY); endY += 12;
+        doc.setFont(undefined, 'normal'); doc.setFontSize(9);
         const txt =
           `A ${Number(
             warrantyDays
@@ -368,19 +331,15 @@ export default function InvoicePage() {
           `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
         const lines = doc.splitTextToSize(txt, 612 - 80);
         doc.text(lines, 40, endY);
-        endY += lines.length * 10;
       }
 
       doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
       doc.text('Thank you for your business!', right, 760, { align: 'right' });
 
       const filename = `invoice_${invoiceNo || (id ? `job_${id}` : 'draft')}.pdf`;
       doc.save(filename);
 
-      if (!saved) {
-        alert('PDF downloaded. Saving to DB was skipped (RLS/schema). See console for details.');
-      }
+      if (!saved) alert('PDF downloaded. Saving to DB was skipped (RLS/schema).');
     } catch (e) {
       console.error(e);
       alert('Failed to save or download invoice');
@@ -389,86 +348,67 @@ export default function InvoicePage() {
     }
   }
 
-  /* ── UI ──────────────────────────────────────────────────────────────── */
   const busy = loading || saving;
 
+  /* ------ UI (инлайн стили) ------ */
   return (
-    <div className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-xl font-bold mb-3">Invoice</h1>
+    <div style={S.page}>
+      <div style={S.h1}>Invoice</div>
 
-      <div className="flex flex-wrap items-center gap-3 mb-4">
-        <label className="font-semibold">Invoice #</label>
-        <input
-          className="border px-2 py-1 w-32"
-          value={invoiceNo}
-          onChange={(e) => setInvoiceNo(e.target.value.replace(/[^\d]/g, ''))}
-          placeholder="auto"
-        />
-
-        <label className="font-semibold ml-2">Date</label>
-        <input
-          type="date"
-          className="border px-2 py-1"
-          value={toInputDate(invoiceDate)}
-          onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
-        />
-
-        <label className="ml-4 inline-flex items-center gap-2">
+      {/* панель настроек */}
+      <div style={{ ...S.card, marginBottom: 12 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <div style={{ fontWeight: 600 }}>Invoice #</div>
           <input
-            type="checkbox"
-            checked={includeWarranty}
-            onChange={(e) => setIncludeWarranty(e.target.checked)}
+            style={{ ...S.input, width: 120 }}
+            value={invoiceNo}
+            onChange={(e) => setInvoiceNo(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="auto"
           />
-          <span>Include warranty</span>
-        </label>
 
-        <label className="inline-flex items-center gap-2">
-          Days:
+          <div style={{ fontWeight: 600, marginLeft: 6 }}>Date</div>
           <input
-            type="number"
-            className="border px-2 py-1 w-20"
-            value={warrantyDays}
-            onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
-            min={0}
+            type="date"
+            style={S.input}
+            value={toInputDate(invoiceDate)}
+            onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
           />
-        </label>
-      </div>
 
-      {/* Bill To */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-        <div>
-          <div className="font-semibold mb-1">Bill To</div>
-          <input
-            className="border px-2 py-1 w-full mb-2"
-            placeholder="Full name / Company"
-            value={billName}
-            onChange={(e) => setBillName(e.target.value)}
-          />
-          <input
-            className="border px-2 py-1 w-full mb-2"
-            placeholder="Address"
-            value={billAddress}
-            onChange={(e) => setBillAddress(e.target.value)}
-          />
-          <div className="flex gap-2">
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 10 }}>
+            <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
+            Include warranty
+          </label>
+
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            Days:
             <input
-              className="border px-2 py-1 w-full"
-              placeholder="Phone"
-              value={billPhone}
-              onChange={(e) => setBillPhone(e.target.value)}
-            />
-            <input
-              className="border px-2 py-1 w-full"
-              placeholder="Email"
-              value={billEmail}
-              onChange={(e) => setBillEmail(e.target.value)}
+              type="number"
+              min={0}
+              style={{ ...S.input, width: 80 }}
+              value={warrantyDays}
+              onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
             />
           </div>
         </div>
+      </div>
 
-        <div>
-          <div className="font-semibold mb-1">Job</div>
-          <div className="text-sm text-gray-600 whitespace-pre-line">
+      {/* Bill To + Job */}
+      <div style={{ ...S.grid2, marginBottom: 12 }}>
+        <div style={S.card}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Bill To</div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <input style={S.input} placeholder="Full name / Company" value={billName} onChange={(e) => setBillName(e.target.value)} />
+            <input style={S.input} placeholder="Address" value={billAddress} onChange={(e) => setBillAddress(e.target.value)} />
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <input style={S.input} placeholder="Phone" value={billPhone} onChange={(e) => setBillPhone(e.target.value)} />
+              <input style={S.input} placeholder="Email" value={billEmail} onChange={(e) => setBillEmail(e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        <div style={S.card}>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Job</div>
+          <div style={S.muted}>
             {job
               ? [
                   job?.job_number ? `Job #${job.job_number}` : '',
@@ -476,101 +416,94 @@ export default function InvoicePage() {
                   job?.issue ? `Issue: ${job.issue}` : '',
                 ]
                   .filter(Boolean)
-                  .join('\n')
+                  .join(' · ')
               : 'No job linked'}
           </div>
         </div>
       </div>
 
-      {/* Таблица строк */}
-      <table className="w-full text-sm border-collapse mb-3">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="text-left p-2 border">Type</th>
-            <th className="text-left p-2 border">Name</th>
-            <th className="text-center p-2 border">Qty</th>
-            <th className="text-right p-2 border">Price</th>
-            <th className="text-right p-2 border">Amount</th>
-            <th className="p-2 border"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              <td className="border p-1">
-                <select
-                  className="border px-2 py-1 w-full"
-                  value={r.type}
-                  onChange={(e) => changeRow(i, 'type', e.target.value)}
-                >
-                  <option value="service">service</option>
-                  <option value="material">material</option>
-                </select>
-              </td>
-              <td className="border p-1">
-                <input
-                  className="border px-2 py-1 w-full"
-                  value={r.name}
-                  onChange={(e) => changeRow(i, 'name', e.target.value)}
-                  placeholder={r.type === 'service' ? 'Service' : 'Item'}
-                />
-              </td>
-              <td className="border p-1 text-center">
-                <input
-                  type="number"
-                  className="border px-2 py-1 w-20 text-center"
-                  value={r.qty}
-                  onChange={(e) => changeRow(i, 'qty', e.target.value)}
-                />
-              </td>
-              <td className="border p-1 text-right">
-                <input
-                  type="number"
-                  className="border px-2 py-1 w-28 text-right"
-                  value={r.price}
-                  onChange={(e) => changeRow(i, 'price', e.target.value)}
-                />
-              </td>
-              <td className="border p-1 text-right">
-                ${(num(r.qty) * num(r.price)).toFixed(2)}
-              </td>
-              <td className="border p-1 text-center">
-                <button className="text-red-600 px-2" onClick={() => delRow(i)} title="Remove">
-                  ✕
-                </button>
-              </td>
+      {/* таблица строк */}
+      <div style={S.card}>
+        <table style={S.table}>
+          <thead>
+            <tr>
+              <th style={S.th}>Type</th>
+              <th style={S.th}>Name</th>
+              <th style={{ ...S.th, textAlign: 'center', width: 80 }}>Qty</th>
+              <th style={{ ...S.th, textAlign: 'right', width: 120 }}>Price</th>
+              <th style={{ ...S.th, textAlign: 'right', width: 120 }}>Amount</th>
+              <th style={{ ...S.th, width: 40 }} />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td style={S.td}>
+                  <select style={S.select} value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)}>
+                    <option value="service">service</option>
+                    <option value="material">material</option>
+                  </select>
+                </td>
+                <td style={S.td}>
+                  <input
+                    style={S.input}
+                    value={r.name}
+                    onChange={(e) => changeRow(i, 'name', e.target.value)}
+                    placeholder={r.type === 'service' ? 'Service' : 'Item'}
+                  />
+                </td>
+                <td style={{ ...S.td, textAlign: 'center' }}>
+                  <input
+                    type="number"
+                    style={{ ...S.input, width: 80, textAlign: 'center' }}
+                    value={r.qty}
+                    onChange={(e) => changeRow(i, 'qty', e.target.value)}
+                  />
+                </td>
+                <td style={{ ...S.td, textAlign: 'right' }}>
+                  <input
+                    type="number"
+                    style={{ ...S.input, width: 120, textAlign: 'right' }}
+                    value={r.price}
+                    onChange={(e) => changeRow(i, 'price', e.target.value)}
+                  />
+                </td>
+                <td style={{ ...S.td, textAlign: 'right' }}>${(num(r.qty) * num(r.price)).toFixed(2)}</td>
+                <td style={{ ...S.td, textAlign: 'center' }}>
+                  <button style={{ ...S.btn, color: '#ef4444', borderColor: '#ef4444' }} onClick={() => delRow(i)} title="Remove">
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
 
-      <div className="mb-3">
-        <button className="bg-gray-200 text-black px-3 py-1 rounded" onClick={addRow}>
-          ➕ Add row
-        </button>
-      </div>
-
-      {/* Итоги */}
-      <div className="text-right">
-        <div>Subtotal: ${num(subtotal).toFixed(2)}</div>
-        <div className="inline-flex items-center gap-2 mt-1">
-          <label className="font-semibold">Discount $:</label>
-          <input
-            type="number"
-            className="border px-2 py-1 w-24 text-right"
-            value={discount}
-            onChange={(e) => setDiscount(Number(e.target.value || 0))}
-          />
+        <div style={{ marginTop: 8 }}>
+          <button style={S.ghost} onClick={addRow}>+ Add row</button>
         </div>
-        <div className="font-bold text-lg mt-2">Total Due: ${num(total).toFixed(2)}</div>
       </div>
 
-      <div className="mt-4">
-        <button
-          onClick={saveAndDownload}
-          disabled={busy}
-          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
-        >
+      {/* итоги */}
+      <div style={{ ...S.card, marginTop: 12 }}>
+        <div style={{ textAlign: 'right' }}>
+          <div>Subtotal: ${num(subtotal).toFixed(2)}</div>
+          <div style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>Discount $:</div>
+            <input
+              type="number"
+              style={{ ...S.input, width: 120, textAlign: 'right' }}
+              value={discount}
+              onChange={(e) => setDiscount(Number(e.target.value || 0))}
+            />
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginTop: 8 }}>Total Due: ${num(total).toFixed(2)}</div>
+        </div>
+      </div>
+
+      {/* действия */}
+      <div style={{ marginTop: 12 }}>
+        <button onClick={saveAndDownload} disabled={busy} style={S.primary}>
           {busy ? 'Please wait…' : 'Сохранить и скачать PDF'}
         </button>
       </div>
