@@ -25,7 +25,6 @@ import InvoicePage from './pages/InvoicePage.jsx';
 import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
-import RegisterPage from './pages/RegisterPage';
 
 // ───────────────────────────────────────────────────────────────────────────────
 // Гард для доступа к конкретной заявке:
