@@ -1,6 +1,6 @@
 // client/src/pages/AdminTechniciansPage.jsx
-// Создаём сотрудника. Если основной вызов упал, автоматически вызываем DEBUG-режим
-// той же edge-функции и показываем точную причину.
+// Прямой fetch на Edge Function (без supabase.functions.invoke) — всегда читаем тело ответа.
+// Показываем понятный JSON с stage/error.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
@@ -13,6 +13,28 @@ const td = "px-3 py-2 border-b";
 function genTempPassword(len = 12) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+async function callEdge(path, body) {
+  // получаем access_token текущей сессии
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
+  const url = `${import.meta.env.VITE_SUPABASE_URL ?? (window?.SUPABASE_URL)}/functions/v1/${path}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
+  return { ok: res.ok, status: res.status, json };
 }
 
 export default function AdminTechniciansPage() {
@@ -63,29 +85,13 @@ export default function AdminTechniciansPage() {
     setList(data || []);
   }
 
-  function showInfo(title, obj) {
+  function show(title, obj) {
     alert(`${title}\n` + JSON.stringify(obj, null, 2));
-  }
-
-  async function callDebug(payload) {
-    const { data, error } = await supabase.functions.invoke('admin-create-user', {
-      body: { action: 'debug', ...payload }
-    });
-    if (error) {
-      showInfo("DEBUG call failed", { error: error?.message || error, ctx: error?.context });
-      return;
-    }
-    if (data?.error) {
-      showInfo("DEBUG result (found problem)", data);
-      return;
-    }
-    showInfo("DEBUG result (ok)", data);
   }
 
   async function createTech(e) {
     e.preventDefault();
     if (!isAdmin) return alert("Только админ может создавать сотрудников");
-
     setLoading(true);
     const payload = {
       email: email.trim(),
@@ -95,19 +101,22 @@ export default function AdminTechniciansPage() {
       role,
       org_id: Number(orgId) || 1,
     };
-
     try {
-      const { data, error } = await supabase.functions.invoke('admin-create-user', { body: payload });
-
-      if (error) {
-        // основной вызов упал -> сразу пробуем DEBUG и покажем причину
-        await callDebug(payload);
+      // сначала быстрая проверка
+      const dbg = await callEdge('admin-create-user', { action: 'debug', ...payload });
+      if (!dbg.ok) {
+        show("DEBUG failed", { status: dbg.status, ...dbg.json });
         return;
       }
-      if (data?.error) {
-        // сервер вернул 4xx с телом об ошибке -> покажем и продебажим
-        showInfo("Server error", data);
-        await callDebug(payload);
+      if (dbg.json?.error) {
+        show("DEBUG reported problem", dbg.json);
+        return;
+      }
+
+      // основной вызов
+      const res = await callEdge('admin-create-user', payload);
+      if (!res.ok || res.json?.error) {
+        show("Create failed", { status: res.status, ...res.json });
         return;
       }
 
@@ -121,7 +130,7 @@ export default function AdminTechniciansPage() {
       await fetchTechnicians();
       alert("Сотрудник создан. Передай ему e-mail и временный пароль.");
     } catch (err) {
-      showInfo("Unhandled error", { message: err?.message || String(err) });
+      show("Unhandled error", { message: err?.message || String(err) });
     } finally {
       setLoading(false);
     }
@@ -129,11 +138,9 @@ export default function AdminTechniciansPage() {
 
   async function sendReset(emailAddr) {
     if (!isAdmin) return;
-    const { data, error } = await supabase.functions.invoke('admin-create-user', {
-      body: { action: 'sendPasswordReset', email: emailAddr }
-    });
-    if (error || data?.error) {
-      showInfo("Reset error", data || error);
+    const res = await callEdge('admin-create-user', { action: 'sendPasswordReset', email: emailAddr });
+    if (!res.ok || res.json?.error) {
+      show("Reset error", { status: res.status, ...res.json });
     } else {
       alert("Ссылка на сброс пароля сгенерирована/отправлена (см. настройки проекта).");
     }
@@ -173,9 +180,7 @@ export default function AdminTechniciansPage() {
           <label className="block text-sm mb-1">Временный пароль *</label>
           <div className="flex gap-2">
             <input className={input} required value={password} onChange={e => setPassword(e.target.value)} />
-            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>
-              Сгенерировать
-            </button>
+            <button type="button" className={btn} onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
           </div>
           <div className="text-xs text-gray-500 mt-1">Выдай сотруднику этот пароль для первого входа.</div>
         </div>
