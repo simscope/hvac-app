@@ -217,7 +217,7 @@ export default function AdminTechniciansPage() {
   }
 
   async function deactivateTech(row) {
-    if (!confirm(`Уволить сотрудника «${row.name}»? Доступ будет закрыт.`)) return;
+    if (!window.confirm(`Уволить сотрудника «${row.name}»? Доступ будет закрыт.`)) return;
     const updates = { is_active: false, auth_user_id: null };
     const { error } = await supabase.from("technicians").update(updates).eq("id", row.id);
     if (error) {
@@ -229,7 +229,7 @@ export default function AdminTechniciansPage() {
   }
 
   async function restoreTech(row) {
-    if (!confirm(`Вернуть сотрудника «${row.name}» в активные?`)) return;
+    if (!window.confirm(`Вернуть сотрудника «${row.name}» в активные?`)) return;
     const updates = { is_active: true };
     const { error } = await supabase.from("technicians").update(updates).eq("id", row.id);
     if (error) {
@@ -426,3 +426,4 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
+
