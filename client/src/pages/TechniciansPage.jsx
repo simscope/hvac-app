@@ -1,13 +1,11 @@
 // src/pages/AdminTechniciansPage.jsx
-// Чистый CSS внутри компонента (без Tailwind).
-// Страница "Техники / Сотрудники" в стиле твоих страниц: тонкие бордеры,
-// маленькие контролы, таблица формы и таблица списка.
-// Edge Function: если invoke => FunctionsHttpError, делаем raw fetch и показываем JSON (status, stage, error, details).
+// Чистый CSS. Левая колонка фикс 360px, правая — резиновая.
+// org_id и is_admin отсутствуют. Fallback на raw fetch при ошибке invoke.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
 
-// ---------- Утилиты ----------
+// ---------- утилиты ----------
 function genTempPassword(len = 12) {
   const chars =
     "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
@@ -29,12 +27,11 @@ async function rawCallFunction(path, body) {
   });
 
   const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
   return { ok: res.ok, status: res.status, json };
 }
 
-// ---------- Блок уведомления ----------
+// ---------- баннер ----------
 function Banner({ title, text, details }) {
   const [open, setOpen] = useState(false);
   if (!title && !text) return null;
@@ -50,36 +47,28 @@ function Banner({ title, text, details }) {
       </div>
       {text && <div className="mt4">{text}</div>}
       {open && details && (
-        <pre className="pre">
-          {JSON.stringify(details, null, 2)}
-        </pre>
+        <pre className="pre">{JSON.stringify(details, null, 2)}</pre>
       )}
     </div>
   );
 }
 
-// ---------- Страница ----------
 export default function AdminTechniciansPage() {
-  // Auth
   const [me, setMe] = useState(null);
   const [meProfileRole, setMeProfileRole] = useState(null);
   const [meTechInfo, setMeTechInfo] = useState(null);
 
-  // Data
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Form
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech");
   const [password, setPassword] = useState(genTempPassword());
 
-  // UI
-  const [banner, setBanner] = useState(null); // {title, text, details}
+  const [banner, setBanner] = useState(null);
 
-  // filters
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
 
@@ -155,7 +144,7 @@ export default function AdminTechniciansPage() {
       name: name.trim(),
       phone: phone.trim() || null,
       role,
-      link_if_exists: true, // org_id не используем
+      link_if_exists: true,
     };
 
     setLoading(true);
@@ -221,11 +210,9 @@ export default function AdminTechniciansPage() {
 
   return (
     <div className="page">
-      {/* локальные стили — аккуратные, под твой стиль */}
       <style>{`
         .page{max-width:1100px;margin:0 auto;padding:16px;font:14px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#111;}
         h1{font-size:28px;margin:0 0 12px 0;font-weight:700}
-        .toolbar{display:flex;gap:8px;align-items:center;margin:8px 0 12px 0}
         .input,.select,.btn{
           height:28px;border:1px solid #cfd4d9;border-radius:3px;background:#fff;
           padding:0 8px;font-size:14px;line-height:26px;
@@ -240,8 +227,16 @@ export default function AdminTechniciansPage() {
         .banner-head{display:flex;gap:8px;align-items:center}
         .mt4{margin-top:4px}
         .pre{background:#fff;border:1px solid #eee;padding:8px;border-radius:3px;overflow:auto;max-height:280px}
-        .two-cols{display:grid;grid-template-columns:260px 1fr;gap:16px}
-        @media (max-width:900px){.two-cols{display:block}}
+
+        /* новая раскладка — fixed left, flexible right */
+        .two-cols{display:flex;gap:16px;align-items:flex-start}
+        .col-left{flex:0 0 360px;max-width:360px}
+        .col-right{flex:1;min-width:0}
+        /* гарантируем, что таблица формы не шире колонки */
+        .col-left .table{table-layout:fixed}
+        .col-left .table td:nth-child(1){width:140px}
+        .row-inline{display:flex;gap:8px;align-items:center}
+        .row-inline .input{flex:1;min-width:0}
       `}</style>
 
       <h1>Техники / Сотрудники</h1>
@@ -250,85 +245,75 @@ export default function AdminTechniciansPage() {
         <Banner title={banner.title} text={banner.text} details={banner.details} />
       )}
 
-      {/* Две колонки: слева — табличка формы, справа — список */}
       <div className="two-cols">
-        {/* ФОРМА (в таблице) */}
-        <form onSubmit={createTech}>
-          <table className="table" style={{ marginBottom: 12 }}>
-            <thead>
-              <tr>
-                <th colSpan={2}>Создание сотрудника</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ width: 140 }}>E-mail *</td>
-                <td>
-                  <input className="input" type="email" required value={email}
-                         onChange={e => setEmail(e.target.value)} />
-                </td>
-              </tr>
-              <tr>
-                <td>Телефон</td>
-                <td>
-                  <input className="input" value={phone} onChange={e => setPhone(e.target.value)} />
-                </td>
-              </tr>
-              <tr>
-                <td>Имя / ФИО *</td>
-                <td>
-                  <input className="input" required value={name}
-                         onChange={e => setName(e.target.value)} />
-                </td>
-              </tr>
-              <tr>
-                <td>Роль *</td>
-                <td>
-                  <select className="select" value={role} onChange={e => setRole(e.target.value)}>
-                    <option value="tech">Техник</option>
-                    <option value="manager">Менеджер</option>
-                    <option value="admin">Админ</option>
-                  </select>
-                </td>
-              </tr>
-              <tr>
-                <td>Временный пароль *</td>
-                <td style={{ display: "flex", gap: 8 }}>
-                  <input className="input" required value={password}
-                         onChange={e => setPassword(e.target.value)} />
-                  <button type="button" className="btn" onClick={() => setPassword(genTempPassword())}>
-                    Сгенерировать
-                  </button>
-                </td>
-              </tr>
-              <tr>
-                <td />
-                <td className="muted">Выдай сотруднику этот пароль для первого входа.</td>
-              </tr>
-              <tr>
-                <td />
-                <td style={{ display: "flex", gap: 8 }}>
-                  <button className="btn" disabled={disableSubmit} type="submit">
-                    {loading ? "Создаю..." : "Создать сотрудника"}
-                  </button>
-                  <button type="button" className="btn" disabled={loading} onClick={resetForm}>
-                    Очистить
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </form>
+        {/* левая колонка — форма в таблице */}
+        <div className="col-left">
+          <form onSubmit={createTech}>
+            <table className="table" style={{ marginBottom: 12 }}>
+              <thead>
+                <tr><th colSpan={2}>Создание сотрудника</th></tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>E-mail *</td>
+                  <td><input className="input" type="email" required value={email} onChange={e => setEmail(e.target.value)} /></td>
+                </tr>
+                <tr>
+                  <td>Телефон</td>
+                  <td><input className="input" value={phone} onChange={e => setPhone(e.target.value)} /></td>
+                </tr>
+                <tr>
+                  <td>Имя / ФИО *</td>
+                  <td><input className="input" required value={name} onChange={e => setName(e.target.value)} /></td>
+                </tr>
+                <tr>
+                  <td>Роль *</td>
+                  <td>
+                    <select className="select" value={role} onChange={e => setRole(e.target.value)}>
+                      <option value="tech">Техник</option>
+                      <option value="manager">Менеджер</option>
+                      <option value="admin">Админ</option>
+                    </select>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Временный пароль *</td>
+                  <td>
+                    <div className="row-inline">
+                      <input className="input" required value={password} onChange={e => setPassword(e.target.value)} />
+                      <button type="button" className="btn" onClick={() => setPassword(genTempPassword())}>Сгенерировать</button>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td />
+                  <td className="muted">Выдай сотруднику этот пароль для первого входа.</td>
+                </tr>
+                <tr>
+                  <td />
+                  <td className="row-inline">
+                    <button className="btn" disabled={disableSubmit} type="submit">
+                      {loading ? "Создаю..." : "Создать сотрудника"}
+                    </button>
+                    <button type="button" className="btn" disabled={loading} onClick={resetForm}>
+                      Очистить
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </form>
+        </div>
 
-        {/* СПИСОК + ПАНЕЛЬ ФИЛЬТРОВ */}
-        <div>
-          <div className="toolbar">
+        {/* правая колонка — фильтры + список */}
+        <div className="col-right">
+          <div className="row-inline" style={{ marginBottom: 8 }}>
             <input
               className="input"
               placeholder="Поиск (имя, email, телефон)"
               value={q}
               onChange={e => setQ(e.target.value)}
-              style={{ minWidth: 280 }}
+              style={{ flex: 1, minWidth: 220 }}
             />
             <select className="select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
               <option value="all">Все роли</option>
@@ -369,9 +354,7 @@ export default function AdminTechniciansPage() {
                 </tr>
               ))}
               {filteredRows().length === 0 && (
-                <tr>
-                  <td colSpan={5}>Нет сотрудников</td>
-                </tr>
+                <tr><td colSpan={5}>Нет сотрудников</td></tr>
               )}
             </tbody>
           </table>
