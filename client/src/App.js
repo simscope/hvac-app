@@ -126,7 +126,7 @@ function Shell() {
               <ChatPage />
             </RequireRole>
           } />
-          <Route path="/invoice/:id" element={<InvoicePage />} />
+          <Route path="/invoice/:id" element={<InvoicePage />}
             <RequireRole allow={['admin','manager']}>
               <InvoicePage />
             </RequireRole>
