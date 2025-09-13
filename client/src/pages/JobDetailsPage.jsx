@@ -796,56 +796,61 @@ export default function JobDetailsPage() {
           </div>
 
           {/* Инвойсы (PDF) */}
-         <div className="card" style={{ padding: 14, border: '1px solid #e5e7eb', borderRadius: 12 }}>
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-    <div style={{ fontWeight: 700 }}>Инвойсы (PDF)</div>
-    <div style={{ display: 'flex', gap: 8 }}>
-      <button className="btn btn-light" onClick={loadInvoices} disabled={invLoading}>
-        {invLoading ? '...' : 'Обновить'}
-      </button>
-      <button
-        className="btn btn-primary"
-        onClick={() => navigate(`/invoice/${jobId}`)}
-        title="Создать новый инвойс для этой заявки"
-      >
-        + Создать инвойс
-      </button>
-    </div>
-  </div>
+          <div style={BOX}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={H2}>Инвойсы (PDF)</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+          <button
+          type="button"
+          style={BTN}
+          onClick={loadInvoices}
+          disabled={invoicesLoading}
+          >
+          {invoicesLoading ? '...' : 'Обновить'}
+          </button>
+          <button
+          type="button"
+          style={PRIMARY}
+          onClick={createInvoice}
+          title="Создать новый инвойс для этой заявки"
+          >
+          + Создать инвойс
+          </button>
+          </div>
+          </div>
 
-  {(!invoices || invoices.length === 0) && (
-    <div style={{ color: '#6b7280' }}>Пока нет инвойсов для этой заявки</div>
-  )}
-
-  {invoices && invoices.length > 0 && (
-    <div style={{ display: 'grid', gap: 8 }}>
-      {invoices.map((inv) => (
-        <div
-          key={inv.id}
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid #eef2f7', borderRadius: 8 }}
-        >
+          {(!invoices || invoices.length === 0) ? (
+          <div style={MUTED}>Пока нет инвойсов для этой заявки</div>
+          ) : (
+         <div style={{ display: 'grid', gap: 8 }}>
+         {invoices.map((inv) => (
+          <div
+          key={inv.name}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '8px 10px',
+            border: '1px solid #eef2f7',
+            borderRadius: 8
+          }}
+          >
           <div>
-            <div style={{ fontWeight: 600 }}>Invoice #{inv.invoice_no}</div>
+            <div style={{ fontWeight: 600 }}>{inv.name}</div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>
-              {new Date(inv.created_at || Date.now()).toLocaleString()}
+              {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
             </div>
           </div>
-          <div>
-            <Link
-              className="btn btn-outline"
-              to={`/invoice/${jobId}?no=${encodeURIComponent(inv.invoice_no)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Открыть PDF
-            </Link>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" style={BTN} onClick={() => openInvoice(inv.name)}>Открыть</button>
+            <button type="button" style={BTN} onClick={() => downloadInvoice(inv.name)}>Скачать</button>
+            <button type="button" style={DANGER} onClick={() => deleteInvoice(inv.name)}>Удалить</button>
+           </div>
           </div>
+          ))}
         </div>
-      ))}
-    </div>
-  )}
-</div>
-
+        )}
+       </div>
       {/* Материалы */}
       <div style={BOX}>
         <div style={H2}>Материалы</div>
@@ -1059,4 +1064,5 @@ function Td({ children, center }) {
     </td>
   );
 }
+
 
