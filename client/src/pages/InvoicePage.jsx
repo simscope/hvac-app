@@ -279,7 +279,7 @@ export default function InvoicePage() {
 
       // right: company + logo
       const rightX = 612 - 80;
-      let rightY = 100;
+      let rightY = 200;
       let logoBottom = 0;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
@@ -529,5 +529,6 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
