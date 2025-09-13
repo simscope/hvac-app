@@ -21,13 +21,6 @@ const clean = (v) => {
   const s = String(v ?? '').trim();
   return s && s.toLowerCase() !== 'empty' ? s : '';
 };
-const pick = (o = {}, keys = []) => {
-  for (const k of keys) {
-    const v = clean(o[k]);
-    if (v) return v;
-  }
-  return '';
-};
 function composeAddress(o = {}) {
   const parts = [
     o.address,
@@ -100,7 +93,7 @@ const S = {
 };
 
 export default function InvoicePage() {
-  const { id } = useParams(); // job id
+  const { id } = useParams(); // job id (uuid)
 
   // logo
   const [logoDataURL, setLogoDataURL] = useState(null);
@@ -108,21 +101,21 @@ export default function InvoicePage() {
   // job
   const [job, setJob] = useState(null);
 
-  // Bill To
+  // Bill To (только для PDF/печати)
   const [billName, setBillName] = useState('');
   const [billAddress, setBillAddress] = useState('');
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
-  // rows
+  // таблица позиций
   const [rows, setRows] = useState([
     { type: 'service', name: 'Labor', qty: 1, price: 0 },
     { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
   ]);
-  const [discount, setDiscount] = useState(0);
+  const [discount, setDiscount] = useState(0); // в БД не пишем, только в PDF
 
-  // invoice meta
-  const [invoiceNo, setInvoiceNo] = useState('');
+  // реквизиты инвойса (дата; номер отображаем «ожидаемый», реальный берём после insert)
+  const [invoiceNo, setInvoiceNo] = useState(''); // показываем предполагаемый next
   const [invoiceDate, setInvoiceDate] = useState(new Date());
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
@@ -134,7 +127,7 @@ export default function InvoicePage() {
     loadLogoDataURL().then((d) => setLogoDataURL(d || null));
   }, []);
 
-  /* ----------- load job + client + materials + next invoice no ----------- */
+  /* ----------- load job + client + materials + suggest next invoice no ----------- */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -147,7 +140,7 @@ export default function InvoicePage() {
         setJob(j);
       }
 
-      // --------- Client (ВАШЕЙ ЛОГИКОЙ) ----------
+      // Client (лучшее из jobs/clients)
       let clientData = null;
       if (j?.client_id) {
         const { data: c, error: ec } = await supabase
@@ -163,17 +156,19 @@ export default function InvoicePage() {
           phone: j?.client_phone || j?.phone || '',
           email: j?.client_email || j?.email || '',
           address: j?.client_address || j?.address || '',
+          city: j?.city,
+          state: j?.state,
+          zip: j?.zip,
         };
       }
       if (!alive) return;
-      // применяем в поля «Bill To»
       setBillName(clean(clientData.full_name));
       setBillPhone(clean(clientData.phone));
       setBillEmail(clean(clientData.email));
       const addr = composeAddress(clientData) || clean(clientData.address);
       setBillAddress(addr);
 
-      // --------- Материалы ----------
+      // Материалы -> строки таблицы
       if (id) {
         const { data: mlist } = await supabase
           .from('materials')
@@ -187,7 +182,6 @@ export default function InvoicePage() {
           price: N(m.price),
         }));
 
-        // Labor + SCF из заявки + материалы
         setRows([
           { type: 'service', name: 'Labor', qty: 1, price: N(j?.labor_price) },
           { type: 'service', name: 'Service Call Fee', qty: 1, price: N(j?.scf) },
@@ -195,33 +189,46 @@ export default function InvoicePage() {
         ]);
       }
 
-      // --------- Авто-номер инвойса ----------
+      // Предполагаемый следующий номер (если RLS разрешает чтение)
       try {
-        const { data } = await supabase
+        const { data: last } = await supabase
           .from('invoices')
           .select('invoice_no')
           .order('invoice_no', { ascending: false })
           .limit(1);
         if (!alive) return;
-        const next = (N(data?.[0]?.invoice_no) || 0) + 1;
+        const next = (N(last?.[0]?.invoice_no) || 0) + 1;
         setInvoiceNo(String(next));
       } catch {
-        // fallback когда RLS не даёт читать
+        // Фоллбек
         const ts = Date.now().toString().slice(-6);
-        setInvoiceNo(String(j?.job_number || id || ts));
+        setInvoiceNo(ts);
       }
 
-      // дата по умолчанию — сегодня
       setInvoiceDate(new Date());
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [id]);
 
   /* ----------- computed ----------- */
-  const subtotal = useMemo(() => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0), [rows]);
-  const total = useMemo(() => Math.max(0, N(subtotal) - N(discount)), [subtotal, discount]);
+  const subtotal = useMemo(
+    () => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    [rows]
+  );
+  const laborTotal = useMemo(
+    () => rows.filter(r => r.type === 'service')
+              .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    [rows]
+  );
+  const partsTotal = useMemo(
+    () => rows.filter(r => r.type === 'material')
+              .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    [rows]
+  );
+  const total = useMemo(
+    () => Math.max(0, N(subtotal) - N(discount)),
+    [subtotal, discount]
+  );
 
   /* ----------- rows edit ----------- */
   const changeRow = (i, key, val) => {
@@ -234,83 +241,76 @@ export default function InvoicePage() {
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ----------- save + pdf ----------- */
+  /* ----------- save + pdf (вставляем только имеющиеся поля) ----------- */
   async function saveAndDownload() {
     setSaving(true);
     try {
-      // 1) сохраняем в БД
-      let saved = false;
-      try {
-        const payload = {
-          job_id: id ?? null,
-          invoice_no: invoiceNo ? Number(invoiceNo) : null,
-          issued_on: toInputDate(invoiceDate),
-          subtotal,
-          discount: N(discount),
-          total_due: total,
-          rows_json: rows,
-          bill_to_name: billName || null,
-          bill_to_address: billAddress || null,
-          bill_to_phone: billPhone || null,
-          bill_to_email: billEmail || null,
-          include_warranty: includeWarranty,
-          warranty_days: Number(warrantyDays || 0),
-        };
-        const { error } = await supabase.from('invoices').insert(payload);
-        if (error) throw error;
-        saved = true;
+      // 1) INSERT только существующих колонок
+      const payload = {
+        job_id: id ?? null,
+        labor_cost: N(laborTotal),
+        parts_cost: N(partsTotal),
+        // technician_percent / technician_total оставляем пустыми (0/NULL)
+      };
 
-        // сразу увеличим номер на форме — чтобы следующий инвойс был +1
-        setInvoiceNo(String((Number(invoiceNo) || 0) + 1));
-      } catch (e) {
-        console.warn('Save invoices skipped:', e?.message || e);
+      const { data: inserted, error } = await supabase
+        .from('invoices')
+        .insert(payload)
+        .select('id, invoice_no')
+        .single();
+
+      if (error) {
+        console.error('Insert invoice failed:', error);
+        alert('Ошибка сохранения инвойса: ' + (error.message || 'unknown'));
+        return;
       }
 
-      // 2) генерим PDF
+      const thisInvoiceNo = inserted?.invoice_no ?? invoiceNo || 'DRAFT';
+
+      // 2) PDF с реальным номером
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
 
       // header center
       doc.setFontSize(14);
       doc.setFont(undefined, 'bold');
-      doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 306, 52, { align: 'center' });
+      doc.text(`INVOICE #${thisInvoiceNo}`, 306, 52, { align: 'center' });
       doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
       doc.text(`Date: ${human(invoiceDate)}`, 306, 68, { align: 'center' });
 
-      // right: company + logo
+      // right: company + logo (увеличено, с отступом)
       const rightX = 612 - 80;
       let rightY = 100;
       let logoBottom = 0;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
         if (logo) {
-          const top = 30;
-          const w = 120, h = 120;
+          const top = 24;
+          const w = 130, h = 130; // увеличенный логотип
           doc.addImage(logo, 'PNG', rightX - w, top, w, h);
-          logoBottom = top + h; // 120
+          logoBottom = top + h;
         }
       } catch { /* ignore */ }
-      
-      const PAD = 18; // отступ между логотипом и блоком реквизитов
+
+      const PAD = 18; // отступ от лого
       rightY = Math.max(100, logoBottom + PAD);
-      
+
       doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' }); rightY += 14;
       doc.setFont(undefined, 'normal');
       ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
         doc.text(line, rightX, rightY, { align: 'right' }); rightY += 12;
       });
 
-      // left: Bill To
+      // left: Bill To — опускаем не выше правого
       const leftX = 40;
-      const LEFT_TOP = 170;          // ← регулируй высоту здесь
-      let leftY = LEFT_TOP;
+      let leftY = Math.max(170, rightY);
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
         doc.text(String(line), leftX, leftY); leftY += 12;
       });
 
-      // table start strictly below header & logo
+      // таблица
       const headerBottom = Math.max(leftY, rightY, logoBottom) + 16;
 
       const body = rows.map((r) => [
@@ -357,12 +357,12 @@ export default function InvoicePage() {
       doc.setFontSize(10);
       doc.text('Thank you for your business!', rightX, 760, { align: 'right' });
 
-      const filename = `invoice_${invoiceNo || (id ? `job_${id}` : 'draft')}.pdf`;
+      const filename = `invoice_${thisInvoiceNo}.pdf`;
       doc.save(filename);
 
-      if (!saved) {
-        // пояснение только если insert не прошёл (RLS/схема)
-        // alert('PDF downloaded. Saving to DB was skipped (RLS/schema).');
+      // 3) показать «следующий номер» в поле формы (для информации)
+      if (inserted?.invoice_no) {
+        setInvoiceNo(String(Number(inserted.invoice_no) + 1));
       }
     } catch (e) {
       console.error(e);
@@ -393,7 +393,7 @@ export default function InvoicePage() {
         <input
           type="number"
           style={{ ...S.input, width: 80, textAlign: 'center' }}
-        value={r.qty}
+          value={r.qty}
           onChange={(e) => changeRow(i, 'qty', e.target.value)}
         />
       </td>
@@ -427,10 +427,10 @@ export default function InvoicePage() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ fontWeight: 600 }}>Invoice #</div>
           <input
-            style={{ ...S.input, width: 140 }}
+            style={{ ...S.input, width: 160, background: '#f9fafb' }}
             value={invoiceNo}
-            onChange={(e) => setInvoiceNo(e.target.value.replace(/[^\d]/g, ''))}
-            placeholder="auto"
+            readOnly
+            title="Автонумерация из БД. Номер будет присвоен при сохранении."
           />
           <div style={{ fontWeight: 600, marginLeft: 6 }}>Date</div>
           <input
@@ -534,11 +534,3 @@ export default function InvoicePage() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
