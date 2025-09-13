@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 const PAGE  = { padding: 16, display: 'grid', gap: 12 };
 const BOX   = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
 const GRID2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
-const COL   = { display: 'grid', gap: 12 }; // колонка с несколькими боксами
+const COL   = { display: 'grid', gap: 12 };
 const ROW   = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' };
 const INPUT = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' };
 const SELECT = { ...INPUT };
@@ -47,6 +47,14 @@ const SYSTEM_OPTIONS  = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
 const toNum = (v) => (v === '' || v === null || isNaN(v) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
 
+// корректный URL для HashRouter и BrowserRouter
+function makeFrontUrl(path) {
+  const base = window.location.origin;
+  const isHash = window.location.href.includes('/#/');
+  const clean = path.startsWith('/') ? path : `/${path}`;
+  return isHash ? `${base}/#${clean}` : `${base}${clean}`;
+}
+
 // datetime-local
 const toLocal = (iso) => {
   if (!iso) return '';
@@ -62,14 +70,12 @@ const fromLocal = (v) => {
   return d.toISOString();
 };
 
-// ''|null => null; '123' => 123; иначе — строка (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// приведение статуса к базе
 const normalizeStatusForDb = (s) => {
   if (!s) return null;
   const v = String(s).trim();
@@ -132,16 +138,16 @@ export default function JobDetailsPage() {
   const fileRef = useRef(null);
 
   // Выбор фото
-  const [checked, setChecked] = useState({}); // { [name]: true }
+  const [checked, setChecked] = useState({});
   const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
 
   // Комментарии
-  const [comments, setComments] = useState([]); // [{..., author_name}]
+  const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
-  // Инвойсы (объединённый список)
-  const [invoices, setInvoices] = useState([]); // [{source, name, url, updated_at, invoice_no, hasFile}]
+  // Инвойсы (Storage + DB)
+  const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
 
   /* ---------- загрузка ---------- */
@@ -438,7 +444,7 @@ export default function JobDetailsPage() {
     }
   };
 
-  /* ---------- материалы (quantity/supplier) ---------- */
+  /* ---------- материалы ---------- */
   const addMat = () => {
     setMaterials((p) => [
       ...p,
@@ -473,7 +479,6 @@ export default function JobDetailsPage() {
     const news = materials.filter((m) => String(m.id).startsWith('tmp-'));
     const olds = materials.filter((m) => !String(m.id).startsWith('tmp-'));
 
-    // вставка новых
     if (news.length) {
       const payload = news.map((m) => ({
         job_id: jobId,
@@ -491,7 +496,6 @@ export default function JobDetailsPage() {
       }
     }
 
-    // обновление существующих
     for (const m of olds) {
       const patch = {
         name: m.name || '',
@@ -521,7 +525,7 @@ export default function JobDetailsPage() {
     alert('Материалы сохранены');
   };
 
-  /* ---------- файлы (фото/док-ты) ---------- */
+  /* ---------- файлы ---------- */
   const onPick = async (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -606,9 +610,9 @@ export default function JobDetailsPage() {
     if (item?.hasFile && item?.url) {
       window.open(item.url, '_blank', 'noopener,noreferrer');
     } else if (item?.invoice_no) {
-      window.open(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`, '_blank', 'noopener,noreferrer');
+      window.open(makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`), '_blank', 'noopener,noreferrer');
     } else {
-      window.open(`/invoice/${jobId}`, '_blank', 'noopener,noreferrer');
+      window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -643,8 +647,7 @@ export default function JobDetailsPage() {
   };
 
   const createInvoice = () => {
-    // откроем генератор инвойса для этой заявки (как раньше — в новой вкладке)
-    window.open(`/invoice/${jobId}`, '_blank', 'noopener,noreferrer');
+    window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
   /* ---------- отображение ---------- */
