@@ -11,6 +11,7 @@ const STATUS_ORDER = [
   'заказ деталей',
   'ожидание деталей',
   'к финишу',
+  'заверщено',
   ];
 
 export default function JobsPage() {
