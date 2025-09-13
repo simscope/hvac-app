@@ -26,7 +26,7 @@ const GHOST   = { ...BTN, background: '#f8fafc' };
 /* ---------- Storage ---------- */
 const PHOTOS_BUCKET   = 'job-photos';
 const INVOICES_BUCKET = 'invoices';
-const storage = () => supabase.storage.from(PHOTOS_BUCKET);
+const storage    = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
 /* ---------- Справочники ---------- */
@@ -44,7 +44,7 @@ const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'in
 const SYSTEM_OPTIONS  = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
 
 /* ---------- Хелперы ---------- */
-const toNum = (v) => (v === '' || v === null || isNaN(v) ? null : Number(v));
+const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
 
 // datetime-local
@@ -131,9 +131,6 @@ export default function JobDetailsPage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileRef = useRef(null);
 
-  // Сторож для кнопки «Создать инвойс»
-  const creatingInvoiceRef = useRef(false);
-
   // Выбор фото
   const [checked, setChecked] = useState({}); // { [name]: true }
   const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
@@ -218,14 +215,6 @@ export default function JobDetailsPage() {
 
       setLoading(false);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
-
-  // Авто-обновление списка инвойсов при возврате во вкладку (после генерации PDF)
-  useEffect(() => {
-    const onFocus = () => loadInvoices();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
@@ -577,26 +566,10 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- инвойсы: действия ---------- */
-  const openInvoice = async (name) => {
-    const path = `${jobId}/${name}`;
-    const { data } = invStorage().getPublicUrl(path);
+  const openInvoice = (name) => {
+    const { data } = invStorage().getPublicUrl(`${jobId}/${name}`);
     const url = data?.publicUrl;
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
-    }
-
-    // fallback для приватного бакета
-    try {
-      const { data: file, error } = await invStorage().download(path);
-      if (error || !file) throw error || new Error('no file');
-      const blobUrl = URL.createObjectURL(file);
-      window.open(blobUrl, '_blank', 'noopener,noreferrer');
-      // Не ревокаем сразу — пусть вкладка успеет загрузить
-    } catch (e) {
-      console.error('openInvoice fallback failed', e);
-      alert('Не удалось открыть инвойс');
-    }
+    if (url) window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const downloadInvoice = async (name) => {
@@ -627,15 +600,9 @@ export default function JobDetailsPage() {
     await loadInvoices();
   };
 
+  // ВАЖНО: открываем страницу инвойса через navigate, чтобы работало и с HashRouter
   const createInvoice = () => {
-    if (creatingInvoiceRef.current) return; // сторож от дабл-клика
-    creatingInvoiceRef.current = true;
-
-    // откроем генератор инвойса для этой заявки
-    window.open(`/invoice/${jobId}`, '_blank', 'noopener,noreferrer');
-
-    // отпустить сторож немного позже
-    setTimeout(() => { creatingInvoiceRef.current = false; }, 1500);
+    navigate(`/invoice/${jobId}`);
   };
 
   /* ---------- отображение ---------- */
@@ -884,188 +851,188 @@ export default function JobDetailsPage() {
               </div>
             )}
           </div>
+        </div>
+      </div>
 
-          {/* Материалы */}
-          <div style={BOX}>
-            <div style={H2}>Материалы</div>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <Th>Название</Th>
-                    <Th>Цена</Th>
-                    <Th>Кол-во</Th>
-                    <Th>Поставщик</Th>
-                    <Th center>Действия</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {materials.map((m, i) => (
-                    <tr key={m.id}>
-                      <Td>
-                        <input
-                          style={INPUT}
-                          value={m.name || ''}
-                          onChange={(e) => chMat(i, 'name', e.target.value)}
-                        />
-                      </Td>
-                      <Td>
-                        <input
-                          style={INPUT}
-                          type="number"
-                          value={m.price ?? ''}
-                          onChange={(e) => chMat(i, 'price', e.target.value)}
-                        />
-                      </Td>
-                      <Td>
-                        <input
-                          style={INPUT}
-                          type="number"
-                          value={m.quantity ?? 1}
-                          onChange={(e) => chMat(i, 'quantity', e.target.value)}
-                        />
-                      </Td>
-                      <Td>
-                        <input
-                          style={INPUT}
-                          value={m.supplier || ''}
-                          onChange={(e) => chMat(i, 'supplier', e.target.value)}
-                        />
-                      </Td>
-                      <Td center>
-                        <button style={DANGER} onClick={() => delMat(m)}>🗑</button>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-              <button style={GHOST} onClick={addMat}>+ Добавить</button>
-              <button style={PRIMARY} onClick={saveMats}>Сохранить материалы</button>
-            </div>
-          </div>
-
-          {/* Комментарии */}
-          <div style={BOX}>
-            <div style={H2}>Комментарии</div>
-
-            {commentsLoading ? (
-              <div style={MUTED}>Загрузка…</div>
-            ) : (
-              <>
-                <div
-                  style={{
-                    maxHeight: 260,
-                    overflowY: 'auto',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 8,
-                    padding: 10,
-                    marginBottom: 8,
-                  }}
-                >
-                  {comments.length === 0 ? (
-                    <div style={MUTED}>Пока нет комментариев</div>
-                  ) : (
-                    comments.map((c) => {
-                      const when = new Date(c.created_at).toLocaleString();
-                      const who = c.author_name || '—';
-                      return (
-                        <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
-                          <div style={{ fontSize: 12, color: '#64748b' }}>
-                            {when} • {who}
-                          </div>
-                          <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <textarea
-                    rows={2}
-                    style={{ ...TA, minHeight: 60 }}
-                    value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    placeholder="Написать комментарий…"
-                  />
-                  <button style={PRIMARY} onClick={addComment}>Отправить</button>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Фото / файлы */}
-          <div style={BOX}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={H2}>Фото / файлы</div>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <label style={{ userSelect: 'none', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={allChecked}
-                    onChange={(e) => toggleAllPhotos(e.target.checked)}
-                  />{' '}
-                  Выбрать всё
-                </label>
-                <button
-                  style={PRIMARY}
-                  onClick={downloadSelected}
-                  disabled={!Object.values(checked).some(Boolean)}
-                >
-                  Скачать выбранные
-                </button>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf"
-                onChange={onPick}
-              />
-              {uploadBusy && <span style={MUTED}>Загрузка…</span>}
-            </div>
-
-            {photos.length === 0 && <div style={MUTED}>Файлов пока нет (необязательно)</div>}
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
-              {photos.map((p) => (
-                <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
-                  <label style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6, userSelect:'none', cursor:'pointer' }}>
+      {/* Материалы */}
+      <div style={BOX}>
+        <div style={H2}>Материалы</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <Th>Название</Th>
+                <Th>Цена</Th>
+                <Th>Кол-во</Th>
+                <Th>Поставщик</Th>
+                <Th center>Действия</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {materials.map((m, i) => (
+                <tr key={m.id}>
+                  <Td>
                     <input
-                      type="checkbox"
-                      checked={!!checked[p.name]}
-                      onChange={() => toggleOnePhoto(p.name)}
+                      style={INPUT}
+                      value={m.name || ''}
+                      onChange={(e) => chMat(i, 'name', e.target.value)}
                     />
-                    <span style={{ fontSize:12, wordBreak:'break-all' }}>{p.name}</span>
-                  </label>
-
-                  {/\.(pdf)$/i.test(p.name) ? (
-                    <div style={{ height: 120, display:'grid', placeItems:'center', background:'#f1f5f9', borderRadius:8, marginBottom:6 }}>
-                      📄 PDF
-                    </div>
-                  ) : (
-                    <img
-                      src={p.url}
-                      alt={p.name}
-                      style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display:'block', marginBottom:6 }}
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      type="number"
+                      value={m.price ?? ''}
+                      onChange={(e) => chMat(i, 'price', e.target.value)}
                     />
-                  )}
-
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button style={BTN} onClick={() => downloadOne(p.name)}>Скачать</button>
-                    <button style={DANGER} onClick={() => delPhoto(p.name)}>Удалить</button>
-                  </div>
-                </div>
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      type="number"
+                      value={m.quantity ?? 1}
+                      onChange={(e) => chMat(i, 'quantity', e.target.value)}
+                    />
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      value={m.supplier || ''}
+                      onChange={(e) => chMat(i, 'supplier', e.target.value)}
+                    />
+                  </Td>
+                  <Td center>
+                    <button style={DANGER} onClick={() => delMat(m)}>🗑</button>
+                  </Td>
+                </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button style={GHOST} onClick={addMat}>+ Добавить</button>
+          <button style={PRIMARY} onClick={saveMats}>Сохранить материалы</button>
+        </div>
+      </div>
+
+      {/* Комментарии */}
+      <div style={BOX}>
+        <div style={H2}>Комментарии</div>
+
+        {commentsLoading ? (
+          <div style={MUTED}>Загрузка…</div>
+        ) : (
+          <>
+            <div
+              style={{
+                maxHeight: 260,
+                overflowY: 'auto',
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                padding: 10,
+                marginBottom: 8,
+              }}
+            >
+              {comments.length === 0 ? (
+                <div style={MUTED}>Пока нет комментариев</div>
+              ) : (
+                comments.map((c) => {
+                  const when = new Date(c.created_at).toLocaleString();
+                  const who = c.author_name || '—';
+                  return (
+                    <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>
+                        {when} • {who}
+                      </div>
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
+                    </div>
+                  );
+                })
+              )}
             </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <textarea
+                rows={2}
+                style={{ ...TA, minHeight: 60 }}
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Написать комментарий…"
+              />
+              <button style={PRIMARY} onClick={addComment}>Отправить</button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Фото / файлы */}
+      <div style={BOX}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={H2}>Фото / файлы</div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <label style={{ userSelect: 'none', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={(e) => toggleAllPhotos(e.target.checked)}
+              />{' '}
+              Выбрать всё
+            </label>
+            <button
+              style={PRIMARY}
+              onClick={downloadSelected}
+              disabled={!Object.values(checked).some(Boolean)}
+            >
+              Скачать выбранные
+            </button>
           </div>
         </div>
-      </div> {/* GRID2 */}
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf"
+            onChange={onPick}
+          />
+          {uploadBusy && <span style={MUTED}>Загрузка…</span>}
+        </div>
+
+        {photos.length === 0 && <div style={MUTED}>Файлов пока нет (необязательно)</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
+          {photos.map((p) => (
+            <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
+              <label style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6, userSelect:'none', cursor:'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={!!checked[p.name]}
+                  onChange={() => toggleOnePhoto(p.name)}
+                />
+                <span style={{ fontSize:12, wordBreak:'break-all' }}>{p.name}</span>
+              </label>
+
+              {/\.(pdf)$/i.test(p.name) ? (
+                <div style={{ height: 120, display:'grid', placeItems:'center', background:'#f1f5f9', borderRadius:8, marginBottom:6 }}>
+                  📄 PDF
+                </div>
+              ) : (
+                <img
+                  src={p.url}
+                  alt={p.name}
+                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display:'block', marginBottom:6 }}
+                />
+              )}
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button style={BTN} onClick={() => downloadOne(p.name)}>Скачать</button>
+                <button style={DANGER} onClick={() => delPhoto(p.name)}>Удалить</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
