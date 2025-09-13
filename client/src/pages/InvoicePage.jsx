@@ -279,31 +279,28 @@ export default function InvoicePage() {
       doc.text(`Date: ${human(invoiceDate)}`, 306, 68, { align: 'center' });
 
       // right: company + logo (увеличено, с отступом)
-      const rightX = 612 - 80;
-      let rightY = 100;
-      let logoBottom = 0;
-      try {
-        const logo = logoDataURL || (await loadLogoDataURL());
-        if (logo) {
-          const top = 24;
-          const w = 130, h = 130; // увеличенный логотип
-          doc.addImage(logo, 'PNG', rightX - w, top, w, h);
-          logoBottom = top + h;
+     const rightX = 612 - 80;
+     let rightY = 100;
+     let logoBottom = 0;
+     try {
+     const logo = logoDataURL || (await loadLogoDataURL());
+     if (logo) {
+     const top = 24;
+     const w = 130, h = 130;
+     doc.addImage(logo, 'PNG', rightX - w, top, w, h);
+     logoBottom = top + h;
         }
-      } catch { /* ignore */ }
+      } catch {}
 
-      const PAD = 18; // отступ от лого
-      rightY = Math.max(100, logoBottom + PAD);
-
-      doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' }); rightY += 14;
-      doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
-        doc.text(line, rightX, rightY, { align: 'right' }); rightY += 12;
-      });
+      const PAD = 18;              // отступ от лого
+      const LEFT_TOP = 170;        // верх Bill To (см. ниже — мы его используем и слева)
+      const RIGHT_SHIFT = 24;      // НА СКОЛЬКО опустить правый блок ниже Bill To
+      const rightStartY = Math.max(logoBottom + PAD, LEFT_TOP + RIGHT_SHIFT);
+      rightY = rightStartY;
 
       // left: Bill To — опускаем не выше правого
       const leftX = 40;
-      let leftY = Math.max(150, rightY);
+      let leftY = Math.max(170, rightY);
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
@@ -534,5 +531,6 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
