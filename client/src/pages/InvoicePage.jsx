@@ -139,19 +139,25 @@ export default function InvoicePage() {
       }
 
       // 3) Bill To — сначала из заявки (чтобы форма не была пустой)
-      setBillName(pick(j, ['client_name', 'full_name', 'name']));
-      setBillPhone(pick(j, ['client_phone', 'phone']));
-      setBillEmail(pick(j, ['client_email', 'email']));
-      setBillAddress(
-        composeAddress(j) ||
-          composeAddress({
-            address: pick(j, ['client_address', 'address']),
-            address_line1: j?.address_line1,
-            address_line2: j?.address_line2,
-            city: j?.city,
-            state: j?.state,
-            zip: j?.zip || j?.postal_code,
-          })
+    let clientData = null;
+        if (j.client_id) {
+          const { data: c, error: ec } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', j.client_id)
+            .maybeSingle();
+          if (!ec && c) clientData = c;
+        }
+        if (!clientData) {
+          clientData = {
+            full_name: j.client_name || j.full_name || '',
+            phone: j.client_phone || j.phone || '',
+            email: j.client_email || j.email || '',
+            address: j.client_address || j.address || '',
+          };
+        }
+        if (!alive) return;
+        setClient(clientData);
       );
 
       // 4) Если у заявки есть client_id — пробуем забрать настоящего клиента и ПЕРЕЗАПИСАТЬ Bill To
@@ -539,3 +545,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
