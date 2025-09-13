@@ -536,9 +536,27 @@ export default function InvoicePage() {
           {saving ? 'Please wait…' : 'Сохранить и скачать PDF'}
         </button>
       </div>
+      try {
+  const pdfBlob = doc.output('blob'); // jsPDF v2.x
+  const bucket = supabase.storage.from('invoices');
+  const key = `${id}/${filename}`; // id = jobId из useParams
+
+  const { error: upErr } = await bucket.upload(key, pdfBlob, {
+    upsert: true,
+    cacheControl: '3600',
+    contentType: 'application/pdf',
+  });
+
+  if (upErr) {
+    console.warn('Upload invoice PDF failed:', upErr);
+  }
+} catch (e) {
+  console.warn('PDF upload error:', e);
+}
     </div>
   );
 }
+
 
 
 
