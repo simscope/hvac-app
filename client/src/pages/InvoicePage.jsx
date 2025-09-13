@@ -306,13 +306,14 @@ export default function InvoicePage() {
       });
 
       // left: Bill To — опускаем не выше правого
+      // left: Bill To
       const leftX = 40;
-      let leftY = Math.max(170, rightY);
+      let leftY = LEFT_TOP;        // фиксированно, не отталкивается от правого блока
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), leftX, leftY); leftY += 12;
-      });
+      doc.text(String(line), leftX, leftY); leftY += 12;
+       });
 
       // таблица
       const headerBottom = Math.max(leftY, rightY, logoBottom) + 16;
@@ -538,6 +539,7 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
 
