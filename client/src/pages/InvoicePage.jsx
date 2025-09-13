@@ -1,6 +1,6 @@
 // client/src/pages/InvoicePage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -56,10 +56,12 @@ async function loadLogoDataURL(timeoutMs = 2500) {
       fr.onloadend = () => resolve(fr.result);
       fr.readAsDataURL(blob);
     });
-  } catch {
+  } catch (e) {
     return null;
   }
 }
+
+const nowMinusSecISO = (sec) => new Date(Date.now() - sec * 1000).toISOString();
 
 /* ---------------- styles ---------------- */
 const S = {
@@ -94,6 +96,8 @@ const S = {
 
 export default function InvoicePage() {
   const { id } = useParams(); // job id (uuid)
+  const [search] = useSearchParams();
+  const viewInvoiceNo = Number(search.get('no') || 0) || null; // режим просмотра
 
   // logo
   const [logoDataURL, setLogoDataURL] = useState(null);
@@ -114,13 +118,13 @@ export default function InvoicePage() {
   ]);
   const [discount, setDiscount] = useState(0); // в БД не пишем, только в PDF
 
-  // реквизиты инвойса (дата; номер отображаем «ожидаемый», реальный берём после insert)
+  // реквизиты инвойса
   const [invoiceNo, setInvoiceNo] = useState(''); // показываем предполагаемый next
   const [invoiceDate, setInvoiceDate] = useState(new Date());
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState(false); // сторож от двойного клика
 
   /* ----------- load logo ----------- */
   useEffect(() => {
@@ -199,8 +203,7 @@ export default function InvoicePage() {
         if (!alive) return;
         const next = (N(last?.[0]?.invoice_no) || 0) + 1;
         setInvoiceNo(String(next));
-      } catch {
-        // Фоллбек
+      } catch (e) {
         const ts = Date.now().toString().slice(-6);
         setInvoiceNo(ts);
       }
@@ -216,13 +219,11 @@ export default function InvoicePage() {
     [rows]
   );
   const laborTotal = useMemo(
-    () => rows.filter(r => r.type === 'service')
-              .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    () => rows.filter(r => r.type === 'service').reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
   const partsTotal = useMemo(
-    () => rows.filter(r => r.type === 'material')
-              .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    () => rows.filter(r => r.type === 'material').reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
   const total = useMemo(
@@ -241,33 +242,76 @@ export default function InvoicePage() {
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ----------- save + pdf (вставляем только имеющиеся поля) ----------- */
+  /* ----------- upload to Storage ----------- */
+  async function uploadPdfToStorage(filename, blob) {
+    try {
+      const { error: upErr } = await supabase.storage
+        .from('invoices')
+        .upload(`${id}/${filename}`, blob, {
+          upsert: true,
+          cacheControl: '3600',
+          contentType: 'application/pdf',
+        });
+      if (upErr) {
+        console.warn('Upload invoice PDF failed:', upErr);
+      }
+    } catch (e) {
+      console.warn('PDF upload error:', e);
+    }
+  }
+
+  /* ----------- save + pdf (со сторожем) ----------- */
   async function saveAndDownload() {
+    if (saving) return; // сторож от дабл-клика
     setSaving(true);
     try {
-      // 1) INSERT только существующих колонок
-      const payload = {
-        job_id: id ?? null,
-        labor_cost: N(laborTotal),
-        parts_cost: N(partsTotal),
-        // technician_percent / technician_total оставляем пустыми (0/NULL)
-      };
+      let thisInvoiceNo = viewInvoiceNo || null;
 
-      const { data: inserted, error } = await supabase
-        .from('invoices')
-        .insert(payload)
-        .select('id, invoice_no')
-        .single();
+      if (!thisInvoiceNo) {
+        // WATCHDOG: если инвойс по job уже создавался в последние 45 сек — не делаем дубль
+        const recentFrom = nowMinusSecISO(45);
+        const { data: recent } = await supabase
+          .from('invoices')
+          .select('invoice_no, created_at')
+          .eq('job_id', id ?? null)
+          .gte('created_at', recentFrom)
+          .order('created_at', { ascending: false })
+          .limit(1);
 
-      if (error) {
-        console.error('Insert invoice failed:', error);
-        alert('Ошибка сохранения инвойса: ' + (error.message || 'unknown'));
-        return;
+        if (recent && recent.length > 0 && Number(recent[0].invoice_no)) {
+          thisInvoiceNo = Number(recent[0].invoice_no);
+        }
       }
 
-      const thisInvoiceNo = inserted?.invoice_no ?? (invoiceNo || 'DRAFT');
+      if (!thisInvoiceNo) {
+        // обычная вставка только существующих полей
+        const payload = {
+          job_id: id ?? null,
+          labor_cost: N(laborTotal),
+          parts_cost: N(partsTotal),
+        };
 
-      // 2) PDF с реальным номером
+        const { data: inserted, error } = await supabase
+          .from('invoices')
+          .insert(payload)
+          .select('id, invoice_no')
+          .single();
+
+        if (error) {
+          console.error('Insert invoice failed:', error);
+          alert('Ошибка сохранения инвойса: ' + (error.message || 'unknown'));
+          return;
+        }
+
+        thisInvoiceNo = (inserted?.invoice_no ?? invoiceNo) ?? 'DRAFT';
+
+        // обновим ожидаемый next в UI
+        if (inserted?.invoice_no) {
+          setInvoiceNo(String(Number(inserted.invoice_no) + 1));
+        }
+      }
+
+      // 2) PDF
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
 
       // header center
@@ -279,41 +323,41 @@ export default function InvoicePage() {
       doc.text(`Date: ${human(invoiceDate)}`, 306, 68, { align: 'center' });
 
       // right: company + logo (увеличено, с отступом)
-     const rightX = 612 - 80;
-     let rightY = 100;
-     let logoBottom = 0;
-     try {
-     const logo = logoDataURL || (await loadLogoDataURL());
-     if (logo) {
-     const top = 24;
-     const w = 130, h = 130;
-     doc.addImage(logo, 'PNG', rightX - w, top, w, h);
-     logoBottom = top + h;
+      const rightX = 612 - 80;
+      let rightY = 100;
+      let logoBottom = 0;
+      try {
+        const logo = logoDataURL || (await loadLogoDataURL());
+        if (logo) {
+          const top = 24;
+          const w = 130, h = 130;
+          doc.addImage(logo, 'PNG', rightX - w, top, w, h);
+          logoBottom = top + h;
         }
-      } catch {}
+      } catch (e) { /* ignore */ }
 
-      const PAD = 18;              // отступ от лого
-      const LEFT_TOP = 170;        // верх Bill To (см. ниже — мы его используем и слева)
-      const RIGHT_SHIFT = 0;      // НА СКОЛЬКО опустить правый блок ниже Bill To
+      const PAD = 18;       // отступ от лого
+      const LEFT_TOP = 170; // верх Bill To
+      const RIGHT_SHIFT = 0; // опустить правый блок относительно Bill To
       const rightStartY = Math.max(logoBottom + PAD, LEFT_TOP + RIGHT_SHIFT);
       rightY = rightStartY;
+
       // реквизиты компании
       doc.setFont(undefined, 'bold');
       doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' }); rightY += 14;
       doc.setFont(undefined, 'normal');
       ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
-      doc.text(line, rightX, rightY, { align: 'right' }); rightY += 12;
+        doc.text(line, rightX, rightY, { align: 'right' }); rightY += 12;
       });
 
-      // left: Bill To — опускаем не выше правого
-      // left: Bill To
+      // left: Bill To (фиксированно)
       const leftX = 40;
-      let leftY = LEFT_TOP;        // фиксированно, не отталкивается от правого блока
+      let leftY = LEFT_TOP;
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-      doc.text(String(line), leftX, leftY); leftY += 12;
-       });
+        doc.text(String(line), leftX, leftY); leftY += 12;
+      });
 
       // таблица
       const headerBottom = Math.max(leftY, rightY, logoBottom) + 16;
@@ -350,9 +394,7 @@ export default function InvoicePage() {
         doc.setFont(undefined, 'bold'); doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY); endY += 12;
         doc.setFont(undefined, 'normal'); doc.setFontSize(9);
         const txt =
-          `A ${Number(
-            warrantyDays
-          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
+          `A ${Number(warrantyDays)}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
           `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
           `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
         const lines = doc.splitTextToSize(txt, 612 - 80);
@@ -365,9 +407,36 @@ export default function InvoicePage() {
       const filename = `invoice_${thisInvoiceNo}.pdf`;
       doc.save(filename);
 
-      // 3) показать «следующий номер» в поле формы (для информации)
-      if (inserted?.invoice_no) {
-        setInvoiceNo(String(Number(inserted.invoice_no) + 1));
+      // загрузим PDF в Storage (чтобы список на странице заявки увидел файл)
+    // === Загрузка PDF в Supabase Storage: invoices/<jobId>/<filename> ===
+try {
+  // jsPDF v2.x — самый прямой способ
+  let pdfBlob;
+  if (typeof doc.output === 'function' && doc.output('blob')) {
+    pdfBlob = doc.output('blob');
+  } else {
+    // редкий запасной вариант
+    const ab = doc.output('arraybuffer');
+    pdfBlob = new Blob([ab], { type: 'application/pdf' });
+  }
+
+  const filePath = `${id}/${filename}`; // id = jobId из useParams()
+  const { error } = await supabase.storage
+    .from('invoices')
+    .upload(filePath, pdfBlob, {
+      upsert: true,
+      cacheControl: '3600',
+      contentType: 'application/pdf',
+    });
+
+  if (error) {
+    console.warn('Storage upload failed:', error.message || error);
+  }
+} catch (e) {
+  console.warn('Storage upload error:', e);
+}
+
+        // ignore upload errors
       }
     } catch (e) {
       console.error(e);
@@ -533,16 +602,9 @@ export default function InvoicePage() {
       {/* action */}
       <div style={{ marginTop: 12 }}>
         <button onClick={saveAndDownload} disabled={saving} style={S.primary}>
-          {saving ? 'Please wait…' : 'Сохранить и скачать PDF'}
+          {saving ? 'Please wait…' : (viewInvoiceNo ? 'Скачать PDF' : 'Сохранить и скачать PDF')}
         </button>
       </div>
-  
     </div>
   );
 }
-
-
-
-
-
-
