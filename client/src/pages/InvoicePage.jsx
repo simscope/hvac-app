@@ -265,7 +265,7 @@ export default function InvoicePage() {
         return;
       }
 
-      const thisInvoiceNo = inserted?.invoice_no ?? invoiceNo || 'DRAFT';
+      const thisInvoiceNo = inserted?.invoice_no ?? (invoiceNo || 'DRAFT');
 
       // 2) PDF с реальным номером
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
@@ -534,3 +534,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
