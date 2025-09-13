@@ -294,7 +294,7 @@ export default function InvoicePage() {
 
       const PAD = 18;              // отступ от лого
       const LEFT_TOP = 170;        // верх Bill To (см. ниже — мы его используем и слева)
-      const RIGHT_SHIFT = 24;      // НА СКОЛЬКО опустить правый блок ниже Bill To
+      const RIGHT_SHIFT = 0;      // НА СКОЛЬКО опустить правый блок ниже Bill To
       const rightStartY = Math.max(logoBottom + PAD, LEFT_TOP + RIGHT_SHIFT);
       rightY = rightStartY;
 
@@ -531,6 +531,7 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
 
