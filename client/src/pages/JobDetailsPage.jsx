@@ -796,50 +796,55 @@ export default function JobDetailsPage() {
           </div>
 
           {/* Инвойсы (PDF) */}
-          <div style={BOX}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 8 }}>
-              <div style={H2}>Инвойсы (PDF)</div>
-              <div style={{ display:'flex', gap:8 }}>
-                <button style={GHOST} onClick={loadInvoices}>Обновить</button>
-                <button style={PRIMARY} onClick={createInvoice}>+ Создать инвойс</button>
-              </div>
-            </div>
+         <div className="card" style={{ padding: 14, border: '1px solid #e5e7eb', borderRadius: 12 }}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+    <div style={{ fontWeight: 700 }}>Инвойсы (PDF)</div>
+    <div style={{ display: 'flex', gap: 8 }}>
+      <button className="btn btn-light" onClick={loadInvoices} disabled={invLoading}>
+        {invLoading ? '...' : 'Обновить'}
+      </button>
+      <button
+        className="btn btn-primary"
+        onClick={() => navigate(`/invoice/${jobId}`)}
+        title="Создать новый инвойс для этой заявки"
+      >
+        + Создать инвойс
+      </button>
+    </div>
+  </div>
 
-            {invoicesLoading ? (
-              <div style={MUTED}>Загрузка…</div>
-            ) : invoices.length === 0 ? (
-              <div style={MUTED}>Пока нет инвойсов для этой заявки</div>
-            ) : (
-              <div style={{ overflowX:'auto' }}>
-                <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                  <thead>
-                    <tr>
-                      <Th>Файл</Th>
-                      <Th>Обновлён</Th>
-                      <Th center>Действия</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoices.map(inv => (
-                      <tr key={inv.name}>
-                        <Td><span style={{ wordBreak:'break-all' }}>{inv.name}</span></Td>
-                        <Td>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : '—'}</Td>
-                        <Td center>
-                          <div style={{ display:'flex', gap:6, justifyContent:'center' }}>
-                            <button style={BTN} onClick={() => openInvoice(inv.name)}>Открыть</button>
-                            <button style={BTN} onClick={() => downloadInvoice(inv.name)}>Скачать</button>
-                            <button style={DANGER} onClick={() => deleteInvoice(inv.name)}>Удалить</button>
-                          </div>
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+  {(!invoices || invoices.length === 0) && (
+    <div style={{ color: '#6b7280' }}>Пока нет инвойсов для этой заявки</div>
+  )}
+
+  {invoices && invoices.length > 0 && (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {invoices.map((inv) => (
+        <div
+          key={inv.id}
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid #eef2f7', borderRadius: 8 }}
+        >
+          <div>
+            <div style={{ fontWeight: 600 }}>Invoice #{inv.invoice_no}</div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>
+              {new Date(inv.created_at || Date.now()).toLocaleString()}
+            </div>
+          </div>
+          <div>
+            <Link
+              className="btn btn-outline"
+              to={`/invoice/${jobId}?no=${encodeURIComponent(inv.invoice_no)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Открыть PDF
+            </Link>
           </div>
         </div>
-      </div>
+      ))}
+    </div>
+  )}
+</div>
 
       {/* Материалы */}
       <div style={BOX}>
@@ -1054,3 +1059,4 @@ function Td({ children, center }) {
     </td>
   );
 }
+
