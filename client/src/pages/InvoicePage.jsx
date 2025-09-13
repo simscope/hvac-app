@@ -6,6 +6,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 /* ---------------- helpers ---------------- */
+const nowMinusSecISO = (sec = 45) =>
+  new Date(Date.now() - sec * 1000).toISOString();
 const pad = (n) => String(n).padStart(2, '0');
 const toInputDate = (d) =>
   `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -261,11 +263,13 @@ export default function InvoicePage() {
   }
 
   /* ----------- save + pdf (со сторожем) ----------- */
-  async function saveAndDownload() {
-    if (saving) return; // сторож от дабл-клика
+ async function saveAndDownload() {
+    if (saving) return;              // сторож от дабл-клика
     setSaving(true);
+
     try {
-      let thisInvoiceNo = viewInvoiceNo || null;
+     // 1) выясняем/резервируем номер инвойса
+       let thisInvoiceNo = Number(invoiceNo) || null;
 
       if (!thisInvoiceNo) {
         // WATCHDOG: если инвойс по job уже создавался в последние 45 сек — не делаем дубль
@@ -608,3 +612,4 @@ try {
     </div>
   );
 }
+
