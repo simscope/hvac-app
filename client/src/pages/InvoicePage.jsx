@@ -302,7 +302,7 @@ export default function InvoicePage() {
 
       // left: Bill To
       const leftX = 40;
-      const LEFT_TOP = 150;          // ← регулируй высоту здесь
+      const LEFT_TOP = 200;          // ← регулируй высоту здесь
       let leftY = LEFT_TOP;
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
@@ -534,6 +534,7 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
 
