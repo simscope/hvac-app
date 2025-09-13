@@ -285,7 +285,7 @@ export default function InvoicePage() {
         const logo = logoDataURL || (await loadLogoDataURL());
         if (logo) {
           const top = 30;
-          const w = 90, h = 90;
+          const w = 120, h = 120;
           doc.addImage(logo, 'PNG', rightX - w, top, w, h);
           logoBottom = top + h; // 120
         }
@@ -532,6 +532,7 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
 
