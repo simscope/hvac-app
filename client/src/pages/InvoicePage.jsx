@@ -279,7 +279,7 @@ export default function InvoicePage() {
 
       // right: company + logo
       const rightX = 612 - 80;
-      let rightY = 200;
+      let rightY = 100;
       let logoBottom = 0;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
@@ -290,7 +290,10 @@ export default function InvoicePage() {
           logoBottom = top + h; // 120
         }
       } catch { /* ignore */ }
-
+      
+      const PAD = 18; // отступ между логотипом и блоком реквизитов
+      rightY = Math.max(100, logoBottom + PAD);
+      
       doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' }); rightY += 14;
       doc.setFont(undefined, 'normal');
       ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
@@ -529,6 +532,7 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
 
