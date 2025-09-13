@@ -14,35 +14,36 @@ const fromInputDate = (s) => {
   return new Date(y, (m || 1) - 1, day || 1);
 };
 const formatHuman = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
-const num = (v) => Number(v || 0);
+const N = (v) => Number(v || 0);
+const T = (v) => String(v ?? '').trim();
 const clean = (v) => {
-  const s = String(v ?? '').trim();
+  const s = T(v);
   return s && s.toLowerCase() !== 'empty' ? s : '';
 };
-function composeAddress(obj = {}) {
+const pick = (o = {}, keys = []) => {
+  for (const k of keys) {
+    const v = clean(o[k]);
+    if (v) return v;
+  }
+  return '';
+};
+function composeAddress(o = {}) {
   const parts = [
-    obj.address,
-    obj.address_line1,
-    obj.address_line2,
-    obj.street,
-    obj.street1,
-    obj.street2,
-    obj.city,
-    obj.state,
-    obj.region,
-    obj.zip,
-    obj.postal_code,
+    o.address,
+    o.address_line1,
+    o.address_line2,
+    o.street,
+    o.street1,
+    o.street2,
+    o.city,
+    o.state,
+    o.region,
+    o.zip,
+    o.postal_code,
   ]
     .map(clean)
     .filter(Boolean);
   return [...new Set(parts)].join(', ');
-}
-function pick(obj = {}, keys = []) {
-  for (const k of keys) {
-    const v = clean(obj[k]);
-    if (v) return v;
-  }
-  return '';
 }
 async function loadLogoDataURL(timeoutMs = 2500) {
   try {
@@ -82,10 +83,11 @@ const S = {
 export default function InvoicePage() {
   const { id } = useParams(); // job id (может быть undefined)
 
-  // загрузка/сохранение
+  // Общие состояния
   const [saving, setSaving] = useState(false);
+  const [logoDataURL, setLogoDataURL] = useState(null);
 
-  // job
+  // Заявка/клиент
   const [job, setJob] = useState(null);
 
   // Bill To
@@ -94,58 +96,92 @@ export default function InvoicePage() {
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
-  // строки
+  // Строки/итоги
   const [rows, setRows] = useState([
     { type: 'service', name: 'Labor', qty: 1, price: 0 },
     { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
   ]);
   const [discount, setDiscount] = useState(0);
 
-  // номер/дата
+  // Номер/дата/гарантия
   const [invoiceNo, setInvoiceNo] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date());
-
-  // гарантия
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
-  const [logoDataURL, setLogoDataURL] = useState(null);
-
-  /* ---------- фоновые подгрузки (НЕ блокируют UI) ---------- */
+  /* ---------- фоновые подгрузки ---------- */
   useEffect(() => {
-    // логотип — отдельно, чтобы не блокировать кнопку
-    loadLogoDataURL().then((data) => setLogoDataURL(data || null));
+    loadLogoDataURL().then((d) => setLogoDataURL(d || null));
   }, []);
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      try {
-        // job
-        let j = null;
-        if (id) {
+      // 1) Заявка
+      let j = null;
+      if (id) {
+        try {
           const { data } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
           if (!alive) return;
           j = data || null;
           setJob(j);
+        } catch {
+          /* ignore */
         }
+      }
 
-        // Bill To
-        let c = null;
-        if (j?.client_id) {
-          const { data: cData } = await supabase
+      // 2) Подставляем базовые строки из заявки (не блокирует)
+      if (j) {
+        setRows([
+          { type: 'service', name: 'Labor', qty: 1, price: N(j?.labor_price) },
+          { type: 'service', name: 'Service Call Fee', qty: 1, price: N(j?.scf) },
+        ]);
+      }
+
+      // 3) Bill To — сначала из заявки (чтобы форма не была пустой)
+      setBillName(pick(j, ['client_name', 'full_name', 'name']));
+      setBillPhone(pick(j, ['client_phone', 'phone']));
+      setBillEmail(pick(j, ['client_email', 'email']));
+      setBillAddress(
+        composeAddress(j) ||
+          composeAddress({
+            address: pick(j, ['client_address', 'address']),
+            address_line1: j?.address_line1,
+            address_line2: j?.address_line2,
+            city: j?.city,
+            state: j?.state,
+            zip: j?.zip || j?.postal_code,
+          })
+      );
+
+      // 4) Если у заявки есть client_id — пробуем забрать настоящего клиента и ПЕРЕЗАПИСАТЬ Bill To
+      if (j?.client_id) {
+        try {
+          const { data: c } = await supabase
             .from('clients')
             .select('full_name,name,phone,email,address,address_line1,address_line2,street,city,state,zip,postal_code')
             .eq('id', j.client_id)
             .maybeSingle();
+
           if (!alive) return;
-          c = cData || null;
+
+          if (c) {
+            setBillName(pick(c, ['full_name', 'name']) || billName);
+            setBillPhone(pick(c, ['phone']) || billPhone);
+            setBillEmail(pick(c, ['email']) || billEmail);
+            const addr = composeAddress(c);
+            if (addr) setBillAddress(addr);
+          }
+        } catch {
+          /* ignore */
         }
-        if (!c && j) {
-          const n = clean(pick(j, ['client_name', 'full_name', 'name']));
-          const p = clean(pick(j, ['client_phone', 'phone']));
-          const e = clean(pick(j, ['client_email', 'email']));
+      } else if (!billName || !billPhone || !billEmail) {
+        // 5) Мягкий поиск клиента по полям заявки (на всякий случай)
+        try {
           const filters = [];
+          const n = pick(j, ['client_name', 'full_name', 'name']);
+          const p = pick(j, ['client_phone', 'phone']);
+          const e = pick(j, ['client_email', 'email']);
           if (n) filters.push(`full_name.eq.${encodeURIComponent(n)}`);
           if (p) filters.push(`phone.eq.${encodeURIComponent(p)}`);
           if (e) filters.push(`email.eq.${encodeURIComponent(e)}`);
@@ -157,81 +193,49 @@ export default function InvoicePage() {
               .order('created_at', { ascending: false })
               .limit(1);
             if (!alive) return;
-            c = guess?.[0] || null;
-          }
-        }
-
-        setBillName(pick(c, ['full_name', 'name']) || pick(j, ['client_name', 'full_name', 'name']) || '');
-        setBillAddress(
-          composeAddress(c) ||
-          composeAddress(j) ||
-          composeAddress({
-            address: pick(j, ['client_address', 'address']),
-            address_line1: j?.address_line1,
-            address_line2: j?.address_line2,
-            city: j?.city,
-            state: j?.state,
-            zip: j?.zip || j?.postal_code,
-          })
-        );
-        setBillPhone(pick(c, ['phone']) || pick(j, ['client_phone', 'phone']) || '');
-        setBillEmail(pick(c, ['email']) || pick(j, ['client_email', 'email']) || '');
-
-        // строки (Labor/SCF подставятся даже если далее что-то упадёт)
-        if (j) {
-          setRows((prev) => {
-            const base = [
-              { type: 'service', name: 'Labor', qty: 1, price: num(j?.labor_price) },
-              { type: 'service', name: 'Service Call Fee', qty: 1, price: num(j?.scf) },
-            ];
-            return base;
-          });
-
-          // материалы — мягко
-          try {
-            const { data: mats } = await supabase.from('materials').select('name,qty,price').eq('job_id', id);
-            if (!alive) return;
-            if (Array.isArray(mats) && mats.length) {
-              setRows((prev) => [
-                ...prev,
-                ...mats.map((m) => ({
-                  type: 'material',
-                  name: clean(m.name),
-                  qty: num(m.qty) || 1,
-                  price: num(m.price),
-                })),
-              ]);
+            if (guess?.[0]) {
+              const c = guess[0];
+              setBillName(pick(c, ['full_name', 'name']) || billName);
+              setBillPhone(pick(c, ['phone']) || billPhone);
+              setBillEmail(pick(c, ['email']) || billEmail);
+              const addr = composeAddress(c);
+              if (addr) setBillAddress(addr);
             }
-          } catch {
-            /* ignore */
           }
-        }
-
-        // авто-номер — мягко
-        try {
-          const { data } = await supabase
-            .from('invoices')
-            .select('invoice_no')
-            .order('invoice_no', { ascending: false })
-            .limit(1);
-          if (!alive) return;
-          const next = (data?.[0]?.invoice_no || 0) + 1;
-          setInvoiceNo(String(next));
         } catch {
           /* ignore */
         }
-
-        setInvoiceDate(new Date());
-      } catch (e) {
-        console.warn('[Invoice init]', e?.message || e);
       }
+
+      // 6) Авто-номер инвойса — сперва пробуем max(invoice_no), если RLS/ошибка — делаем предсказуемый fallback
+      try {
+        const { data } = await supabase
+          .from('invoices')
+          .select('invoice_no')
+          .order('invoice_no', { ascending: false })
+          .limit(1);
+        if (!alive) return;
+        const next = (N(data?.[0]?.invoice_no) || 0) + 1;
+        setInvoiceNo(String(next));
+      } catch {
+        // fallback: job_number / job id / короткий timestamp
+        const ts = Date.now().toString().slice(-6);
+        const fallback = j?.job_number || id || ts;
+        setInvoiceNo(String(fallback));
+      }
+
+      // 7) Текущая дата по умолчанию
+      setInvoiceDate(new Date());
     })();
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
   /* ---------- вычисления ---------- */
-  const subtotal = useMemo(() => rows.reduce((s, r) => s + num(r.qty) * num(r.price), 0), [rows]);
-  const total = useMemo(() => Math.max(0, num(subtotal) - num(discount)), [subtotal, discount]);
+  const subtotal = useMemo(() => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0), [rows]);
+  const total = useMemo(() => Math.max(0, N(subtotal) - N(discount)), [subtotal, discount]);
 
   /* ---------- редактирование строк ---------- */
   const changeRow = (i, key, val) => {
@@ -251,7 +255,7 @@ export default function InvoicePage() {
       invoice_no: invoiceNo ? Number(invoiceNo) : null,
       issued_on: toInputDate(invoiceDate),
       subtotal,
-      discount: num(discount),
+      discount: N(discount),
       total_due: total,
       rows_json: rows,
       bill_to_name: billName || null,
@@ -276,9 +280,10 @@ export default function InvoicePage() {
     try {
       const saved = await persistInvoice();
 
+      // PDF
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
 
-      // INVOICE / DATE
+      // Заголовок
       doc.setFontSize(14);
       doc.setFont(undefined, 'bold');
       doc.text(`INVOICE #${invoiceNo || 'DRAFT'}`, 306, 52, { align: 'center' });
@@ -286,48 +291,63 @@ export default function InvoicePage() {
       doc.setFont(undefined, 'normal');
       doc.text(`Date: ${formatHuman(invoiceDate)}`, 306, 68, { align: 'center' });
 
-      // logo (если будет)
+      // Company + logo справа
+      const rightX = 612 - 40;
+      let rightY = 100;
+      let logoBottom = 0;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
-        if (logo) doc.addImage(logo, 'PNG', 460, 30, 90, 90);
-      } catch {/* ignore */}
+        if (logo) {
+          const top = 30;
+          const w = 90, h = 90;
+          doc.addImage(logo, 'PNG', rightX - w, top, w, h);
+          logoBottom = top + h; // 120
+        }
+      } catch { /* ignore */ }
 
-      // Bill To (слева)
-      const left = 40;
-      let y = 100;
-      doc.setFont(undefined, 'bold'); doc.text('Bill To:', left, y); y += 14;
+      doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' }); rightY += 14;
       doc.setFont(undefined, 'normal');
-      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => { doc.text(String(line), left, y); y += 12; });
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
+        doc.text(line, rightX, rightY, { align: 'right' });
+        rightY += 12;
+      });
 
-      // Company (справа)
-      const right = 612 - 40; let ry = 100;
-      doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', right, ry, { align: 'right' }); ry += 14;
+      // Bill To слева
+      const leftX = 40; let leftY = 100;
+      doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com']
-        .forEach((line) => { doc.text(line, right, ry, { align: 'right' }); ry += 12; });
+      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => { doc.text(String(line), leftX, leftY); leftY += 12; });
 
-      // table
+      // Старт таблицы: ЧЁТКО НИЖЕ шапки и логотипа
+      const headerBottom = Math.max(leftY, rightY, logoBottom) + 16;
+
       const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
-        String(num(r.qty)),
-        `$${num(r.price).toFixed(2)}`,
-        `$${(num(r.qty) * num(r.price)).toFixed(2)}`,
+        String(N(r.qty)),
+        `$${N(r.price).toFixed(2)}`,
+        `$${(N(r.qty) * N(r.price)).toFixed(2)}`,
       ]);
+
       autoTable(doc, {
-        startY: Math.max(y, ry) + 14,
+        startY: headerBottom,
         head: [['Description', 'Qty', 'Unit Price', 'Amount']],
         body,
         styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1 },
         headStyles: { fillColor: [245, 245, 245], textColor: 0, fontStyle: 'bold' },
         margin: { left: 40, right: 40 },
-        columnStyles: { 0: { cellWidth: 372 }, 1: { cellWidth: 40, halign: 'center' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 60, halign: 'right' } },
+        columnStyles: {
+          0: { cellWidth: 372 },
+          1: { cellWidth: 40, halign: 'center' },
+          2: { cellWidth: 60, halign: 'right' },
+          3: { cellWidth: 60, halign: 'right' },
+        },
       });
 
       let endY = doc.lastAutoTable.finalY + 10;
       doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${num(subtotal).toFixed(2)}`, right, endY, { align: 'right' }); endY += 14;
-      doc.text(`Discount: -$${num(discount).toFixed(2)}`, right, endY, { align: 'right' }); endY += 14;
-      doc.text(`Total Due: $${num(total).toFixed(2)}`, right, endY, { align: 'right' }); endY += 18;
+      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, rightX, endY, { align: 'right' }); endY += 14;
+      doc.text(`Discount: -$${N(discount).toFixed(2)}`, rightX, endY, { align: 'right' }); endY += 14;
+      doc.text(`Total Due: $${N(total).toFixed(2)}`, rightX, endY, { align: 'right' }); endY += 18;
 
       if (includeWarranty && Number(warrantyDays) > 0) {
         doc.setFont(undefined, 'bold'); doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY); endY += 12;
@@ -343,7 +363,7 @@ export default function InvoicePage() {
       }
 
       doc.setFontSize(10);
-      doc.text('Thank you for your business!', right, 760, { align: 'right' });
+      doc.text('Thank you for your business!', rightX, 760, { align: 'right' });
 
       const filename = `invoice_${invoiceNo || (id ? `job_${id}` : 'draft')}.pdf`;
       doc.save(filename);
@@ -366,19 +386,32 @@ export default function InvoicePage() {
       <div style={{ ...S.card, marginBottom: 12 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <div style={{ fontWeight: 600 }}>Invoice #</div>
-          <input style={{ ...S.input, width: 120 }} value={invoiceNo}
-                 onChange={(e) => setInvoiceNo(e.target.value.replace(/[^\d]/g, ''))} placeholder="auto" />
+          <input
+            style={{ ...S.input, width: 140 }}
+            value={invoiceNo}
+            onChange={(e) => setInvoiceNo(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="auto"
+          />
           <div style={{ fontWeight: 600, marginLeft: 6 }}>Date</div>
-          <input type="date" style={S.input} value={toInputDate(invoiceDate)}
-                 onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))} />
+          <input
+            type="date"
+            style={S.input}
+            value={toInputDate(invoiceDate)}
+            onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
+          />
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 10 }}>
             <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
             Include warranty
           </label>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             Days:
-            <input type="number" min={0} style={{ ...S.input, width: 80 }}
-                   value={warrantyDays} onChange={(e) => setWarrantyDays(Number(e.target.value || 0))} />
+            <input
+              type="number"
+              min={0}
+              style={{ ...S.input, width: 80 }}
+              value={warrantyDays}
+              onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
+            />
           </div>
         </div>
       </div>
@@ -405,7 +438,9 @@ export default function InvoicePage() {
                   job?.job_number ? `Job #${job.job_number}` : '',
                   job?.system_type ? `System: ${job.system_type}` : '',
                   job?.issue ? `Issue: ${job.issue}` : '',
-                ].filter(Boolean).join(' · ')
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
               : 'No job linked'}
           </div>
         </div>
@@ -434,40 +469,64 @@ export default function InvoicePage() {
                   </select>
                 </td>
                 <td style={S.td}>
-                  <input style={S.input} value={r.name} onChange={(e) => changeRow(i, 'name', e.target.value)}
-                         placeholder={r.type === 'service' ? 'Service' : 'Item'} />
+                  <input
+                    style={S.input}
+                    value={r.name}
+                    onChange={(e) => changeRow(i, 'name', e.target.value)}
+                    placeholder={r.type === 'service' ? 'Service' : 'Item'}
+                  />
                 </td>
                 <td style={{ ...S.td, textAlign: 'center' }}>
-                  <input type="number" style={{ ...S.input, width: 80, textAlign: 'center' }}
-                         value={r.qty} onChange={(e) => changeRow(i, 'qty', e.target.value)} />
+                  <input
+                    type="number"
+                    style={{ ...S.input, width: 80, textAlign: 'center' }}
+                    value={r.qty}
+                    onChange={(e) => changeRow(i, 'qty', e.target.value)}
+                  />
                 </td>
                 <td style={{ ...S.td, textAlign: 'right' }}>
-                  <input type="number" style={{ ...S.input, width: 120, textAlign: 'right' }}
-                         value={r.price} onChange={(e) => changeRow(i, 'price', e.target.value)} />
+                  <input
+                    type="number"
+                    style={{ ...S.input, width: 120, textAlign: 'right' }}
+                    value={r.price}
+                    onChange={(e) => changeRow(i, 'price', e.target.value)}
+                  />
                 </td>
-                <td style={{ ...S.td, textAlign: 'right' }}>${(num(r.qty) * num(r.price)).toFixed(2)}</td>
+                <td style={{ ...S.td, textAlign: 'right' }}>${(N(r.qty) * N(r.price)).toFixed(2)}</td>
                 <td style={{ ...S.td, textAlign: 'center' }}>
-                  <button style={{ ...S.btn, color: '#ef4444', borderColor: '#ef4444' }} onClick={() => delRow(i)} title="Remove">✕</button>
+                  <button
+                    style={{ ...S.btn, color: '#ef4444', borderColor: '#ef4444' }}
+                    onClick={() => delRow(i)}
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
         <div style={{ marginTop: 8 }}>
-          <button style={S.ghost} onClick={addRow}>+ Add row</button>
+          <button style={S.ghost} onClick={addRow}>
+            + Add row
+          </button>
         </div>
       </div>
 
       {/* итоги */}
       <div style={{ ...S.card, marginTop: 12 }}>
         <div style={{ textAlign: 'right' }}>
-          <div>Subtotal: ${num(subtotal).toFixed(2)}</div>
+          <div>Subtotal: ${N(subtotal).toFixed(2)}</div>
           <div style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
             <div style={{ fontWeight: 600 }}>Discount $:</div>
-            <input type="number" style={{ ...S.input, width: 120, textAlign: 'right' }}
-                   value={discount} onChange={(e) => setDiscount(Number(e.target.value || 0))} />
+            <input
+              type="number"
+              style={{ ...S.input, width: 120, textAlign: 'right' }}
+              value={discount}
+              onChange={(e) => setDiscount(Number(e.target.value || 0))}
+            />
           </div>
-          <div style={{ fontWeight: 700, fontSize: 18, marginTop: 8 }}>Total Due: ${num(total).toFixed(2)}</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginTop: 8 }}>Total Due: ${N(total).toFixed(2)}</div>
         </div>
       </div>
 
