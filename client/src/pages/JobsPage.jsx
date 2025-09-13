@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import CreateJob from '../components/CreateJob';
 import { supabase } from '../supabaseClient';
 
+// Порядок приоритета статусов (оставляю как у тебя)
 const STATUS_ORDER = [
   'ReCall',
   'диагностика',
@@ -11,8 +12,17 @@ const STATUS_ORDER = [
   'заказ деталей',
   'ожидание деталей',
   'к финишу',
-  'заверщено',
-  ];
+  'завершено', 
+];
+
+// Статусы, которые НЕ должны отображаться в списке (скрываем)
+const HIDDEN_STATUSES = new Set([
+  'завершено',   // правильное написание
+  'заверщено',   // опечатка, которая могла попасть в базу
+  'completed',   // на всякий
+  'done',
+  'закрыто',
+]);
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
@@ -46,12 +56,10 @@ export default function JobsPage() {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
     const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
-      d.getHours()
-    )}:${p(d.getMinutes())}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   };
 
-  // представление для таблицы
+  // Вьюха для таблицы (обогащаем данными клиента)
   const jobsView = useMemo(
     () =>
       (jobs || []).map((j) => {
@@ -66,14 +74,28 @@ export default function JobsPage() {
     [jobs, clients]
   );
 
-  // сортировка: приоритет статуса + новее выше
-  const orderMap = useMemo(
-    () => new Map(STATUS_ORDER.map((s, i) => [s.toLowerCase(), i])),
-    []
+  // Скрываем завершённые (но селект статуса остаётся в строках, которые видим)
+  const activeJobsView = useMemo(
+    () =>
+      jobsView.filter(
+        (j) => !HIDDEN_STATUSES.has(String(j.status || '').toLowerCase())
+      ),
+    [jobsView]
   );
 
+  // Карта приоритетов для сортировки
+  const orderMap = useMemo(() => {
+    const m = new Map(STATUS_ORDER.map((s, i) => [s.toLowerCase(), i]));
+    // Алиасим правильное написание к значению опечатанного, чтобы сорт шёл одинаково
+    if (!m.has('завершено') && m.has('заверщено')) {
+      m.set('завершено', m.get('заверщено'));
+    }
+    return m;
+  }, []);
+
+  // Сортировка: сперва по приоритету статуса, потом новее выше
   const sortedJobs = useMemo(() => {
-    return [...jobsView].sort((a, b) => {
+    return [...activeJobsView].sort((a, b) => {
       const ar = orderMap.has(String(a.status || '').toLowerCase())
         ? orderMap.get(String(a.status || '').toLowerCase())
         : 999;
@@ -83,22 +105,20 @@ export default function JobsPage() {
       if (ar !== br) return ar - br;
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     });
-  }, [jobsView, orderMap]);
+  }, [activeJobsView, orderMap]);
 
-  // локальное редактирование ячеек
+  // Локальное редактирование ячеек
   const handleChange = (id, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
   };
 
-  // сохранение (минимально нужные поля)
+  // Сохранение (минимально нужные поля)
   const handleSave = async (job) => {
     setSavingId(job.id);
     try {
       const payload = {
         technician_id:
-          job.technician_id === '' || job.technician_id == null
-            ? null
-            : job.technician_id,
+          job.technician_id === '' || job.technician_id == null ? null : job.technician_id,
         status: job.status ?? null,
         scf:
           job.scf === '' || job.scf == null
@@ -111,6 +131,7 @@ export default function JobsPage() {
       if (error) throw error;
       await fetchAll();
       alert('Сохранено');
+      // Если выставили завершённый статус — после рефреша эта строка пропадёт из списка (как и требовалось)
     } catch (e) {
       console.error(e);
       alert('Ошибка при сохранении');
@@ -120,6 +141,13 @@ export default function JobsPage() {
   };
 
   const openJob = (id) => navigate(`/job/${id}`);
+
+  // Селект статусов (оставляю твой порядок + добавляю корректное "завершено" про запас)
+  const STATUS_OPTIONS = useMemo(() => {
+    const set = new Set(STATUS_ORDER);
+    set.add('завершено'); // вдруг в базе/логике уже правильное написание
+    return Array.from(set);
+  }, []);
 
   return (
     <div className="p-4">
@@ -270,7 +298,7 @@ export default function JobsPage() {
                       onChange={(e) => handleChange(job.id, 'status', e.target.value)}
                     >
                       <option value="">—</option>
-                      {STATUS_ORDER.map((s) => (
+                      {STATUS_OPTIONS.map((s) => (
                         <option key={s} value={s}>
                           {s}
                         </option>
@@ -322,4 +350,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
