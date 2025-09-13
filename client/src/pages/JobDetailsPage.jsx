@@ -26,7 +26,7 @@ const GHOST   = { ...BTN, background: '#f8fafc' };
 /* ---------- Storage ---------- */
 const PHOTOS_BUCKET   = 'job-photos';
 const INVOICES_BUCKET = 'invoices';
-const storage    = () => supabase.storage.from(PHOTOS_BUCKET);
+const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
 /* ---------- Справочники ---------- */
@@ -44,7 +44,7 @@ const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'in
 const SYSTEM_OPTIONS  = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
 
 /* ---------- Хелперы ---------- */
-const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
+const toNum = (v) => (v === '' || v === null || isNaN(v) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
 
 // datetime-local
@@ -140,8 +140,8 @@ export default function JobDetailsPage() {
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
-  // Инвойсы
-  const [invoices, setInvoices] = useState([]); // [{name,url,updated_at}]
+  // Инвойсы (объединённый список)
+  const [invoices, setInvoices] = useState([]); // [{source, name, url, updated_at, invoice_no, hasFile}]
   const [invoicesLoading, setInvoicesLoading] = useState(true);
 
   /* ---------- загрузка ---------- */
@@ -269,26 +269,62 @@ export default function JobDetailsPage() {
     setCommentsLoading(false);
   };
 
-  // Инвойсы
+  // Инвойсы (Storage + DB → merge)
   const loadInvoices = async () => {
     setInvoicesLoading(true);
-    const { data, error } = await invStorage().list(`${jobId}`, {
-      limit: 200,
-      sortBy: { column: 'updated_at', order: 'desc' },
-    });
-    if (error) {
-      console.error('loadInvoices', error);
+    try {
+      const [stRes, dbRes] = await Promise.all([
+        invStorage().list(`${jobId}`, {
+          limit: 200,
+          sortBy: { column: 'updated_at', order: 'desc' },
+        }),
+        supabase
+          .from('invoices')
+          .select('invoice_no, created_at')
+          .eq('job_id', jobId)
+          .order('created_at', { ascending: false }),
+      ]);
+
+      const stData = stRes?.data || [];
+      const stor = stData
+        .filter(o => /\.pdf$/i.test(o.name))
+        .map(o => {
+          const full = `${jobId}/${o.name}`;
+          const { data: pub } = invStorage().getPublicUrl(full);
+          const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
+          return {
+            source: 'storage',
+            name: o.name,
+            url: pub?.publicUrl || null,
+            updated_at: o.updated_at || o.created_at || null,
+            invoice_no: m ? String(m[1]) : null,
+            hasFile: true,
+          };
+        });
+
+      const rows = dbRes?.data || [];
+      const db = rows.map(r => ({
+        source: 'db',
+        name: `invoice_${r.invoice_no}.pdf`,
+        url: null,
+        updated_at: r.created_at,
+        invoice_no: String(r.invoice_no),
+        hasFile: stor.some(s => s.invoice_no === String(r.invoice_no)),
+      }));
+
+      const merged = [...stor];
+      db.forEach(d => {
+        if (!merged.some(x => x.invoice_no === d.invoice_no)) merged.push(d);
+      });
+
+      merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+      setInvoices(merged);
+    } catch (e) {
+      console.error('loadInvoices merge error:', e);
       setInvoices([]);
+    } finally {
       setInvoicesLoading(false);
-      return;
     }
-    const list = (data || []).filter(o => /\.pdf$/i.test(o.name)).map(o => {
-      const full = `${jobId}/${o.name}`;
-      const { data: pub } = invStorage().getPublicUrl(full);
-      return { name: o.name, url: pub.publicUrl, updated_at: o.updated_at || o.created_at || null };
-    });
-    setInvoices(list);
-    setInvoicesLoading(false);
   };
 
   const addComment = async () => {
@@ -566,14 +602,19 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- инвойсы: действия ---------- */
-  const openInvoice = (name) => {
-    const { data } = invStorage().getPublicUrl(`${jobId}/${name}`);
-    const url = data?.publicUrl;
-    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  const openInvoice = (item) => {
+    if (item?.hasFile && item?.url) {
+      window.open(item.url, '_blank', 'noopener,noreferrer');
+    } else if (item?.invoice_no) {
+      window.open(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`, '_blank', 'noopener,noreferrer');
+    } else {
+      window.open(`/invoice/${jobId}`, '_blank', 'noopener,noreferrer');
+    }
   };
 
-  const downloadInvoice = async (name) => {
-    const { data, error } = await invStorage().download(`${jobId}/${name}`);
+  const downloadInvoice = async (item) => {
+    if (!item?.hasFile) return;
+    const { data, error } = await invStorage().download(`${jobId}/${item.name}`);
     if (error || !data) {
       console.error('downloadInvoice', error);
       alert('Не удалось скачать инвойс');
@@ -582,16 +623,17 @@ export default function JobDetailsPage() {
     const url = URL.createObjectURL(data);
     const a = document.createElement('a');
     a.href = url;
-    a.download = name;
+    a.download = item.name;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
   };
 
-  const deleteInvoice = async (name) => {
+  const deleteInvoice = async (item) => {
+    if (!item?.hasFile) return;
     if (!window.confirm('Удалить инвойс?')) return;
-    const { error } = await invStorage().remove([`${jobId}/${name}`]);
+    const { error } = await invStorage().remove([`${jobId}/${item.name}`]);
     if (error) {
       console.error('deleteInvoice', error);
       alert('Не удалось удалить инвойс');
@@ -600,9 +642,9 @@ export default function JobDetailsPage() {
     await loadInvoices();
   };
 
-  // ВАЖНО: открываем страницу инвойса через navigate, чтобы работало и с HashRouter
   const createInvoice = () => {
-    navigate(`/invoice/${jobId}`);
+    // откроем генератор инвойса для этой заявки (как раньше — в новой вкладке)
+    window.open(`/invoice/${jobId}`, '_blank', 'noopener,noreferrer');
   };
 
   /* ---------- отображение ---------- */
@@ -825,7 +867,7 @@ export default function JobDetailsPage() {
               <div style={{ display: 'grid', gap: 8 }}>
                 {invoices.map((inv) => (
                   <div
-                    key={inv.name}
+                    key={`${inv.source}-${inv.invoice_no || inv.name}`}
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -836,15 +878,38 @@ export default function JobDetailsPage() {
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 600 }}>{inv.name}</div>
+                      <div style={{ fontWeight: 600 }}>
+                        {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
+                        {!inv.hasFile && (
+                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>
+                            (PDF ещё не в хранилище)
+                          </span>
+                        )}
+                      </div>
                       <div style={{ fontSize: 12, color: '#6b7280' }}>
                         {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" style={BTN} onClick={() => openInvoice(inv.name)}>Открыть</button>
-                      <button type="button" style={BTN} onClick={() => downloadInvoice(inv.name)}>Скачать</button>
-                      <button type="button" style={DANGER} onClick={() => deleteInvoice(inv.name)}>Удалить</button>
+                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
+                        Открыть PDF
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                        onClick={() => inv.hasFile && downloadInvoice(inv)}
+                        disabled={!inv.hasFile}
+                      >
+                        Скачать
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                        onClick={() => inv.hasFile && deleteInvoice(inv)}
+                        disabled={!inv.hasFile}
+                      >
+                        Удалить
+                      </button>
                     </div>
                   </div>
                 ))}
