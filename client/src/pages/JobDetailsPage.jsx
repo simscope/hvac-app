@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 const PAGE  = { padding: 16, display: 'grid', gap: 12 };
 const BOX   = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
 const GRID2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
+const COL   = { display: 'grid', gap: 12 }; // колонка с несколькими боксами
 const ROW   = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' };
 const INPUT = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' };
 const SELECT = { ...INPUT };
@@ -23,8 +24,10 @@ const DANGER  = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
 const GHOST   = { ...BTN, background: '#f8fafc' };
 
 /* ---------- Storage ---------- */
-const PHOTOS_BUCKET = 'job-photos';
+const PHOTOS_BUCKET   = 'job-photos';
+const INVOICES_BUCKET = 'invoices';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
+const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
 /* ---------- Справочники ---------- */
 const STATUS_OPTIONS = [
@@ -137,6 +140,10 @@ export default function JobDetailsPage() {
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
+  // Инвойсы
+  const [invoices, setInvoices] = useState([]); // [{name,url,updated_at}]
+  const [invoicesLoading, setInvoicesLoading] = useState(true);
+
   /* ---------- загрузка ---------- */
   useEffect(() => {
     (async () => {
@@ -204,6 +211,7 @@ export default function JobDetailsPage() {
 
       await loadPhotos();
       await loadComments();
+      await loadInvoices();
 
       setLoading(false);
     })();
@@ -229,7 +237,7 @@ export default function JobDetailsPage() {
     setChecked({});
   };
 
-  // Комментарии: тянем, потом имена авторов одним запросом
+  // Комментарии
   const loadComments = async () => {
     setCommentsLoading(true);
     const { data, error } = await supabase
@@ -246,9 +254,7 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-    const ids = Array.from(
-      new Set(list.map(c => c.author_user_id).filter(Boolean))
-    );
+    const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
 
     let map = {};
     if (ids.length) {
@@ -261,6 +267,28 @@ export default function JobDetailsPage() {
 
     setComments(list.map(c => ({ ...c, author_name: map[c.author_user_id] || null })));
     setCommentsLoading(false);
+  };
+
+  // Инвойсы
+  const loadInvoices = async () => {
+    setInvoicesLoading(true);
+    const { data, error } = await invStorage().list(`${jobId}`, {
+      limit: 200,
+      sortBy: { column: 'updated_at', order: 'desc' },
+    });
+    if (error) {
+      console.error('loadInvoices', error);
+      setInvoices([]);
+      setInvoicesLoading(false);
+      return;
+    }
+    const list = (data || []).filter(o => /\.pdf$/i.test(o.name)).map(o => {
+      const full = `${jobId}/${o.name}`;
+      const { data: pub } = invStorage().getPublicUrl(full);
+      return { name: o.name, url: pub.publicUrl, updated_at: o.updated_at || o.created_at || null };
+    });
+    setInvoices(list);
+    setInvoicesLoading(false);
   };
 
   const addComment = async () => {
@@ -281,8 +309,7 @@ export default function JobDetailsPage() {
       alert('Не удалось сохранить комментарий');
       return;
     }
-    const authorName =
-      profile?.full_name || profile?.name || user?.email || null;
+    const authorName = profile?.full_name || profile?.name || user?.email || null;
     setComments(prev => [...prev, { ...data, author_name: authorName }]);
     setCommentText('');
   };
@@ -458,7 +485,7 @@ export default function JobDetailsPage() {
     alert('Материалы сохранены');
   };
 
-  /* ---------- файлы ---------- */
+  /* ---------- файлы (фото/док-ты) ---------- */
   const onPick = async (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -535,11 +562,47 @@ export default function JobDetailsPage() {
   const downloadSelected = async () => {
     const names = photos.filter((p) => checked[p.name]).map((p) => p.name);
     if (!names.length) return;
-    for (const n of names) {
-      // последовательные загрузки, чтобы не ловить лимиты
-      // (при желании можно Promise.all, но так надёжнее)
-      await downloadOne(n);
+    for (const n of names) await downloadOne(n);
+  };
+
+  /* ---------- инвойсы: действия ---------- */
+  const openInvoice = (name) => {
+    const { data } = invStorage().getPublicUrl(`${jobId}/${name}`);
+    const url = data?.publicUrl;
+    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const downloadInvoice = async (name) => {
+    const { data, error } = await invStorage().download(`${jobId}/${name}`);
+    if (error || !data) {
+      console.error('downloadInvoice', error);
+      alert('Не удалось скачать инвойс');
+      return;
     }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const deleteInvoice = async (name) => {
+    if (!window.confirm('Удалить инвойс?')) return;
+    const { error } = await invStorage().remove([`${jobId}/${name}`]);
+    if (error) {
+      console.error('deleteInvoice', error);
+      alert('Не удалось удалить инвойс');
+      return;
+    }
+    await loadInvoices();
+  };
+
+  const createInvoice = () => {
+    // откроем генератор инвойса для этой заявки
+    window.open(`/invoice/${jobId}`, '_blank', 'noopener,noreferrer');
   };
 
   /* ---------- отображение ---------- */
@@ -560,169 +623,220 @@ export default function JobDetailsPage() {
     <div style={PAGE}>
       <div style={H1}>Редактирование заявки {jobNumTitle}</div>
 
+      {/* Верхняя сетка: слева Параметры, справа Клиент + Инвойсы */}
       <div style={GRID2}>
-        {/* Параметры */}
-        <div style={BOX}>
-          <div style={H2}>Параметры</div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            <div style={ROW}>
-              <div>Техник</div>
-              <select
-                style={SELECT}
-                value={job.technician_id == null ? '' : String(job.technician_id)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setField('technician_id', v === '' ? null : normalizeId(v));
-                }}
-              >
-                <option value="">—</option>
-                {techs
-                  .filter((t) => (t.role || 'tech').toLowerCase() === 'tech')
-                  .map((t) => (
-                    <option key={t.id} value={String(t.id)}>
-                      {t.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            <div style={ROW}>
-              <div>Дата визита</div>
-              <input
-                style={INPUT}
-                type="datetime-local"
-                value={toLocal(job.appointment_time)}
-                onChange={(e) => setField('appointment_time', fromLocal(e.target.value))}
-              />
-            </div>
-
-            <div style={ROW}>
-              <div>Тип системы</div>
-              <select
-                style={SELECT}
-                value={job.system_type || ''}
-                onChange={(e) => setField('system_type', e.target.value)}
-              >
-                {SYSTEM_OPTIONS.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-
-            <div style={ROW}>
-              <div>Проблема</div>
-              <input style={INPUT} value={job.issue || ''} onChange={(e) => setField('issue', e.target.value)} />
-            </div>
-
-            <div style={ROW}>
-              <div>SCF ($)</div>
-              <input
-                style={INPUT}
-                type="number"
-                value={job.scf ?? ''}
-                onChange={(e) => setField('scf', toNum(e.target.value))}
-              />
-            </div>
-
-            <div style={ROW}>
-              <div>Стоимость работы ($)</div>
-              <input
-                style={INPUT}
-                type="number"
-                value={job.labor_price ?? ''}
-                onChange={(e) => setField('labor_price', toNum(e.target.value))}
-              />
-            </div>
-
-            <div style={ROW}>
-              <div>Оплата работы</div>
-              <div>
-                <select
-                  style={{
-                    ...SELECT,
-                    border: `1px solid ${isUnpaid ? '#ef4444' : '#e5e7eb'}`,
-                    background: isUnpaid ? '#fef2f2' : '#fff',
-                  }}
-                  value={job.payment_method ?? '—'}
-                  onChange={(e) => setField('payment_method', e.target.value === '—' ? null : e.target.value)}
-                >
-                  {PAYMENT_OPTIONS.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-                {isUnpaid && (
-                  <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>
-                    Не оплачено — выбери способ оплаты
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div style={ROW}>
-              <div>Статус</div>
-              <div>
-                <select
-                  style={{
-                    ...SELECT,
-                    border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`,
-                    background: isRecall ? '#fef2f2' : '#fff',
-                  }}
-                  value={job.status || STATUS_OPTIONS[0]}
-                  onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
-                >
-                  <option value="recall">ReCall</option>
-                  <option value="диагностика">диагностика</option>
-                  <option value="в работе">в работе</option>
-                  <option value="заказ деталей">заказ деталей</option>
-                  <option value="ожидание деталей">ожидание деталей</option>
-                  <option value="к финишу">к финишу</option>
-                  <option value="завершено">завершено</option>
-                  <option value="отменено">отменено</option>
-                </select>
-                {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Статус ReCall</div>}
-              </div>
-            </div>
-
-            <div style={ROW}>
-              <div>Job № (необязательно)</div>
-              <input
-                style={INPUT}
-                value={job.job_number || ''}
-                onChange={(e) => setField('job_number', e.target.value)}
-              />
-            </div>
-
-            {'tech_comment' in (job || {}) && (
+        {/* Левая колонка */}
+        <div style={COL}>
+          {/* Параметры */}
+          <div style={BOX}>
+            <div style={H2}>Параметры</div>
+            <div style={{ display: 'grid', gap: 10 }}>
               <div style={ROW}>
-                <div>Комментарий от техника</div>
-                <textarea
-                  style={TA}
-                  value={job.tech_comment || ''}
-                  onChange={(e) => setField('tech_comment', e.target.value)}
+                <div>Техник</div>
+                <select
+                  style={SELECT}
+                  value={job.technician_id == null ? '' : String(job.technician_id)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setField('technician_id', v === '' ? null : normalizeId(v));
+                  }}
+                >
+                  <option value="">—</option>
+                  {techs
+                    .filter((t) => (t.role || 'tech').toLowerCase() === 'tech')
+                    .map((t) => (
+                      <option key={t.id} value={String(t.id)}>
+                        {t.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div style={ROW}>
+                <div>Дата визита</div>
+                <input
+                  style={INPUT}
+                  type="datetime-local"
+                  value={toLocal(job.appointment_time)}
+                  onChange={(e) => setField('appointment_time', fromLocal(e.target.value))}
                 />
               </div>
-            )}
 
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>Сохранить заявку</button>
-              <button style={GHOST} onClick={() => navigate(-1)}>Назад</button>
-              {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
+              <div style={ROW}>
+                <div>Тип системы</div>
+                <select
+                  style={SELECT}
+                  value={job.system_type || ''}
+                  onChange={(e) => setField('system_type', e.target.value)}
+                >
+                  {SYSTEM_OPTIONS.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={ROW}>
+                <div>Проблема</div>
+                <input style={INPUT} value={job.issue || ''} onChange={(e) => setField('issue', e.target.value)} />
+              </div>
+
+              <div style={ROW}>
+                <div>SCF ($)</div>
+                <input
+                  style={INPUT}
+                  type="number"
+                  value={job.scf ?? ''}
+                  onChange={(e) => setField('scf', toNum(e.target.value))}
+                />
+              </div>
+
+              <div style={ROW}>
+                <div>Стоимость работы ($)</div>
+                <input
+                  style={INPUT}
+                  type="number"
+                  value={job.labor_price ?? ''}
+                  onChange={(e) => setField('labor_price', toNum(e.target.value))}
+                />
+              </div>
+
+              <div style={ROW}>
+                <div>Оплата работы</div>
+                <div>
+                  <select
+                    style={{
+                      ...SELECT,
+                      border: `1px solid ${isUnpaid ? '#ef4444' : '#e5e7eb'}`,
+                      background: isUnpaid ? '#fef2f2' : '#fff',
+                    }}
+                    value={job.payment_method ?? '—'}
+                    onChange={(e) => setField('payment_method', e.target.value === '—' ? null : e.target.value)}
+                  >
+                    {PAYMENT_OPTIONS.map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  {isUnpaid && (
+                    <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>
+                      Не оплачено — выбери способ оплаты
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={ROW}>
+                <div>Статус</div>
+                <div>
+                  <select
+                    style={{
+                      ...SELECT,
+                      border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`,
+                      background: isRecall ? '#fef2f2' : '#fff',
+                    }}
+                    value={job.status || STATUS_OPTIONS[0]}
+                    onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
+                  >
+                    <option value="recall">ReCall</option>
+                    <option value="диагностика">диагностика</option>
+                    <option value="в работе">в работе</option>
+                    <option value="заказ деталей">заказ деталей</option>
+                    <option value="ожидание деталей">ожидание деталей</option>
+                    <option value="к финишу">к финишу</option>
+                    <option value="завершено">завершено</option>
+                    <option value="отменено">отменено</option>
+                  </select>
+                  {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Статус ReCall</div>}
+                </div>
+              </div>
+
+              <div style={ROW}>
+                <div>Job № (необязательно)</div>
+                <input
+                  style={INPUT}
+                  value={job.job_number || ''}
+                  onChange={(e) => setField('job_number', e.target.value)}
+                />
+              </div>
+
+              {'tech_comment' in (job || {}) && (
+                <div style={ROW}>
+                  <div>Комментарий от техника</div>
+                  <textarea
+                    style={TA}
+                    value={job.tech_comment || ''}
+                    onChange={(e) => setField('tech_comment', e.target.value)}
+                  />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>Сохранить заявку</button>
+                <button style={GHOST} onClick={() => navigate(-1)}>Назад</button>
+                {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Клиент */}
-        <div style={BOX}>
-          <div style={H2}>Клиент</div>
-          <div style={{ display: 'grid', gap: 10 }}>
-            <Row label="ФИО"    value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
-            <Row label="Телефон" value={client.phone}     onChange={(v) => setClientField('phone', v)} />
-            <Row label="Email"   value={client.email}     onChange={(v) => setClientField('email', v)} />
-            <Row label="Адрес"   value={client.address}   onChange={(v) => setClientField('address', v)} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
-              {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
+        {/* Правая колонка: Клиент + Инвойсы */}
+        <div style={COL}>
+          {/* Клиент */}
+          <div style={BOX}>
+            <div style={H2}>Клиент</div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <Row label="ФИО"    value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
+              <Row label="Телефон" value={client.phone}     onChange={(v) => setClientField('phone', v)} />
+              <Row label="Email"   value={client.email}     onChange={(v) => setClientField('email', v)} />
+              <Row label="Адрес"   value={client.address}   onChange={(v) => setClientField('address', v)} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
+                {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
+              </div>
             </div>
+          </div>
+
+          {/* Инвойсы (PDF) */}
+          <div style={BOX}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 8 }}>
+              <div style={H2}>Инвойсы (PDF)</div>
+              <div style={{ display:'flex', gap:8 }}>
+                <button style={GHOST} onClick={loadInvoices}>Обновить</button>
+                <button style={PRIMARY} onClick={createInvoice}>+ Создать инвойс</button>
+              </div>
+            </div>
+
+            {invoicesLoading ? (
+              <div style={MUTED}>Загрузка…</div>
+            ) : invoices.length === 0 ? (
+              <div style={MUTED}>Пока нет инвойсов для этой заявки</div>
+            ) : (
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead>
+                    <tr>
+                      <Th>Файл</Th>
+                      <Th>Обновлён</Th>
+                      <Th center>Действия</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoices.map(inv => (
+                      <tr key={inv.name}>
+                        <Td><span style={{ wordBreak:'break-all' }}>{inv.name}</span></Td>
+                        <Td>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : '—'}</Td>
+                        <Td center>
+                          <div style={{ display:'flex', gap:6, justifyContent:'center' }}>
+                            <button style={BTN} onClick={() => openInvoice(inv.name)}>Открыть</button>
+                            <button style={BTN} onClick={() => downloadInvoice(inv.name)}>Скачать</button>
+                            <button style={DANGER} onClick={() => deleteInvoice(inv.name)}>Удалить</button>
+                          </div>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       </div>
