@@ -11,8 +11,7 @@ const STATUS_ORDER = [
   'заказ деталей',
   'ожидание деталей',
   'к финишу',
-  'завершено',
-];
+  ];
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
@@ -322,3 +321,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
