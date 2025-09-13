@@ -1,28 +1,32 @@
 // client/src/pages/InvoicePage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 /* ---------------- helpers ---------------- */
-const nowMinusSecISO = (sec = 45) =>
-  new Date(Date.now() - sec * 1000).toISOString();
 const pad = (n) => String(n).padStart(2, '0');
+
 const toInputDate = (d) =>
   `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
 const fromInputDate = (s) => {
   if (!s) return new Date();
   const [y, m, day] = s.split('-').map(Number);
   return new Date(y, (m || 1) - 1, day || 1);
 };
-const human = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+
+const human = (d) =>
+  `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+
 const N = (v) => Number(v || 0);
 
 const clean = (v) => {
   const s = String(v ?? '').trim();
   return s && s.toLowerCase() !== 'empty' ? s : '';
 };
+
 function composeAddress(o = {}) {
   const parts = [
     o.address,
@@ -42,6 +46,9 @@ function composeAddress(o = {}) {
   return [...new Set(parts)].join(', ');
 }
 
+const nowMinusSecISO = (sec = 45) =>
+  new Date(Date.now() - sec * 1000).toISOString();
+
 async function loadLogoDataURL(timeoutMs = 2500) {
   try {
     const ac = new AbortController();
@@ -58,12 +65,10 @@ async function loadLogoDataURL(timeoutMs = 2500) {
       fr.onloadend = () => resolve(fr.result);
       fr.readAsDataURL(blob);
     });
-  } catch (e) {
+  } catch {
     return null;
   }
 }
-
-const nowMinusSecISO = (sec) => new Date(Date.now() - sec * 1000).toISOString();
 
 /* ---------------- styles ---------------- */
 const S = {
@@ -85,21 +90,48 @@ const S = {
     height: 36,
     boxSizing: 'border-box',
   },
-  card: { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 },
+  card: {
+    border: '1px solid #e5e7eb',
+    borderRadius: 12,
+    background: '#fff',
+    padding: 14,
+  },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
   muted: { color: '#6b7280' },
-  btn: { padding: '9px 14px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' },
-  primary: { padding: '10px 16px', borderRadius: 10, border: '1px solid #2563eb', background: '#2563eb', color: '#fff', cursor: 'pointer' },
-  ghost: { padding: '9px 14px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#f8fafc', cursor: 'pointer' },
+  btn: {
+    padding: '9px 14px',
+    borderRadius: 10,
+    border: '1px solid #d1d5db',
+    background: '#fff',
+    cursor: 'pointer',
+  },
+  primary: {
+    padding: '10px 16px',
+    borderRadius: 10,
+    border: '1px solid #2563eb',
+    background: '#2563eb',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+  ghost: {
+    padding: '9px 14px',
+    borderRadius: 10,
+    border: '1px solid #e5e7eb',
+    background: '#f8fafc',
+    cursor: 'pointer',
+  },
   table: { width: '100%', borderCollapse: 'collapse' },
-  th: { textAlign: 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 },
+  th: {
+    textAlign: 'left',
+    borderBottom: '1px solid #e5e7eb',
+    background: '#f9fafb',
+    padding: 8,
+  },
   td: { borderBottom: '1px solid #f1f5f9', padding: 6 },
 };
 
 export default function InvoicePage() {
   const { id } = useParams(); // job id (uuid)
-  const [search] = useSearchParams();
-  const viewInvoiceNo = Number(search.get('no') || 0) || null; // режим просмотра
 
   // logo
   const [logoDataURL, setLogoDataURL] = useState(null);
@@ -107,26 +139,26 @@ export default function InvoicePage() {
   // job
   const [job, setJob] = useState(null);
 
-  // Bill To (только для PDF/печати)
+  // Bill To (для PDF/печати)
   const [billName, setBillName] = useState('');
   const [billAddress, setBillAddress] = useState('');
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
-  // таблица позиций
+  // строки таблицы
   const [rows, setRows] = useState([
     { type: 'service', name: 'Labor', qty: 1, price: 0 },
     { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
   ]);
-  const [discount, setDiscount] = useState(0); // в БД не пишем, только в PDF
+  const [discount, setDiscount] = useState(0);
 
-  // реквизиты инвойса
-  const [invoiceNo, setInvoiceNo] = useState(''); // показываем предполагаемый next
+  // инвойс meta
+  const [invoiceNo, setInvoiceNo] = useState(''); // предполагаемый next (read-only)
   const [invoiceDate, setInvoiceDate] = useState(new Date());
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
-  const [saving, setSaving] = useState(false); // сторож от двойного клика
+  const [saving, setSaving] = useState(false);
 
   /* ----------- load logo ----------- */
   useEffect(() => {
@@ -140,7 +172,11 @@ export default function InvoicePage() {
       // Job
       let j = null;
       if (id) {
-        const { data } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
+        const { data } = await supabase
+          .from('jobs')
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
         if (!alive) return;
         j = data || null;
         setJob(j);
@@ -148,20 +184,20 @@ export default function InvoicePage() {
 
       // Client (лучшее из jobs/clients)
       let clientData = null;
-      if (j?.client_id) {
-        const { data: c, error: ec } = await supabase
+      if (j && j.client_id) {
+        const q = await supabase
           .from('clients')
           .select('*')
           .eq('id', j.client_id)
           .maybeSingle();
-        if (!ec && c) clientData = c;
+        if (!q.error && q.data) clientData = q.data;
       }
       if (!clientData) {
         clientData = {
-          full_name: j?.client_name || j?.full_name || '',
-          phone: j?.client_phone || j?.phone || '',
-          email: j?.client_email || j?.email || '',
-          address: j?.client_address || j?.address || '',
+          full_name: (j && (j.client_name || j.full_name)) || '',
+          phone: (j && (j.client_phone || j.phone)) || '',
+          email: (j && (j.client_email || j.email)) || '',
+          address: (j && (j.client_address || j.address)) || '',
           city: j?.city,
           state: j?.state,
           zip: j?.zip,
@@ -195,7 +231,7 @@ export default function InvoicePage() {
         ]);
       }
 
-      // Предполагаемый следующий номер (если RLS разрешает чтение)
+      // Предполагаемый следующий номер (если RLS даёт читать)
       try {
         const { data: last } = await supabase
           .from('invoices')
@@ -203,16 +239,19 @@ export default function InvoicePage() {
           .order('invoice_no', { ascending: false })
           .limit(1);
         if (!alive) return;
-        const next = (N(last?.[0]?.invoice_no) || 0) + 1;
+        const next = (N(last && last[0] && last[0].invoice_no) || 0) + 1;
         setInvoiceNo(String(next));
-      } catch (e) {
+      } catch {
+        // Фоллбек
         const ts = Date.now().toString().slice(-6);
         setInvoiceNo(ts);
       }
 
       setInvoiceDate(new Date());
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
   /* ----------- computed ----------- */
@@ -220,14 +259,23 @@ export default function InvoicePage() {
     () => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
+
   const laborTotal = useMemo(
-    () => rows.filter(r => r.type === 'service').reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    () =>
+      rows
+        .filter((r) => r.type === 'service')
+        .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
+
   const partsTotal = useMemo(
-    () => rows.filter(r => r.type === 'material').reduce((s, r) => s + N(r.qty) * N(r.price), 0),
+    () =>
+      rows
+        .filter((r) => r.type === 'material')
+        .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
+
   const total = useMemo(
     () => Math.max(0, N(subtotal) - N(discount)),
     [subtotal, discount]
@@ -237,86 +285,66 @@ export default function InvoicePage() {
   const changeRow = (i, key, val) => {
     setRows((prev) => {
       const cp = [...prev];
-      cp[i] = { ...cp[i], [key]: key === 'name' || key === 'type' ? val : Number(val || 0) };
+      cp[i] = {
+        ...cp[i],
+        [key]: key === 'name' || key === 'type' ? val : Number(val || 0),
+      };
       return cp;
     });
   };
-  const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
+  const addRow = () =>
+    setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ----------- upload to Storage ----------- */
-  async function uploadPdfToStorage(filename, blob) {
-    try {
-      const { error: upErr } = await supabase.storage
-        .from('invoices')
-        .upload(`${id}/${filename}`, blob, {
-          upsert: true,
-          cacheControl: '3600',
-          contentType: 'application/pdf',
-        });
-      if (upErr) {
-        console.warn('Upload invoice PDF failed:', upErr);
-      }
-    } catch (e) {
-      console.warn('PDF upload error:', e);
-    }
-  }
-
-  /* ----------- save + pdf (со сторожем) ----------- */
- async function saveAndDownload() {
-    if (saving) return;              // сторож от дабл-клика
+  /* ----------- save + pdf (со сторожем и загрузкой в Storage) ----------- */
+  async function saveAndDownload() {
+    if (saving) return; // сторож от дабл-клика
     setSaving(true);
 
     try {
-     // 1) выясняем/резервируем номер инвойса
-       let thisInvoiceNo = Number(invoiceNo) || null;
+      // 1) проверим, нет ли совсем свежего инвойса по этому job (анти-дубль)
+      let thisInvoiceNo = null;
 
-      if (!thisInvoiceNo) {
-        // WATCHDOG: если инвойс по job уже создавался в последние 45 сек — не делаем дубль
-        const recentFrom = nowMinusSecISO(45);
-        const { data: recent } = await supabase
-          .from('invoices')
-          .select('invoice_no, created_at')
-          .eq('job_id', id ?? null)
-          .gte('created_at', recentFrom)
-          .order('created_at', { ascending: false })
-          .limit(1);
+      const recentFrom = nowMinusSecISO(45);
+      const recentQ = await supabase
+        .from('invoices')
+        .select('invoice_no, created_at')
+        .eq('job_id', id || null)
+        .gte('created_at', recentFrom)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
-        if (recent && recent.length > 0 && Number(recent[0].invoice_no)) {
-          thisInvoiceNo = Number(recent[0].invoice_no);
-        }
+      if (!recentQ.error && recentQ.data && recentQ.data.length > 0) {
+        const n = Number(recentQ.data[0].invoice_no);
+        if (!Number.isNaN(n) && n > 0) thisInvoiceNo = n;
       }
 
-      if (!thisInvoiceNo) {
-        // обычная вставка только существующих полей
+      // Если свежего нет — создаём запись и берём реальный номер из БД
+      if (thisInvoiceNo == null) {
         const payload = {
-          job_id: id ?? null,
-          labor_cost: N(laborTotal),
-          parts_cost: N(partsTotal),
+          job_id: id || null,
+          labor_cost: Number(laborTotal) || 0,
+          parts_cost: Number(partsTotal) || 0,
+          // technician_percent / technician_total при необходимости
         };
 
         const { data: inserted, error } = await supabase
           .from('invoices')
           .insert(payload)
-          .select('id, invoice_no')
+          .select('id, invoice_no, created_at')
           .single();
 
-        if (error) {
-          console.error('Insert invoice failed:', error);
-          alert('Ошибка сохранения инвойса: ' + (error.message || 'unknown'));
-          return;
-        }
-
-        thisInvoiceNo = (inserted?.invoice_no ?? invoiceNo) ?? 'DRAFT';
-
-        // обновим ожидаемый next в UI
-        if (inserted?.invoice_no) {
-          setInvoiceNo(String(Number(inserted.invoice_no) + 1));
-        }
+        if (error) throw error;
+        thisInvoiceNo = Number(inserted.invoice_no);
       }
 
-      // 2) PDF
-      const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
+      // 2) Генерируем PDF
+      const doc = new jsPDF({
+        unit: 'pt',
+        format: 'letter',
+        compress: true,
+        putOnlyUsedFonts: true,
+      });
 
       // header center
       doc.setFontSize(14);
@@ -334,34 +362,46 @@ export default function InvoicePage() {
         const logo = logoDataURL || (await loadLogoDataURL());
         if (logo) {
           const top = 24;
-          const w = 130, h = 130;
+          const w = 130,
+            h = 130;
           doc.addImage(logo, 'PNG', rightX - w, top, w, h);
           logoBottom = top + h;
         }
-      } catch (e) { /* ignore */ }
+      } catch {
+        // ignore
+      }
 
-      const PAD = 18;       // отступ от лого
+      const PAD = 18; // отступ от лого
       const LEFT_TOP = 170; // верх Bill To
-      const RIGHT_SHIFT = 0; // опустить правый блок относительно Bill To
+      const RIGHT_SHIFT = 0; // при желании можно опустить правый блок ещё ниже
       const rightStartY = Math.max(logoBottom + PAD, LEFT_TOP + RIGHT_SHIFT);
       rightY = rightStartY;
 
       // реквизиты компании
       doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' }); rightY += 14;
+      doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' });
+      rightY += 14;
       doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
-        doc.text(line, rightX, rightY, { align: 'right' }); rightY += 12;
-      });
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach(
+        (line) => {
+          doc.text(line, rightX, rightY, { align: 'right' });
+          rightY += 12;
+        }
+      );
 
-      // left: Bill To (фиксированно)
+      // left: Bill To — ниже
       const leftX = 40;
       let leftY = LEFT_TOP;
-      doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
+      doc.setFont(undefined, 'bold');
+      doc.text('Bill To:', leftX, leftY);
+      leftY += 14;
       doc.setFont(undefined, 'normal');
-      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), leftX, leftY); leftY += 12;
-      });
+      [billName, billAddress, billPhone, billEmail]
+        .filter(Boolean)
+        .forEach((line) => {
+          doc.text(String(line), leftX, leftY);
+          leftY += 12;
+        });
 
       // таблица
       const headerBottom = Math.max(leftY, rightY, logoBottom) + 16;
@@ -390,15 +430,27 @@ export default function InvoicePage() {
 
       let endY = doc.lastAutoTable.finalY + 10;
       doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, rightX, endY, { align: 'right' }); endY += 14;
-      doc.text(`Discount: -$${N(discount).toFixed(2)}`, rightX, endY, { align: 'right' }); endY += 14;
-      doc.text(`Total Due: $${N(total).toFixed(2)}`, rightX, endY, { align: 'right' }); endY += 18;
+      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, rightX, endY, {
+        align: 'right',
+      });
+      endY += 14;
+      doc.text(`Discount: -$${N(discount).toFixed(2)}`, rightX, endY, {
+        align: 'right',
+      });
+      endY += 14;
+      doc.text(`Total Due: $${N(total).toFixed(2)}`, rightX, endY, { align: 'right' });
+      endY += 18;
 
       if (includeWarranty && Number(warrantyDays) > 0) {
-        doc.setFont(undefined, 'bold'); doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY); endY += 12;
-        doc.setFont(undefined, 'normal'); doc.setFontSize(9);
+        doc.setFont(undefined, 'bold');
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY);
+        endY += 12;
+        doc.setFont(undefined, 'normal');
+        doc.setFontSize(9);
         const txt =
-          `A ${Number(warrantyDays)}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
+          `A ${Number(
+            warrantyDays
+          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
           `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
           `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
         const lines = doc.splitTextToSize(txt, 612 - 80);
@@ -409,42 +461,34 @@ export default function InvoicePage() {
       doc.text('Thank you for your business!', rightX, 760, { align: 'right' });
 
       const filename = `invoice_${thisInvoiceNo}.pdf`;
+
+      // 3) Локально
       doc.save(filename);
 
-      // загрузим PDF в Storage (чтобы список на странице заявки увидел файл)
-    // === Загрузка PDF в Supabase Storage: invoices/<jobId>/<filename> ===
-try {
-  // jsPDF v2.x — самый прямой способ
-  let pdfBlob;
-  if (typeof doc.output === 'function' && doc.output('blob')) {
-    pdfBlob = doc.output('blob');
-  } else {
-    // редкий запасной вариант
-    const ab = doc.output('arraybuffer');
-    pdfBlob = new Blob([ab], { type: 'application/pdf' });
-  }
-
-  const filePath = `${id}/${filename}`; // id = jobId из useParams()
-  const { error } = await supabase.storage
-    .from('invoices')
-    .upload(filePath, pdfBlob, {
-      upsert: true,
-      cacheControl: '3600',
-      contentType: 'application/pdf',
-    });
-
-  if (error) {
-    console.warn('Storage upload failed:', error.message || error);
-  }
-} catch (e) {
-  console.warn('Storage upload error:', e);
-}
-
-        // ignore upload errors
+      // 4) Загрузка PDF в Storage: invoices/<jobId>/invoice_<no>.pdf
+      try {
+        const pdfBlob = doc.output('blob');
+        const storageKey = `${id}/${filename}`;
+        const up = await supabase.storage
+          .from('invoices')
+          .upload(storageKey, pdfBlob, {
+            cacheControl: '3600',
+            contentType: 'application/pdf',
+            upsert: true,
+          });
+        if (up.error) {
+          // не критично для пользователя — просто логируем
+          console.warn('Upload invoice PDF failed:', up.error);
+        }
+      } catch (e) {
+        console.warn('PDF upload error:', e);
       }
+
+      // 5) Показать «следующий номер» в поле (визуально)
+      setInvoiceNo(String((Number(thisInvoiceNo) || 0) + 1));
     } catch (e) {
-      console.error(e);
-      alert('Failed to save or download invoice');
+      console.error('saveAndDownload error:', e);
+      alert(`Failed to save or download invoice: ${e.message || e}`);
     } finally {
       setSaving(false);
     }
@@ -454,7 +498,11 @@ try {
   const tableRow = (r, i) => (
     <tr key={i}>
       <td style={S.td}>
-        <select style={S.select} value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)}>
+        <select
+          style={S.select}
+          value={r.type}
+          onChange={(e) => changeRow(i, 'type', e.target.value)}
+        >
           <option value="service">service</option>
           <option value="material">material</option>
         </select>
@@ -483,7 +531,9 @@ try {
           onChange={(e) => changeRow(i, 'price', e.target.value)}
         />
       </td>
-      <td style={{ ...S.td, textAlign: 'right' }}>${(N(r.qty) * N(r.price)).toFixed(2)}</td>
+      <td style={{ ...S.td, textAlign: 'right' }}>
+        ${((N(r.qty) || 0) * (N(r.price) || 0)).toFixed(2)}
+      </td>
       <td style={{ ...S.td, textAlign: 'center' }}>
         <button
           style={{ ...S.btn, color: '#ef4444', borderColor: '#ef4444' }}
@@ -508,7 +558,7 @@ try {
             style={{ ...S.input, width: 160, background: '#f9fafb' }}
             value={invoiceNo}
             readOnly
-            title="Автонумерация из БД. Номер будет присвоен при сохранении."
+            title="Автонумерация из БД. Номер присваивается при сохранении."
           />
           <div style={{ fontWeight: 600, marginLeft: 6 }}>Date</div>
           <input
@@ -517,8 +567,14 @@ try {
             value={toInputDate(invoiceDate)}
             onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
           />
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 10 }}>
-            <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 10 }}
+          >
+            <input
+              type="checkbox"
+              checked={includeWarranty}
+              onChange={(e) => setIncludeWarranty(e.target.checked)}
+            />
             Include warranty
           </label>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -539,11 +595,31 @@ try {
         <div style={S.card}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Bill To</div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <input style={S.input} placeholder="Full name / Company" value={billName} onChange={(e) => setBillName(e.target.value)} />
-            <input style={S.input} placeholder="Address" value={billAddress} onChange={(e) => setBillAddress(e.target.value)} />
+            <input
+              style={S.input}
+              placeholder="Full name / Company"
+              value={billName}
+              onChange={(e) => setBillName(e.target.value)}
+            />
+            <input
+              style={S.input}
+              placeholder="Address"
+              value={billAddress}
+              onChange={(e) => setBillAddress(e.target.value)}
+            />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <input style={S.input} placeholder="Phone" value={billPhone} onChange={(e) => setBillPhone(e.target.value)} />
-              <input style={S.input} placeholder="Email" value={billEmail} onChange={(e) => setBillEmail(e.target.value)} />
+              <input
+                style={S.input}
+                placeholder="Phone"
+                value={billPhone}
+                onChange={(e) => setBillPhone(e.target.value)}
+              />
+              <input
+                style={S.input}
+                placeholder="Email"
+                value={billEmail}
+                onChange={(e) => setBillEmail(e.target.value)}
+              />
             </div>
           </div>
         </div>
@@ -599,17 +675,18 @@ try {
               onChange={(e) => setDiscount(Number(e.target.value || 0))}
             />
           </div>
-          <div style={{ fontWeight: 700, fontSize: 18, marginTop: 8 }}>Total Due: ${N(total).toFixed(2)}</div>
+          <div style={{ fontWeight: 700, fontSize: 18, marginTop: 8 }}>
+            Total Due: ${N(total).toFixed(2)}
+          </div>
         </div>
       </div>
 
       {/* action */}
       <div style={{ marginTop: 12 }}>
         <button onClick={saveAndDownload} disabled={saving} style={S.primary}>
-          {saving ? 'Please wait…' : (viewInvoiceNo ? 'Скачать PDF' : 'Сохранить и скачать PDF')}
+          {saving ? 'Please wait…' : 'Сохранить и скачать PDF'}
         </button>
       </div>
     </div>
   );
 }
-
