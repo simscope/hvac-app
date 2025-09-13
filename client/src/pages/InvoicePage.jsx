@@ -303,7 +303,7 @@ export default function InvoicePage() {
 
       // left: Bill To — опускаем не выше правого
       const leftX = 40;
-      let leftY = Math.max(170, rightY);
+      let leftY = Math.max(150, rightY);
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY); leftY += 14;
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
@@ -534,4 +534,5 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
