@@ -278,7 +278,7 @@ export default function InvoicePage() {
       doc.text(`Date: ${human(invoiceDate)}`, 306, 68, { align: 'center' });
 
       // right: company + logo
-      const rightX = 612 - 40;
+      const rightX = 900 - 40;
       let rightY = 100;
       let logoBottom = 0;
       try {
@@ -529,3 +529,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
