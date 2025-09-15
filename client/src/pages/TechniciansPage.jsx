@@ -1,6 +1,7 @@
 // src/pages/AdminTechniciansPage.jsx
 // Простая версия: нет статусов/увольнений/сброса пароля.
 // Создание сотрудника + поиск/фильтр по роли + удаление через Edge-функцию.
+// Добавлен fallback: если функция вернула action_link, показываем кнопку и считаем операцию условно успешной.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
@@ -26,15 +27,47 @@ async function rawCallFunction(path, body) {
 
 function Banner({ title, text, details }) {
   const [open, setOpen] = useState(false);
-  if (!title && !text) return null;
+
+  // пробуем вытащить action_link из разных форматов ответа
+  const actionLink =
+    (details && (details.action_link || details?.json?.action_link)) ||
+    null;
+
+  if (!title && !text && !actionLink) return null;
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(actionLink);
+      alert("Ссылка скопирована в буфер обмена");
+    } catch {
+      // no-op
+    }
+  }
+
   return (
     <div className="banner">
       <div className="banner-head">
         <b>{title}</b>
-        {details && <button type="button" className="btn" onClick={() => setOpen(v => !v)}>{open ? "Скрыть детали" : "Показать детали"}</button>}
+        {details && (
+          <button type="button" className="btn" onClick={() => setOpen(v => !v)}>
+            {open ? "Скрыть детали" : "Показать детали"}
+          </button>
+        )}
       </div>
+
       {text && <div className="mt4">{text}</div>}
-      {open && details && <pre className="pre">{JSON.stringify(details, null, 2)}</pre>}
+
+      {actionLink && (
+        <div className="mt4" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <a className="btn" href={actionLink} target="_blank" rel="noreferrer">Открыть ссылку регистрации</a>
+          <button className="btn" type="button" onClick={copyLink}>Скопировать</button>
+          <span className="muted" style={{ wordBreak: "break-all" }}>{actionLink}</span>
+        </div>
+      )}
+
+      {open && details && (
+        <pre className="pre">{JSON.stringify(details, null, 2)}</pre>
+      )}
     </div>
   );
 }
@@ -133,22 +166,58 @@ export default function AdminTechniciansPage() {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("admin-create-user", { body: payload });
+      const inv = await supabase.functions.invoke("admin-create-user", { body: payload });
+      const data = inv.data;
+      const err = inv.error || data?.error || data?.warning;
 
-      if (error || data?.error || data?.warning) {
-        const raw = await rawCallFunction("admin-create-user", payload);
-        setBanner({
-          title: raw.ok ? "Сотрудник создан" : "Создание не выполнено",
-          text: raw.ok ? "Учётка зарегистрирована/привязана." : "Edge-функция вернула ошибку.",
-          details: { status: raw.status, ...raw.json },
-        });
-        if (!raw.ok) return;
-      } else {
+      // нормальный успех
+      if (!err && data && (data.ok || data.technician_id || data.auth_user_id)) {
         setBanner({ title: "Сотрудник создан", text: "Передайте e-mail и временный пароль.", details: data });
+        resetForm();
+        await fetchTechnicians();
+        return;
       }
 
-      resetForm();
-      await fetchTechnicians();
+      // fallback-успех: функция вернула action_link (signup/invite)
+      const actionLink =
+        data?.action_link ||
+        data?.details?.action_link ||
+        null;
+
+      if (actionLink) {
+        setBanner({
+          title: "Создание через ссылку",
+          text: "Не удалось создать напрямую. Открой ссылку регистрации: сотрудник завершит создание аккаунта сам.",
+          details: { status: 400, ...data, action_link: actionLink },
+        });
+        resetForm();
+        await fetchTechnicians();
+        return;
+      }
+
+      // если дошли сюда — пробуем «сырой» вызов (для отладки)
+      const raw = await rawCallFunction("admin-create-user", payload);
+      const rawLink = raw.json?.action_link || null;
+
+      if (rawLink) {
+        setBanner({
+          title: "Создание через ссылку",
+          text: "Открой ссылку регистрации для завершения создания.",
+          details: { status: raw.status, ...raw.json },
+        });
+        resetForm();
+        await fetchTechnicians();
+        return;
+      }
+
+      // окончательная ошибка
+      setBanner({
+        title: "Создание не выполнено",
+        text: "Edge-функция вернула ошибку.",
+        details: { status: inv?.error?.status || 400, ...(data || {}) },
+      });
+      return;
+
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
