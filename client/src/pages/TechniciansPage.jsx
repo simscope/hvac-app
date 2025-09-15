@@ -1,13 +1,16 @@
 // src/pages/AdminTechniciansPage.jsx
-// Простая версия: нет статусов/увольнений/сброса пароля.
-// Создание сотрудника + поиск/фильтр по роли + удаление через Edge-функцию.
-// Добавлен fallback: если функция вернула action_link, показываем кнопку и считаем операцию условно успешной.
+// Версия твоей страницы с:
+// - без фильтра статуса (is_active)
+// - без кнопок "Сброс пароля" и "Уволить/Вернуть"
+// - добавлена кнопка "Удалить из базы" (жёсткое удаление, с fallback)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
 
+// ---------- utils ----------
 function genTempPassword(len = 12) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
@@ -15,11 +18,16 @@ async function rawCallFunction(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || "";
   const url = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${path}`;
+
   const res = await fetch(url, {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify(body),
   });
+
   const text = await res.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
   return { ok: res.ok, status: res.status, json };
@@ -27,23 +35,7 @@ async function rawCallFunction(path, body) {
 
 function Banner({ title, text, details }) {
   const [open, setOpen] = useState(false);
-
-  // пробуем вытащить action_link из разных форматов ответа
-  const actionLink =
-    (details && (details.action_link || details?.json?.action_link)) ||
-    null;
-
-  if (!title && !text && !actionLink) return null;
-
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(actionLink);
-      alert("Ссылка скопирована в буфер обмена");
-    } catch {
-      // no-op
-    }
-  }
-
+  if (!title && !text) return null;
   return (
     <div className="banner">
       <div className="banner-head">
@@ -54,20 +46,8 @@ function Banner({ title, text, details }) {
           </button>
         )}
       </div>
-
       {text && <div className="mt4">{text}</div>}
-
-      {actionLink && (
-        <div className="mt4" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <a className="btn" href={actionLink} target="_blank" rel="noreferrer">Открыть ссылку регистрации</a>
-          <button className="btn" type="button" onClick={copyLink}>Скопировать</button>
-          <span className="muted" style={{ wordBreak: "break-all" }}>{actionLink}</span>
-        </div>
-      )}
-
-      {open && details && (
-        <pre className="pre">{JSON.stringify(details, null, 2)}</pre>
-      )}
+      {open && details && <pre className="pre">{JSON.stringify(details, null, 2)}</pre>}
     </div>
   );
 }
@@ -79,6 +59,7 @@ export default function AdminTechniciansPage() {
 
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [hasIsActive, setHasIsActive] = useState(true); // оставляем, но статус не используем
 
   // form
   const [email, setEmail] = useState("");
@@ -93,6 +74,8 @@ export default function AdminTechniciansPage() {
   // filters
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
+  // статусные фильтры убираем
+  // const [statusFilter, setStatusFilter] = useState("active");
 
   const isAdmin = useMemo(() => {
     if (!me) return false;
@@ -108,10 +91,18 @@ export default function AdminTechniciansPage() {
       setMe(user || null);
 
       if (user) {
-        const p = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
+        const p = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .maybeSingle();
         setMeProfileRole(p.data?.role ?? null);
 
-        const t = await supabase.from("technicians").select("role, is_admin").eq("auth_user_id", user.id).maybeSingle();
+        const t = await supabase
+          .from("technicians")
+          .select("role, is_admin")
+          .eq("auth_user_id", user.id)
+          .maybeSingle();
         setMeTechInfo(t.data || null);
       }
       await fetchTechnicians();
@@ -119,10 +110,21 @@ export default function AdminTechniciansPage() {
   }, []);
 
   async function fetchTechnicians() {
-    const { data, error } = await supabase
+    // пробуем запросить is_active (для совместимости), но в UI не используем
+    let { data, error } = await supabase
       .from("technicians")
-      .select("id, name, phone, role, auth_user_id, email")
+      .select("id, name, phone, role, auth_user_id, email, is_active")
       .order("name", { ascending: true });
+
+    if (error && /is_active/.test(error.message)) {
+      setHasIsActive(false);
+      const r2 = await supabase
+        .from("technicians")
+        .select("id, name, phone, role, auth_user_id, email")
+        .order("name", { ascending: true });
+      data = r2.data;
+      error = r2.error;
+    }
 
     if (error) {
       setBanner({ title: "Ошибка загрузки", text: error.message });
@@ -133,8 +135,14 @@ export default function AdminTechniciansPage() {
   }
 
   function filteredRows() {
+    // фильтруем только по поиску и роли
     return (list || [])
-      .filter(r => !q ? true : [r.name, r.email, r.phone].some(v => String(v || "").toLowerCase().includes(q.toLowerCase())))
+      .filter(r =>
+        !q
+          ? true
+          : [r.name, r.email, r.phone]
+              .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
+      )
       .filter(r => (roleFilter === "all" ? true : r.role === roleFilter));
   }
 
@@ -166,58 +174,24 @@ export default function AdminTechniciansPage() {
 
     setLoading(true);
     try {
-      const inv = await supabase.functions.invoke("admin-create-user", { body: payload });
-      const data = inv.data;
-      const err = inv.error || data?.error || data?.warning;
+      const { data, error } = await supabase.functions.invoke("admin-create-user", { body: payload });
 
-      // нормальный успех
-      if (!err && data && (data.ok || data.technician_id || data.auth_user_id)) {
-        setBanner({ title: "Сотрудник создан", text: "Передайте e-mail и временный пароль.", details: data });
-        resetForm();
-        await fetchTechnicians();
-        return;
-      }
-
-      // fallback-успех: функция вернула action_link (signup/invite)
-      const actionLink =
-        data?.action_link ||
-        data?.details?.action_link ||
-        null;
-
-      if (actionLink) {
+      if (error || data?.error || data?.warning) {
+        const raw = await rawCallFunction("admin-create-user", payload);
         setBanner({
-          title: "Создание через ссылку",
-          text: "Не удалось создать напрямую. Открой ссылку регистрации: сотрудник завершит создание аккаунта сам.",
-          details: { status: 400, ...data, action_link: actionLink },
-        });
-        resetForm();
-        await fetchTechnicians();
-        return;
-      }
-
-      // если дошли сюда — пробуем «сырой» вызов (для отладки)
-      const raw = await rawCallFunction("admin-create-user", payload);
-      const rawLink = raw.json?.action_link || null;
-
-      if (rawLink) {
-        setBanner({
-          title: "Создание через ссылку",
-          text: "Открой ссылку регистрации для завершения создания.",
+          title: raw.ok ? "Сотрудник создан (через fallback)" : "Создание не выполнено",
+          text: raw.ok
+            ? "Учётка зарегистрирована/привязана."
+            : "Edge-функция вернула ошибку.",
           details: { status: raw.status, ...raw.json },
         });
-        resetForm();
-        await fetchTechnicians();
-        return;
+        if (!raw.ok) return;
+      } else {
+        setBanner({ title: "Сотрудник создан", text: "Передайте e-mail и временный пароль.", details: data });
       }
 
-      // окончательная ошибка
-      setBanner({
-        title: "Создание не выполнено",
-        text: "Edge-функция вернула ошибку.",
-        details: { status: inv?.error?.status || 400, ...(data || {}) },
-      });
-      return;
-
+      resetForm();
+      await fetchTechnicians();
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
@@ -225,7 +199,12 @@ export default function AdminTechniciansPage() {
     }
   }
 
-  // ----- УДАЛЕНИЕ ЧЕРЕЗ EDGE-ФУНКЦИЮ -----
+  // Эти функции больше не используются в UI, но оставим для совместимости:
+  async function sendReset(emailAddr) { /* удалено из UI */ }
+  async function deactivateTech(row) { /* удалено из UI */ }
+  async function restoreTech(row) { /* удалено из UI */ }
+
+  // ----- ЖЁСТКОЕ УДАЛЕНИЕ -----
   async function deleteTech(row) {
     if (!isAdmin) {
       setBanner({ title: "Нет доступа", text: "Только администратор может удалять сотрудников." });
@@ -233,23 +212,33 @@ export default function AdminTechniciansPage() {
     }
     if (!row?.id) return;
 
-    const ok = window.confirm(`Удалить сотрудника "${row.name}" из базы? Действие необратимо.`);
+    const ok = window.confirm(
+      `Удалить сотрудника "${row.name}" из базы?\nДействие необратимо.`
+    );
     if (!ok) return;
 
     setLoading(true);
     setBanner(null);
 
     try {
-      const { data, error } = await supabase.functions.invoke("admin-create-user", {
+      // 1) Пытаемся удалить через edge-функцию (надёжнее, обходит RLS/FK)
+      const inv = await supabase.functions.invoke("admin-create-user", {
         body: { action: "deleteTechnician", technician_id: row.id, alsoDeleteAuth: true }
       });
 
-      if (error || data?.error) {
-        setBanner({ title: "Ошибка удаления", text: (error?.message || data?.details || "Unknown error") });
-        return;
+      if (inv?.error || inv?.data?.error) {
+        // 2) Фоллбэк — прямой DELETE
+        const { error: delErr } = await supabase
+          .from("technicians")
+          .delete()
+          .eq("id", row.id);
+        if (delErr) {
+          setBanner({ title: "Ошибка удаления", text: delErr.message });
+          return;
+        }
       }
 
-      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён.` });
+      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён из базы.` });
       await fetchTechnicians();
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
@@ -289,11 +278,15 @@ export default function AdminTechniciansPage() {
         .col-left .table .input,.col-left .table .select{width:100%}
         .row-inline{display:flex;gap:8px;align-items:center}
         .row-inline .input{flex:1;min-width:140px}
+        .dim{color:#8a8f98}
+        .strike{opacity:.6}
       `}</style>
 
       <h1>Техники / Сотрудники</h1>
 
-      {banner && <Banner title={banner.title} text={banner.text} details={banner.details} />}
+      {banner && (
+        <Banner title={banner.title} text={banner.text} details={banner.details} />
+      )}
 
       <div className="two-cols">
         {/* Левая колонка — форма */}
@@ -330,8 +323,24 @@ export default function AdminTechniciansPage() {
                   <td>Временный пароль *</td>
                   <td>
                     <div className="row-inline">
-                      <input className="input" type="text" required value={password} onChange={e => setPassword(e.target.value)} />
-                      <button type="button" className="btn btn-icon" title="Сгенерировать" onClick={() => setPassword(genTempPassword())} aria-label="Сгенерировать пароль">⟳</button>
+                      {/* пароль не скрываем */}
+                      <input
+                        className="input"
+                        type="text"
+                        required
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                      />
+                      {/* компактная иконка генерации */}
+                      <button
+                        type="button"
+                        className="btn btn-icon"
+                        title="Сгенерировать"
+                        onClick={() => setPassword(genTempPassword())}
+                        aria-label="Сгенерировать пароль"
+                      >
+                        ⟳
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -342,8 +351,12 @@ export default function AdminTechniciansPage() {
                 <tr>
                   <td />
                   <td className="row-inline">
-                    <button className="btn" disabled={disableSubmit} type="submit">{loading ? "Создаю..." : "Создать сотрудника"}</button>
-                    <button type="button" className="btn" disabled={loading} onClick={resetForm}>Очистить</button>
+                    <button className="btn" disabled={disableSubmit} type="submit">
+                      {loading ? "Создаю..." : "Создать сотрудника"}
+                    </button>
+                    <button type="button" className="btn" disabled={loading} onClick={resetForm}>
+                      Очистить
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -354,13 +367,20 @@ export default function AdminTechniciansPage() {
         {/* Правая колонка — фильтры + список */}
         <div className="col-right">
           <div className="row-inline" style={{ marginBottom: 8 }}>
-            <input className="input" placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
+            <input
+              className="input"
+              placeholder="Поиск (имя, email, телефон)"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              style={{ flex: 1, minWidth: 220 }}
+            />
             <select className="select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
               <option value="all">Все роли</option>
               <option value="admin">Админ</option>
               <option value="manager">Менеджер</option>
               <option value="tech">Техник</option>
             </select>
+            {/* убран селект статуса */}
             <button className="btn" onClick={fetchTechnicians}>Обновить список</button>
           </div>
 
@@ -382,15 +402,22 @@ export default function AdminTechniciansPage() {
                   <td>{row.phone || "—"}</td>
                   <td>{row.role}</td>
                   <td className="row-inline">
+                    {/* убраны: "Сброс пароля", "Уволить/Вернуть" */}
                     {isAdmin && (
-                      <button className="btn" onClick={() => deleteTech(row)} title="Полностью удалить запись из базы">
+                      <button
+                        className="btn"
+                        onClick={() => deleteTech(row)}
+                        title="Полностью удалить запись из базы"
+                      >
                         Удалить из базы
                       </button>
                     )}
                   </td>
                 </tr>
               ))}
-              {filteredRows().length === 0 && <tr><td colSpan={5}>Нет сотрудников</td></tr>}
+              {filteredRows().length === 0 && (
+                <tr><td colSpan={5}>Нет сотрудников</td></tr>
+              )}
             </tbody>
           </table>
         </div>
