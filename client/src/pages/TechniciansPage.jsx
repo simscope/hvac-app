@@ -1,6 +1,6 @@
 // src/pages/AdminTechniciansPage.jsx
-// Версия без обязательной колонки is_active,
-// пароль видимый, компактная кнопка генерации.
+// Упрощённая версия: нет статуса (актив/уволен), нет "Сброс пароля", нет "Уволить/Вернуть".
+// Остались: создание сотрудника, поиск, фильтр по роли, обновление списка, удаление из базы (для админа).
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
@@ -57,7 +57,6 @@ export default function AdminTechniciansPage() {
 
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [hasIsActive, setHasIsActive] = useState(true); // опционально
 
   // form
   const [email, setEmail] = useState("");
@@ -72,7 +71,6 @@ export default function AdminTechniciansPage() {
   // filters
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("active"); // active | inactive | all
 
   const isAdmin = useMemo(() => {
     if (!me) return false;
@@ -84,7 +82,7 @@ export default function AdminTechniciansPage() {
 
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user} } = await supabase.auth.getUser();
       setMe(user || null);
 
       if (user) {
@@ -107,22 +105,10 @@ export default function AdminTechniciansPage() {
   }, []);
 
   async function fetchTechnicians() {
-    // сначала пытаемся запросить is_active
-    let { data, error } = await supabase
+    const { data, error } = await supabase
       .from("technicians")
-      .select("id, name, phone, role, auth_user_id, email, is_active")
+      .select("id, name, phone, role, auth_user_id, email") // без is_active
       .order("name", { ascending: true });
-
-    // если колонки нет — уходим в фоллбэк без неё
-    if (error && /is_active/.test(error.message)) {
-      setHasIsActive(false);
-      const r2 = await supabase
-        .from("technicians")
-        .select("id, name, phone, role, auth_user_id, email")
-        .order("name", { ascending: true });
-      data = r2.data;
-      error = r2.error;
-    }
 
     if (error) {
       setBanner({ title: "Ошибка загрузки", text: error.message });
@@ -133,20 +119,14 @@ export default function AdminTechniciansPage() {
   }
 
   function filteredRows() {
-    const rows = (list || []).filter(r =>
-      !q
-        ? true
-        : [r.name, r.email, r.phone]
-            .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
-    ).filter(r => (roleFilter === "all" ? true : r.role === roleFilter));
-
-    if (!hasIsActive) return rows; // статуса нет — не фильтруем
-    return rows.filter(r => {
-      if (statusFilter === "all") return true;
-      if (statusFilter === "active") return r.is_active !== false;
-      if (statusFilter === "inactive") return r.is_active === false;
-      return true;
-    });
+    return (list || [])
+      .filter(r =>
+        !q
+          ? true
+          : [r.name, r.email, r.phone]
+              .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
+      )
+      .filter(r => (roleFilter === "all" ? true : r.role === roleFilter));
   }
 
   function resetForm() {
@@ -202,54 +182,6 @@ export default function AdminTechniciansPage() {
     }
   }
 
-  async function sendReset(emailAddr) {
-    setBanner(null);
-    const inv = await supabase.functions.invoke("admin-create-user", {
-      body: { action: "sendPasswordReset", email: emailAddr },
-    });
-
-    if (inv.error || inv.data?.error) {
-      const raw = await rawCallFunction("admin-create-user", {
-        action: "sendPasswordReset",
-        email: emailAddr,
-      });
-      setBanner({
-        title: raw.ok ? "Ссылка на сброс готова" : "Сброс не выполнен",
-        text: raw.ok
-          ? "Письмо отправлено либо ссылка сгенерирована."
-          : "Edge-функция вернула ошибку.",
-        details: { status: raw.status, ...raw.json },
-      });
-      return;
-    }
-
-    setBanner({
-      title: "Ссылка на сброс готова",
-      text: "Письмо отправлено либо ссылка сгенерирована.",
-      details: inv.data,
-    });
-  }
-
-  // Эти функции будут неактивны, если нет поля is_active
-  async function deactivateTech(row) {
-    if (!hasIsActive) return;
-    const { error } = await supabase
-      .from("technicians")
-      .update({ is_active: false, auth_user_id: null })
-      .eq("id", row.id);
-    if (error) setBanner({ title: "Ошибка", text: error.message });
-    else { setBanner({ title: "Сотрудник уволен" }); await fetchTechnicians(); }
-  }
-  async function restoreTech(row) {
-    if (!hasIsActive) return;
-    const { error } = await supabase
-      .from("technicians")
-      .update({ is_active: true })
-      .eq("id", row.id);
-    if (error) setBanner({ title: "Ошибка", text: error.message });
-    else { setBanner({ title: "Сотрудник восстановлен" }); await fetchTechnicians(); }
-  }
-
   // ----- ЖЁСТКОЕ УДАЛЕНИЕ -----
   async function deleteTech(row) {
     if (!isAdmin) {
@@ -258,7 +190,6 @@ export default function AdminTechniciansPage() {
     }
     if (!row?.id) return;
 
-    // подтверждение
     const ok = window.confirm(
       `Удалить сотрудника "${row.name}" из базы?\n` +
       `Действие необратимо.`
@@ -269,45 +200,20 @@ export default function AdminTechniciansPage() {
     setBanner(null);
 
     try {
-      // 1) Опционально: удалить учётку в Auth через edge-функцию (если реализовано)
-      // В твоей функции admin-create-user добавь обработку: action === 'deleteAuthUser'
-      // Параметры: { action: 'deleteAuthUser', user_id: row.auth_user_id }
+      // (опционально) удаляем из Auth — если хочешь оставить, закомментируй этот блок
       if (row.auth_user_id) {
         try {
-          const resp = await supabase.functions.invoke("admin-create-user", {
-            body: { action: "deleteAuthUser", user_id: row.auth_user_id },
+          await supabase.functions.invoke("admin-create-user", {
+            body: { action: "deleteAuthUser", user_id: row.auth_user_id, softUnlinkTech: true }
           });
-          if (resp?.error || resp?.data?.error) {
-            // пробуем «сырой» вызов для отладки/логов
-            const raw = await rawCallFunction("admin-create-user", {
-              action: "deleteAuthUser",
-              user_id: row.auth_user_id,
-            });
-            // не блокируем удаление из таблицы, просто показываем детали
-            if (!raw.ok) {
-              setBanner({
-                title: "Внимание",
-                text: "Удаление в Auth не выполнено, но продолжим удалять из таблицы.",
-                details: { status: raw.status, ...raw.json },
-              });
-            }
-          }
         } catch (e) {
-          // не блокируем
-          setBanner({
-            title: "Внимание",
-            text: "Edge-функция для удаления Auth-пользователя недоступна. Удаляем только из таблицы.",
-            details: { error: String(e?.message || e) },
-          });
+          // не блокируем удаление строки
+          setBanner({ title: "Внимание", text: "Auth-пользователь не удалён, но запись в базе будет удалена.", details: { err: String(e) } });
         }
       }
 
-      // 2) Жёсткое удаление строки из technicians
-      const { error: delErr } = await supabase
-        .from("technicians")
-        .delete()
-        .eq("id", row.id);
-
+      // удаляем строку из technicians
+      const { error: delErr } = await supabase.from("technicians").delete().eq("id", row.id);
       if (delErr) {
         setBanner({ title: "Ошибка удаления", text: delErr.message });
         return;
@@ -354,7 +260,6 @@ export default function AdminTechniciansPage() {
         .row-inline{display:flex;gap:8px;align-items:center}
         .row-inline .input{flex:1;min-width:140px}
         .dim{color:#8a8f98}
-        .strike{opacity:.6}
       `}</style>
 
       <h1>Техники / Сотрудники</h1>
@@ -398,7 +303,6 @@ export default function AdminTechniciansPage() {
                   <td>Временный пароль *</td>
                   <td>
                     <div className="row-inline">
-                      {/* пароль не скрываем */}
                       <input
                         className="input"
                         type="text"
@@ -406,7 +310,6 @@ export default function AdminTechniciansPage() {
                         value={password}
                         onChange={e => setPassword(e.target.value)}
                       />
-                      {/* компактная иконка генерации */}
                       <button
                         type="button"
                         className="btn btn-icon"
@@ -455,13 +358,6 @@ export default function AdminTechniciansPage() {
               <option value="manager">Менеджер</option>
               <option value="tech">Техник</option>
             </select>
-            {hasIsActive && (
-              <select className="select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-                <option value="active">Активные</option>
-                <option value="inactive">Уволенные</option>
-                <option value="all">Все</option>
-              </select>
-            )}
             <button className="btn" onClick={fetchTechnicians}>Обновить список</button>
           </div>
 
@@ -476,47 +372,25 @@ export default function AdminTechniciansPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows().map((row) => {
-                const inactive = hasIsActive ? row.is_active === false : false;
-                return (
-                  <tr key={row.id} className={inactive ? "strike" : ""}>
-                    <td>{row.name}</td>
-                    <td>{row.email || "—"}</td>
-                    <td>{row.phone || "—"}</td>
-                    <td>
-                      {row.role}
-                      {inactive && <span className="dim"> · уволен</span>}
-                    </td>
-                    <td className="row-inline">
+              {filteredRows().map((row) => (
+                <tr key={row.id}>
+                  <td>{row.name}</td>
+                  <td>{row.email || "—"}</td>
+                  <td>{row.phone || "—"}</td>
+                  <td>{row.role}</td>
+                  <td className="row-inline">
+                    {isAdmin && (
                       <button
                         className="btn"
-                        onClick={() => row.email && !inactive && sendReset(row.email)}
-                        disabled={!row.email || inactive}
-                        title={inactive ? "Уволенный: сброс отключён" : (!row.email ? "Нет email" : "Сброс пароля")}
+                        onClick={() => deleteTech(row)}
+                        title="Полностью удалить запись из базы"
                       >
-                        Сброс пароля
+                        Удалить из базы
                       </button>
-                      {hasIsActive && (
-                        !inactive ? (
-                          <button className="btn" onClick={() => deactivateTech(row)}>Уволить</button>
-                        ) : (
-                          <button className="btn" onClick={() => restoreTech(row)}>Вернуть</button>
-                        )
-                      )}
-                      {isAdmin && (
-                        <button
-                          className="btn"
-                          onClick={() => deleteTech(row)}
-                          title="Полностью удалить запись из базы"
-                          style={{ marginLeft: 8 }}
-                        >
-                          Удалить из базы
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+                    )}
+                  </td>
+                </tr>
+              ))}
               {filteredRows().length === 0 && (
                 <tr><td colSpan={5}>Нет сотрудников</td></tr>
               )}
