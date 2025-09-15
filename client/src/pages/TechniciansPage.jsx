@@ -250,6 +250,78 @@ export default function AdminTechniciansPage() {
     else { setBanner({ title: "Сотрудник восстановлен" }); await fetchTechnicians(); }
   }
 
+  // ----- ЖЁСТКОЕ УДАЛЕНИЕ -----
+  async function deleteTech(row) {
+    if (!isAdmin) {
+      setBanner({ title: "Нет доступа", text: "Только администратор может удалять сотрудников." });
+      return;
+    }
+    if (!row?.id) return;
+
+    // подтверждение
+    const ok = window.confirm(
+      `Удалить сотрудника "${row.name}" из базы?\n` +
+      `Действие необратимо.`
+    );
+    if (!ok) return;
+
+    setLoading(true);
+    setBanner(null);
+
+    try {
+      // 1) Опционально: удалить учётку в Auth через edge-функцию (если реализовано)
+      // В твоей функции admin-create-user добавь обработку: action === 'deleteAuthUser'
+      // Параметры: { action: 'deleteAuthUser', user_id: row.auth_user_id }
+      if (row.auth_user_id) {
+        try {
+          const resp = await supabase.functions.invoke("admin-create-user", {
+            body: { action: "deleteAuthUser", user_id: row.auth_user_id },
+          });
+          if (resp?.error || resp?.data?.error) {
+            // пробуем «сырой» вызов для отладки/логов
+            const raw = await rawCallFunction("admin-create-user", {
+              action: "deleteAuthUser",
+              user_id: row.auth_user_id,
+            });
+            // не блокируем удаление из таблицы, просто показываем детали
+            if (!raw.ok) {
+              setBanner({
+                title: "Внимание",
+                text: "Удаление в Auth не выполнено, но продолжим удалять из таблицы.",
+                details: { status: raw.status, ...raw.json },
+              });
+            }
+          }
+        } catch (e) {
+          // не блокируем
+          setBanner({
+            title: "Внимание",
+            text: "Edge-функция для удаления Auth-пользователя недоступна. Удаляем только из таблицы.",
+            details: { error: String(e?.message || e) },
+          });
+        }
+      }
+
+      // 2) Жёсткое удаление строки из technicians
+      const { error: delErr } = await supabase
+        .from("technicians")
+        .delete()
+        .eq("id", row.id);
+
+      if (delErr) {
+        setBanner({ title: "Ошибка удаления", text: delErr.message });
+        return;
+      }
+
+      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён из базы.` });
+      await fetchTechnicians();
+    } catch (err) {
+      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const disableSubmit = loading || !email.trim() || !name.trim() || !password;
 
   return (
@@ -430,6 +502,16 @@ export default function AdminTechniciansPage() {
                         ) : (
                           <button className="btn" onClick={() => restoreTech(row)}>Вернуть</button>
                         )
+                      )}
+                      {isAdmin && (
+                        <button
+                          className="btn"
+                          onClick={() => deleteTech(row)}
+                          title="Полностью удалить запись из базы"
+                          style={{ marginLeft: 8 }}
+                        >
+                          Удалить из базы
+                        </button>
                       )}
                     </td>
                   </tr>
