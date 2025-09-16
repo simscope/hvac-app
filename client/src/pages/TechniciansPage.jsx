@@ -72,13 +72,22 @@ export default function AdminTechniciansPage() {
       });
 
       const json = await res.json();
-      if (!res.ok) {
-        setBanner({ title: "Ошибка", text: json.error || "Не удалось создать" });
-      } else {
-        setBanner({ title: "Сотрудник создан", text: "Учётка + technicians + profiles добавлены." });
-        resetForm();
-        await fetchTechnicians();
-      }
+     if (!res.ok) {
+  setBanner({
+    title: "Ошибка",
+    text: json.error || "Не удалось создать",
+    details: json.details || json
+   });
+    } else {
+      setBanner({
+       title: "Сотрудник создан",
+       text: "Учётка + technicians + profiles добавлены.",
+       details: json
+     });
+       resetForm();
+       await fetchTechnicians();
+    }
+
     } catch (err) {
       setBanner({ title: "Ошибка", text: String(err) });
     } finally {
@@ -192,3 +201,4 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
+
