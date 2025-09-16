@@ -1,5 +1,6 @@
 // src/pages/AdminTechniciansPage.jsx
-// Простая страница: создание через Edge (с фоллбэками), удаление через Edge (UUID id поддержан).
+// Страница сотрудников: создание (с фоллбэками), удаление (UUID), «Ссылка входа» и «Привязать» для записей без auth_user_id.
+
 import React, { useEffect, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
 
@@ -10,7 +11,11 @@ function Banner({ title, text, details }) {
     <div className="banner">
       <div className="banner-head">
         <b>{title}</b>
-        {details && <button type="button" className="btn" onClick={() => setOpen(v => !v)}>{open ? "Скрыть детали" : "Показать детали"}</button>}
+        {details && (
+          <button type="button" className="btn" onClick={() => setOpen(v => !v)}>
+            {open ? "Скрыть детали" : "Показать детали"}
+          </button>
+        )}
       </div>
       {typeof text === "string" ? <div className="mt4">{text}</div> : text}
       {open && details && <pre className="pre">{JSON.stringify(details, null, 2)}</pre>}
@@ -58,7 +63,23 @@ export default function AdminTechniciansPage() {
   }
 
   function resetForm() {
-    setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword("Test#12345");
+    setEmail("");
+    setName("");
+    setPhone("");
+    setRole("tech");
+    setPassword("Test#12345");
+  }
+
+  async function callEdge(body) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token || "";
+    const res = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/functions/v1/admin-create-user`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await res.json();
+    return { ok: res.ok && !json?.error, res, json };
   }
 
   async function createTech(e) {
@@ -67,17 +88,16 @@ export default function AdminTechniciansPage() {
     setLoading(true);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || "";
-
-      const res = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/functions/v1/admin-create-user`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password, name: name.trim(), phone: phone.trim() || null, role, link_if_exists: true }),
+      const { ok, json } = await callEdge({
+        email: email.trim(),
+        password,
+        name: name.trim(),
+        phone: phone.trim() || null,
+        role,
+        link_if_exists: true,
       });
-      const json = await res.json();
 
-      if (!res.ok || json?.error) {
+      if (!ok) {
         setBanner({ title: "Создание не выполнено", text: json?.error || "Edge-функция вернула ошибку.", details: json });
         return;
       }
@@ -117,21 +137,13 @@ export default function AdminTechniciansPage() {
     setLoading(true);
     setBanner(null);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || "";
-
-      const res = await fetch(`${supabaseUrl.replace(/\/+$/, "")}/functions/v1/admin-create-user`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "deleteTechnician",
-          technician_id: row.id,          // FIX: UUID, передаём как строку
-          alsoDeleteAuth: true,           // по умолчанию и так true; оставил для явности
-        }),
+      const { ok, json } = await callEdge({
+        action: "deleteTechnician",
+        technician_id: row.id,      // UUID — передаём как есть
+        alsoDeleteAuth: true,
       });
-      const json = await res.json();
 
-      if (!res.ok || json?.error) {
+      if (!ok) {
         setBanner({ title: "Ошибка удаления", text: json?.error || "Edge-функция вернула ошибку.", details: json });
         return;
       }
@@ -142,6 +154,57 @@ export default function AdminTechniciansPage() {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
       setLoading(false);
+    }
+  }
+
+  // ---- Доп. действия для technician_only ----
+  async function inviteByEmail(row) {
+    setBanner(null);
+    try {
+      const { ok, json } = await callEdge({
+        action: "inviteByEmail",
+        email: row.email,
+        name: row.name,
+        role: row.role,
+        phone: row.phone,
+      });
+      if (!ok) {
+        setBanner({ title: "Не удалось сгенерировать ссылку", text: json?.error || "Ошибка", details: json });
+        return;
+      }
+      setBanner({
+        title: "Ссылка регистрации",
+        text: (
+          <span>
+            Отправьте сотруднику:&nbsp;
+            <input className="input" style={{ width: "60%" }} readOnly value={json.action_link} />
+            <button className="btn" style={{ marginLeft: 8 }} onClick={() => navigator.clipboard.writeText(json.action_link)}>
+              Копировать
+            </button>
+          </span>
+        ),
+        details: json,
+      });
+    } catch (e) {
+      setBanner({ title: "Ошибка", text: String(e?.message || e) });
+    }
+  }
+
+  async function linkByEmail(row) {
+    setBanner(null);
+    try {
+      const { ok, json } = await callEdge({
+        action: "linkTechnicianByEmail",
+        email: row.email,
+      });
+      if (!ok) {
+        setBanner({ title: "Не удалось привязать", text: json?.error || "Ошибка", details: json });
+        return;
+      }
+      setBanner({ title: "Привязано", text: `Обновлено записей: ${json.updated || 0}`, details: json });
+      await fetchTechnicians();
+    } catch (e) {
+      setBanner({ title: "Ошибка", text: String(e?.message || e) });
     }
   }
 
@@ -177,11 +240,22 @@ export default function AdminTechniciansPage() {
         <div className="col-left">
           <form onSubmit={createTech}>
             <table className="table" style={{ marginBottom: 12 }}>
-              <thead><tr><th colSpan={2}>Создание сотрудника</th></tr></thead>
+              <thead>
+                <tr><th colSpan={2}>Создание сотрудника</th></tr>
+              </thead>
               <tbody>
-                <tr><td>E-mail *</td><td><input className="input" type="email" required value={email} onChange={e => setEmail(e.target.value)} /></td></tr>
-                <tr><td>Телефон</td><td><input className="input" value={phone} onChange={e => setPhone(e.target.value)} /></td></tr>
-                <tr><td>Имя / ФИО *</td><td><input className="input" required value={name} onChange={e => setName(e.target.value)} /></td></tr>
+                <tr>
+                  <td>E-mail *</td>
+                  <td><input className="input" type="email" required value={email} onChange={e => setEmail(e.target.value)} /></td>
+                </tr>
+                <tr>
+                  <td>Телефон</td>
+                  <td><input className="input" value={phone} onChange={e => setPhone(e.target.value)} /></td>
+                </tr>
+                <tr>
+                  <td>Имя / ФИО *</td>
+                  <td><input className="input" required value={name} onChange={e => setName(e.target.value)} /></td>
+                </tr>
                 <tr>
                   <td>Роль *</td>
                   <td>
@@ -192,7 +266,10 @@ export default function AdminTechniciansPage() {
                     </select>
                   </td>
                 </tr>
-                <tr><td>Пароль *</td><td><input className="input" type="text" required value={password} onChange={e => setPassword(e.target.value)} /></td></tr>
+                <tr>
+                  <td>Пароль *</td>
+                  <td><input className="input" type="text" required value={password} onChange={e => setPassword(e.target.value)} /></td>
+                </tr>
                 <tr>
                   <td />
                   <td className="row-inline">
@@ -208,7 +285,13 @@ export default function AdminTechniciansPage() {
         {/* Правая колонка — список */}
         <div className="col-right">
           <div className="row-inline" style={{ marginBottom: 8 }}>
-            <input className="input" placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
+            <input
+              className="input"
+              placeholder="Поиск (имя, email, телефон)"
+              value={q}
+              onChange={e => setQ(e.target.value)}
+              style={{ flex: 1, minWidth: 220 }}
+            />
             <select className="select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
               <option value="all">Все роли</option>
               <option value="admin">Админ</option>
@@ -220,7 +303,13 @@ export default function AdminTechniciansPage() {
 
           <table className="table">
             <thead>
-              <tr><th>Имя</th><th>E-mail</th><th>Телефон</th><th>Роль</th><th>Действия</th></tr>
+              <tr>
+                <th>Имя</th>
+                <th>E-mail</th>
+                <th>Телефон</th>
+                <th>Роль</th>
+                <th>Действия</th>
+              </tr>
             </thead>
             <tbody>
               {filteredRows().map((row) => (
@@ -231,6 +320,17 @@ export default function AdminTechniciansPage() {
                   <td>{row.role}</td>
                   <td className="row-inline">
                     <button className="btn" onClick={() => deleteTech(row)}>Удалить</button>
+                    {/* Доп. действия, если аккаунта в Auth нет */}
+                    {!row.auth_user_id && row.email && (
+                      <>
+                        <button className="btn" title="Сгенерировать ссылку регистрации" onClick={() => inviteByEmail(row)}>
+                          Ссылка входа
+                        </button>
+                        <button className="btn" title="После регистрации — привязать аккаунт к записи" onClick={() => linkByEmail(row)}>
+                          Привязать
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
