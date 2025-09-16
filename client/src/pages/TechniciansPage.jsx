@@ -1,6 +1,6 @@
-// Простая админ-страница: создаём в AUTH + technicians + profiles,
-// показываем временный пароль. Никаких ссылок.
-// Есть удаление (опционально и учётки), и ручная привязка по email.
+// src/pages/AdminTechniciansPage.jsx
+// Админ-страница: создать сотрудника (Auth+profiles+technicians ИЛИ только technicians),
+// список, удаление, приглашение (ссылка), привязка к существующему Auth по email.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
@@ -10,14 +10,14 @@ function genTempPassword(len = 12) {
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 }
 
-async function rawCallFunction(path, body) {
+async function fnCall(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || "";
   const url = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${path}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body || {}),
   });
   const text = await res.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
@@ -31,7 +31,11 @@ function Banner({ title, text, details }) {
     <div className="banner">
       <div className="banner-head">
         <b>{title}</b>
-        {details && <button type="button" className="btn" onClick={() => setOpen(v => !v)}>{open ? "Скрыть детали" : "Показать детали"}</button>}
+        {!!details && (
+          <button type="button" className="btn" onClick={() => setOpen(v => !v)}>
+            {open ? "Скрыть детали" : "Показать детали"}
+          </button>
+        )}
       </div>
       {text && <div className="mt4">{text}</div>}
       {open && details && <pre className="pre">{JSON.stringify(details, null, 2)}</pre>}
@@ -49,10 +53,11 @@ export default function AdminTechniciansPage() {
 
   // form
   const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [name, setName] = useState("");
   const [role, setRole] = useState("tech");
   const [password, setPassword] = useState(genTempPassword());
+  const [createAuth, setCreateAuth] = useState(true);
 
   // ui
   const [banner, setBanner] = useState(null);
@@ -73,11 +78,9 @@ export default function AdminTechniciansPage() {
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       setMe(user || null);
-
       if (user) {
         const p = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
         setMeProfileRole(p.data?.role ?? null);
-
         const t = await supabase.from("technicians").select("role, is_admin").eq("auth_user_id", user.id).maybeSingle();
         setMeTechInfo(t.data || null);
       }
@@ -86,8 +89,7 @@ export default function AdminTechniciansPage() {
   }, []);
 
   async function fetchTechnicians() {
-    const { data, error } = await supabase
-      .from("technicians")
+    const { data, error } = await supabase.from("technicians")
       .select("id, name, phone, role, auth_user_id, email")
       .order("name", { ascending: true });
 
@@ -107,13 +109,14 @@ export default function AdminTechniciansPage() {
 
   function resetForm() {
     setEmail("");
-    setName("");
     setPhone("");
+    setName("");
     setRole("tech");
     setPassword(genTempPassword());
+    setCreateAuth(true);
   }
 
-  async function createTech(e) {
+  async function createEmployee(e) {
     e.preventDefault();
     setBanner(null);
 
@@ -121,60 +124,33 @@ export default function AdminTechniciansPage() {
       setBanner({ title: "Нет доступа", text: "Только администратор может создавать сотрудников." });
       return;
     }
-
-    const payload = {
-      email: email.trim(),
-      password,
-      name: name.trim(),
-      phone: phone.trim() || null,
-      role,
-    };
-
-    setLoading(true);
-    try {
-      const raw = await rawCallFunction("admin-create-user", payload);
-
-      if (!raw.ok) {
-        setBanner({ title: "Создание не выполнено", text: raw.json?.error || "Edge-функция вернула ошибку.", details: { status: raw.status, ...raw.json } });
-        return;
-      }
-      setBanner({
-        title: "Сотрудник создан",
-        text: `Учётка в Auth создана/обновлена. Передайте логин и временный пароль.`,
-        details: raw.json,
-      });
-
-      resetForm();
-      await fetchTechnicians();
-    } catch (err) {
-      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function deleteTech(row) {
-    if (!isAdmin) {
-      setBanner({ title: "Нет доступа", text: "Только администратор может удалять сотрудников." });
+    if (!name.trim()) {
+      setBanner({ title: "Ошибка", text: "Введите имя" });
       return;
     }
-    if (!row?.id) return;
-
-    const alsoAuth = window.confirm("Удалить также и учётку в Auth?\n\nOK — удалить и из Auth, Cancel — удалить только из базы.");
-    const ok = window.confirm(`Подтвердите удаление сотрудника "${row.name}".`);
-    if (!ok) return;
 
     setLoading(true);
-    setBanner(null);
-
     try {
-      const res = await rawCallFunction("admin-create-user", { action: "deleteTechnician", technician_id: row.id, alsoDeleteAuth: alsoAuth });
-      if (!res.ok) {
-        setBanner({ title: "Ошибка удаления", text: res.json?.error || "Edge-функция вернула ошибку.", details: { status: res.status, ...res.json } });
-        return;
+      const payload = {
+        action: "ensure",
+        createAuth,            // true -> Auth+profiles+technicians; false -> только technicians
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+        name: name.trim(),
+        role,
+        password: password || undefined,
+        link_if_exists: true,
+      };
+      const res = await fnCall("admin-ensure-user", payload);
+      setBanner({
+        title: res.ok ? "Сотрудник создан" : "Создание не выполнено",
+        text: res.ok ? (createAuth ? "Созданы/синхронизированы Auth, profiles и technicians." : "Создана запись в technicians.") : (res.json?.error || "Ошибка"),
+        details: res.json,
+      });
+      if (res.ok) {
+        resetForm();
+        await fetchTechnicians();
       }
-      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён.` });
-      await fetchTechnicians();
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
@@ -182,24 +158,45 @@ export default function AdminTechniciansPage() {
     }
   }
 
-  async function linkByEmail(row) {
-    // ручная привязка: если юзер уже зарегистрировался в Auth, подтянуть auth_user_id по email
+  async function removeTech(row, alsoAuth = false) {
+    if (!isAdmin) return;
+    if (!row?.id) return;
+    const ok = window.confirm(`Удалить "${row.name}"? ${alsoAuth ? "Также удалить учётку Auth." : ""}`);
+    if (!ok) return;
     setLoading(true);
     setBanner(null);
     try {
-      const res = await rawCallFunction("admin-create-user", { action: "linkTechnicianByEmail", email: row.email, name: row.name, role: row.role });
-      setBanner({
-        title: res.ok ? "Привязано" : "Не удалось привязать",
-        text: res.ok ? "auth_user_id проставлен по e-mail." : (res.json?.error || "Ошибка"),
-        details: res.json,
-      });
-      if (res.ok) await fetchTechnicians();
+      const res = await fnCall("admin-ensure-user", { action: "delete", technician_id: row.id, alsoDeleteAuth: alsoAuth });
+      setBanner({ title: res.ok ? "Удалено" : "Ошибка удаления", text: res.json?.error || "", details: res.json });
+      await fetchTechnicians();
+    } catch (e) {
+      setBanner({ title: "Необработанная ошибка", text: String(e) });
     } finally {
       setLoading(false);
     }
   }
 
-  const disableSubmit = loading || !email.trim() || !name.trim() || !password;
+  async function inviteLink(emailAddr) {
+    setBanner(null);
+    const res = await fnCall("admin-ensure-user", { action: "invite", email: emailAddr });
+    setBanner({
+      title: res.ok ? "Ссылка готова" : "Не удалось сгенерировать ссылку",
+      text: res.ok ? (res.json?.link ? "Скопируй ссылку из деталей." : "Ссылка создана/отправлена.") : (res.json?.error || ""),
+      details: res.json,
+    });
+  }
+
+  async function linkAuth(row) {
+    if (!row?.email) {
+      setBanner({ title: "Нет email", text: "Для привязки нужен e-mail в карточке сотрудника." });
+      return;
+    }
+    const res = await fnCall("admin-ensure-user", { action: "link", email: String(row.email).toLowerCase(), technician_id: row.id });
+    setBanner({ title: res.ok ? "Привязано" : "Не удалось привязать", text: res.json?.error || "", details: res.json });
+    await fetchTechnicians();
+  }
+
+  const disableSubmit = loading || !name.trim() || (createAuth && !password);
 
   return (
     <div className="page">
@@ -221,11 +218,12 @@ export default function AdminTechniciansPage() {
         .banner-head{display:flex;gap:8px;align-items:center}
         .mt4{margin-top:4px}
         .pre{background:#fff;border:1px solid #eee;padding:8px;border-radius:3px;overflow:auto;max-height:280px}
+
         .two-cols{display:flex;gap:20px;align-items:flex-start}
-        .col-left{flex:0 0 400px;max-width:400px}
+        .col-left{flex:0 0 420px;max-width:420px}
         .col-right{flex:1;min-width:0}
         .col-left .table{table-layout:fixed}
-        .col-left .table td:nth-child(1){width:140px}
+        .col-left .table td:nth-child(1){width:160px}
         .col-left .table .input,.col-left .table .select{width:100%}
         .row-inline{display:flex;gap:8px;align-items:center}
         .row-inline .input{flex:1;min-width:140px}
@@ -238,15 +236,15 @@ export default function AdminTechniciansPage() {
       <div className="two-cols">
         {/* Левая колонка — форма */}
         <div className="col-left">
-          <form onSubmit={createTech}>
+          <form onSubmit={createEmployee}>
             <table className="table" style={{ marginBottom: 12 }}>
               <thead>
                 <tr><th colSpan={2}>Создание сотрудника</th></tr>
               </thead>
               <tbody>
                 <tr>
-                  <td>E-mail *</td>
-                  <td><input className="input" type="email" required value={email} onChange={e => setEmail(e.target.value)} /></td>
+                  <td>E-mail</td>
+                  <td><input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} /></td>
                 </tr>
                 <tr>
                   <td>Телефон</td>
@@ -266,19 +264,27 @@ export default function AdminTechniciansPage() {
                     </select>
                   </td>
                 </tr>
+
                 <tr>
-                  <td>Временный пароль *</td>
+                  <td>
+                    <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input type="checkbox" checked={createAuth} onChange={e => setCreateAuth(e.target.checked)} />
+                      <span>Создавать учётку Auth</span>
+                    </label>
+                  </td>
+                  <td className="muted">Отключи, если нужна только строка в technicians.</td>
+                </tr>
+
+                <tr>
+                  <td>Временный пароль {createAuth ? "*" : ""}</td>
                   <td>
                     <div className="row-inline">
-                      <input className="input" type="text" required value={password} onChange={e => setPassword(e.target.value)} />
+                      <input className="input" type="text" required={createAuth} disabled={!createAuth} value={password} onChange={e => setPassword(e.target.value)} />
                       <button type="button" className="btn btn-icon" title="Сгенерировать" onClick={() => setPassword(genTempPassword())} aria-label="Сгенерировать пароль">⟳</button>
                     </div>
                   </td>
                 </tr>
-                <tr>
-                  <td />
-                  <td className="muted">Выдай сотруднику этот пароль для первого входа.</td>
-                </tr>
+
                 <tr>
                   <td />
                   <td className="row-inline">
@@ -322,10 +328,14 @@ export default function AdminTechniciansPage() {
                   <td>{row.phone || "—"}</td>
                   <td>{row.role}</td>
                   <td className="row-inline">
-                    <button className="btn" onClick={() => deleteTech(row)} title="Удалить сотрудника">Удалить</button>
-                    {!!row.email && !row.auth_user_id && (
-                      <button className="btn" onClick={() => linkByEmail(row)} title="Привязать к существующему пользователю по E-mail">Привязать</button>
+                    {!!row.email && (
+                      <>
+                        <button className="btn" onClick={() => inviteLink(row.email)}>Ссылка</button>
+                        <button className="btn" onClick={() => linkAuth(row)} title="Привязать по email к Auth">Привязать</button>
+                      </>
                     )}
+                    <button className="btn" onClick={() => removeTech(row, false)}>Удалить</button>
+                    <button className="btn" onClick={() => removeTech(row, true)} title="Удалить также учётку Auth">Удалить (полностью)</button>
                   </td>
                 </tr>
               ))}
