@@ -55,7 +55,7 @@ export default function AdminTechniciansPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState("tech");
+  const [role, setRole] = useState("technician");
   const [password, setPassword] = useState(genTempPassword());
   const [createAuth, setCreateAuth] = useState(true);
 
@@ -111,7 +111,7 @@ export default function AdminTechniciansPage() {
     setEmail("");
     setPhone("");
     setName("");
-    setRole("tech");
+    setRole("technician");
     setPassword(genTempPassword());
     setCreateAuth(true);
   }
@@ -305,7 +305,7 @@ export default function AdminTechniciansPage() {
               <option value="all">Все роли</option>
               <option value="admin">Админ</option>
               <option value="manager">Менеджер</option>
-              <option value="tech">Техник</option>
+              <option value="technician">Техник</option>
             </select>
             <button className="btn" onClick={fetchTechnicians}>Обновить список</button>
           </div>
@@ -347,3 +347,4 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
+
