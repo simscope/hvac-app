@@ -1,15 +1,24 @@
 // src/pages/AdminTechniciansPage.jsx
-// Простая версия: форма → функция admin-create-user → создаёт в Auth, technicians, profiles.
+// Создание: пишет в technicians и получает signup-ссылку. Удаление/список — напрямую из technicians.
 
 import React, { useEffect, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
 
-function Banner({ title, text }) {
+function Banner({ title, text, details }) {
+  const [open, setOpen] = useState(false);
   if (!title && !text) return null;
   return (
     <div className="banner">
-      <b>{title}</b>
+      <div className="banner-head">
+        <b>{title}</b>
+        {details && (
+          <button type="button" className="btn" onClick={() => setOpen(v => !v)}>
+            {open ? "Скрыть детали" : "Показать детали"}
+          </button>
+        )}
+      </div>
       {text && <div className="mt4">{text}</div>}
+      {open && details && <pre className="pre">{JSON.stringify(details, null, 2)}</pre>}
     </div>
   );
 }
@@ -23,10 +32,9 @@ export default function AdminTechniciansPage() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("tech");
-  const [password, setPassword] = useState("Temp#12345!");
+  const [password, setPassword] = useState("Test#12345"); // любой >=6 символов
 
   const [banner, setBanner] = useState(null);
-
   const [q, setQ] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
 
@@ -53,7 +61,7 @@ export default function AdminTechniciansPage() {
   }
 
   function resetForm() {
-    setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword("Temp#12345!");
+    setEmail(""); setName(""); setPhone(""); setRole("tech"); setPassword("Test#12345");
   }
 
   async function createTech(e) {
@@ -65,31 +73,42 @@ export default function AdminTechniciansPage() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token || "";
 
-      const res = await fetch(`${supabaseUrl}/functions/v1/admin-create-user`, {
+      const res = await fetch(`${supabaseUrl}/functions/v1/admin-invite-tech`, {
         method: "POST",
-        headers: { "authorization": `Bearer ${token}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ email, password, name, phone, role }),
       });
-
       const json = await res.json();
-     if (!res.ok) {
-  setBanner({
-    title: "Ошибка",
-    text: json.error || "Не удалось создать",
-    details: json.details || json
-   });
-    } else {
-      setBanner({
-       title: "Сотрудник создан",
-       text: "Учётка + technicians + profiles добавлены.",
-       details: json
-     });
-       resetForm();
-       await fetchTechnicians();
-    }
 
+      if (!res.ok) {
+        setBanner({ title: "Ошибка", text: json.error || "Не удалось создать", details: json });
+        return;
+      }
+
+      // Показать ссылку-приглашение и кнопку копирования
+      setBanner({
+        title: "Сотрудник создан",
+        text: (
+          <span>
+            Отправьте сотруднику ссылку для входа:&nbsp;
+            <input className="input" style={{ width: "60%" }} readOnly value={json.action_link} />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => navigator.clipboard.writeText(json.action_link)}
+              style={{ marginLeft: 8 }}
+            >
+              Копировать
+            </button>
+          </span>
+        ),
+        details: json
+      });
+
+      resetForm();
+      await fetchTechnicians();
     } catch (err) {
-      setBanner({ title: "Ошибка", text: String(err) });
+      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
       setLoading(false);
     }
@@ -100,14 +119,10 @@ export default function AdminTechniciansPage() {
     setLoading(true);
     try {
       const { error } = await supabase.from("technicians").delete().eq("id", row.id);
-      if (error) {
-        setBanner({ title: "Ошибка удаления", text: error.message });
-      } else {
-        setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён.` });
-        await fetchTechnicians();
-      }
+      if (error) setBanner({ title: "Ошибка удаления", text: error.message });
+      else { setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён.` }); await fetchTechnicians(); }
     } catch (err) {
-      setBanner({ title: "Ошибка", text: String(err) });
+      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
     } finally {
       setLoading(false);
     }
@@ -116,15 +131,17 @@ export default function AdminTechniciansPage() {
   return (
     <div className="page">
       <style>{`
-        .page{max-width:900px;margin:0 auto;padding:16px;font:14px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#111;}
-        h1{font-size:24px;margin:0 0 12px 0;font-weight:700}
-        .input,.select,.btn{height:28px;border:1px solid #cfd4d9;border-radius:3px;background:#fff;padding:0 8px;font-size:14px;line-height:26px;box-sizing:border-box}
+        .page{max-width:1100px;margin:0 auto;padding:16px;font:14px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#111;}
+        h1{font-size:28px;margin:0 0 12px 0;font-weight:700}
+        .input,.select,.btn{height:28px;border:1px solid #cfd4d9;border-radius:3px;background:#fff;padding:0 8px;font-size:14px;line-height:26px; box-sizing:border-box}
         .btn{cursor:pointer}.btn:hover{background:#f7f7f7}
         .table{width:100%;border-collapse:collapse;font-size:14px}
         .table th,.table td{border:1px solid #e0e5ea;padding:6px 8px;vertical-align:top}
         .table th{background:#f6f7f9;text-align:left}
         .banner{border:1px solid #d0d7de;border-radius:4px;padding:8px;background:#fff;margin:12px 0}
+        .banner-head{display:flex;gap:8px;align-items:center}
         .mt4{margin-top:4px}
+        .pre{background:#fff;border:1px solid #eee;padding:8px;border-radius:3px;overflow:auto;max-height:280px}
         .two-cols{display:flex;gap:20px;align-items:flex-start}
         .col-left{flex:0 0 400px;max-width:400px}
         .col-right{flex:1;min-width:0}
@@ -133,7 +150,7 @@ export default function AdminTechniciansPage() {
       `}</style>
 
       <h1>Техники / Сотрудники</h1>
-      {banner && <Banner title={banner.title} text={banner.text} />}
+      {banner && <Banner title={banner.title} text={banner.text} details={banner.details} />}
 
       <div className="two-cols">
         <div className="col-left">
@@ -169,7 +186,7 @@ export default function AdminTechniciansPage() {
 
         <div className="col-right">
           <div className="row-inline" style={{ marginBottom: 8 }}>
-            <input className="input" placeholder="Поиск" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
+            <input className="input" placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
             <select className="select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
               <option value="all">Все роли</option>
               <option value="admin">Админ</option>
@@ -201,4 +218,3 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
-
