@@ -251,38 +251,65 @@ export default function JobDetailsPage() {
   };
 
   // Комментарии
-  const loadComments = async () => {
-    setCommentsLoading(true);
-    const { data, error } = await supabase
-      .from('comments')
-      .select('id, job_id, text, image_url, author_user_id, created_at')
-      .eq('job_id', jobId)
-      .order('created_at', { ascending: true });
+  // Комментарии
+const loadComments = async () => {
+  setCommentsLoading(true);
 
-    if (error) {
-      console.error('loadComments', error);
-      setComments([]);
-      setCommentsLoading(false);
-      return;
-    }
+  // 1) сами комментарии
+  const { data, error } = await supabase
+    .from('comments')
+    .select('id, job_id, text, image_url, author_user_id, created_at')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: true });
 
-    const list = data || [];
-    const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
-
-    let map = {};
-    if (ids.length) {
-      const { data: people } = await supabase
-        .from('technicians')
-        .select('id,name,role,is_active')
-        .in('role', ['technician', 'tech'])
-        .eq('is_active', true)
-        .order('name', { ascending: true })
-      map = Object.fromEntries((people || []).map(p => [p.auth_user_id, p.name]));
-    }
-
-    setComments(list.map(c => ({ ...c, author_name: map[c.author_user_id] || null })));
+  if (error) {
+    console.error('loadComments', error);
+    setComments([]);
     setCommentsLoading(false);
-  };
+    return;
+  }
+
+  const list = data || [];
+  const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
+
+  // 2) вытаскиваем имена из profiles и technicians
+  let nameByUserId = {};
+
+  if (ids.length) {
+    // profiles: id == auth user id
+    const { data: profs, error: profErr } = await supabase
+      .from('profiles')              // или 'public.profiles', если у тебя схема указана
+      .select('id, full_name')
+      .in('id', ids);
+
+    if (!profErr && profs) {
+      for (const p of profs) {
+        if (p?.id) nameByUserId[p.id] = p.full_name || null;
+      }
+    }
+
+    // technicians: auth_user_id -> name (на случай, если профиля нет)
+    const { data: people, error: techErr } = await supabase
+      .from('technicians')
+      .select('auth_user_id, name')
+      .in('auth_user_id', ids);
+
+    if (!techErr && people) {
+      for (const t of people) {
+        if (t?.auth_user_id && !nameByUserId[t.auth_user_id]) {
+          nameByUserId[t.auth_user_id] = t.name || null;
+        }
+      }
+    }
+  }
+
+  // 3) маппим имя в список комментариев
+  setComments(list.map(c => ({
+    ...c,
+    author_name: nameByUserId[c.author_user_id] || null
+  })));
+  setCommentsLoading(false);
+};
 
   // Инвойсы (Storage + DB → merge)
   const loadInvoices = async () => {
@@ -1142,6 +1169,7 @@ function Td({ children, center }) {
     </td>
   );
 }
+
 
 
 
