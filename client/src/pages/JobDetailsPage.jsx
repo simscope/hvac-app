@@ -1,4 +1,3 @@
-// client/src/pages/JobDetailsPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -142,7 +141,7 @@ export default function JobDetailsPage() {
   const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
 
   // Комментарии
-  const [comments, setComments] = useState([]);
+  the const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
@@ -155,12 +154,19 @@ export default function JobDetailsPage() {
     (async () => {
       setLoading(true);
 
-     const { data: techData, error } = await supabase
-       .from('technicians')
-       .select('id,name,role,is_active')
-       .in('role', ['technician', 'tech'])  // поддерживаем оба значения
-       .eq('is_active', true)               // только активные
-       .order('name', { ascending: true });
+      const { data: techData, error } = await supabase
+        .from('technicians')
+        .select('id,name,role,is_active')
+        .in('role', ['technician', 'tech'])
+        .eq('is_active', true)
+        .order('name', { ascending: true });
+
+      if (error) {
+        console.error('load techs', error);
+        setTechs([]);
+      } else {
+        setTechs(techData || []); // ← добавлено
+      }
 
       const { data: j, error: e1 } = await supabase
         .from('jobs')
@@ -688,13 +694,11 @@ export default function JobDetailsPage() {
                   }}
                 >
                   <option value="">—</option>
-                  {techs
-                    .filter((t) => (t.role || 'tech').toLowerCase() === 'tech')
-                    .map((t) => (
-                      <option key={t.id} value={String(t.id)}>
-                        {t.name}
-                      </option>
-                    ))}
+                  {techs.map((t) => (
+                    <option key={t.id} value={String(t.id)}>
+                      {t.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -877,7 +881,7 @@ export default function JobDetailsPage() {
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '8px 10px',
-                      border: '1px solid #eef2f7',
+                      border: '1px solid '#eef2f7',
                       borderRadius: 8
                     }}
                   >
@@ -1136,4 +1140,3 @@ function Td({ children, center }) {
     </td>
   );
 }
-
