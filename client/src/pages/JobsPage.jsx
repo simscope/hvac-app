@@ -12,14 +12,14 @@ const STATUS_ORDER = [
   'заказ деталей',
   'ожидание деталей',
   'к финишу',
-  'завершено', 
+  'завершено',
 ];
 
 // Статусы, которые НЕ должны отображаться в списке (скрываем)
 const HIDDEN_STATUSES = new Set([
-  'завершено',   // правильное написание
-  'заверщено',   // опечатка, которая могла попасть в базу
-  'completed',   // на всякий
+  'завершено',
+  'заверщено',
+  'completed',
   'done',
   'закрыто',
 ]);
@@ -37,14 +37,24 @@ export default function JobsPage() {
 
   async function fetchAll() {
     const [
-      { data: jobData },
-      { data: clientData },
-      { data: techData },
+      { data: jobData, error: jobErr },
+      { data: clientData, error: clientErr },
+      { data: techData, error: techErr },
     ] = await Promise.all([
       supabase.from('jobs').select('*'),
       supabase.from('clients').select('*'),
-      supabase.from('technicians').select('id,name,role').eq('role', 'tech'),
+      // 🔧 ВАЖНО: роль в базе = 'technician' (а не 'tech'); берём только активных
+      supabase
+        .from('technicians')
+        .select('id,name,role,is_active')
+        .in('role', ['technician', 'tech'])
+        .eq('is_active', true)
+        .order('name', { ascending: true }),
     ]);
+
+    if (jobErr) console.error(jobErr);
+    if (clientErr) console.error(clientErr);
+    if (techErr) console.error(techErr);
 
     setJobs(jobData || []);
     setClients(clientData || []);
@@ -74,7 +84,7 @@ export default function JobsPage() {
     [jobs, clients]
   );
 
-  // Скрываем завершённые (но селект статуса остаётся в строках, которые видим)
+  // Скрываем завершённые
   const activeJobsView = useMemo(
     () =>
       jobsView.filter(
@@ -86,14 +96,13 @@ export default function JobsPage() {
   // Карта приоритетов для сортировки
   const orderMap = useMemo(() => {
     const m = new Map(STATUS_ORDER.map((s, i) => [s.toLowerCase(), i]));
-    // Алиасим правильное написание к значению опечатанного, чтобы сорт шёл одинаково
     if (!m.has('завершено') && m.has('заверщено')) {
       m.set('завершено', m.get('заверщено'));
     }
     return m;
   }, []);
 
-  // Сортировка: сперва по приоритету статуса, потом новее выше
+  // Сортировка
   const sortedJobs = useMemo(() => {
     return [...activeJobsView].sort((a, b) => {
       const ar = orderMap.has(String(a.status || '').toLowerCase())
@@ -112,7 +121,7 @@ export default function JobsPage() {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
   };
 
-  // Сохранение (минимально нужные поля)
+  // Сохранение
   const handleSave = async (job) => {
     setSavingId(job.id);
     try {
@@ -131,7 +140,6 @@ export default function JobsPage() {
       if (error) throw error;
       await fetchAll();
       alert('Сохранено');
-      // Если выставили завершённый статус — после рефреша эта строка пропадёт из списка (как и требовалось)
     } catch (e) {
       console.error(e);
       alert('Ошибка при сохранении');
@@ -142,16 +150,15 @@ export default function JobsPage() {
 
   const openJob = (id) => navigate(`/job/${id}`);
 
-  // Селект статусов (оставляю твой порядок + добавляю корректное "завершено" про запас)
+  // Опции статусов
   const STATUS_OPTIONS = useMemo(() => {
     const set = new Set(STATUS_ORDER);
-    set.add('завершено'); // вдруг в базе/логике уже правильное написание
+    set.add('завершено');
     return Array.from(set);
   }, []);
 
   return (
     <div className="p-4">
-      {/* Стили как у «Все заявки», адаптивность: скрываем только Систему и Дату */}
       <style>{`
         .jobs-table { width:100%; table-layout:fixed; border-collapse:collapse; }
         .jobs-table thead th { background:#f3f4f6; font-weight:600; }
@@ -169,13 +176,11 @@ export default function JobsPage() {
           box-sizing: border-box;
         }
 
-        /* адаптив: оставляем колонки с редактированием видимыми */
         @media (max-width: 1024px) {
           .col-system, .col-date { display:none; }
         }
       `}</style>
 
-      {/* форма создания заявки — без изменений */}
       <CreateJob onCreated={fetchAll} />
 
       <div className="overflow-x-auto" style={{ marginTop: 16 }}>
@@ -230,7 +235,6 @@ export default function JobsPage() {
                   }}
                   title="Открыть заявку"
                 >
-                  {/* Job # */}
                   <td>
                     <div
                       className="cell-wrap num-link"
@@ -243,7 +247,6 @@ export default function JobsPage() {
                     </div>
                   </td>
 
-                  {/* Клиент (имя + телефон) */}
                   <td>
                     <div className="cell-wrap">
                       {job.client_name}
@@ -251,17 +254,14 @@ export default function JobsPage() {
                     </div>
                   </td>
 
-                  {/* Система (только просмотр) */}
                   <td className="col-system">
                     <div className="cell-wrap">{job.system_type || '—'}</div>
                   </td>
 
-                  {/* Проблема (только просмотр) */}
                   <td>
                     <div className="cell-wrap">{job.issue || '—'}</div>
                   </td>
 
-                  {/* SCF (editable) */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <input
                       type="number"
@@ -271,7 +271,6 @@ export default function JobsPage() {
                     />
                   </td>
 
-                  {/* Техник (editable select) */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <select
                       value={job.technician_id || ''}
@@ -286,12 +285,10 @@ export default function JobsPage() {
                     </select>
                   </td>
 
-                  {/* Дата (только просмотр) */}
                   <td className="col-date">
                     <div className="cell-wrap">{job.created_at_fmt}</div>
                   </td>
 
-                  {/* Статус (editable select) */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <select
                       value={job.status || ''}
@@ -306,7 +303,6 @@ export default function JobsPage() {
                     </select>
                   </td>
 
-                  {/* Действия */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                       <button
@@ -316,10 +312,7 @@ export default function JobsPage() {
                       >
                         {savingId === job.id ? '…' : '💾'}
                       </button>
-                      <button
-                        title="Редактировать"
-                        onClick={() => openJob(job.id)}
-                      >
+                      <button title="Редактировать" onClick={() => openJob(job.id)}>
                         ✏️
                       </button>
                       <button
