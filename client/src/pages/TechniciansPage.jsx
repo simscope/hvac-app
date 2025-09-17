@@ -236,6 +236,9 @@ export default function AdminTechniciansPage() {
         .table th,.table td{border:1px solid #e0e5ea;padding:6px 8px;vertical-align:top}
         .table th{background:#f6f7f9;text-align:left}
         .row-inline{display:flex;gap:8px;align-items:center}
+        .input-row{display:flex;align-items:center;gap:6px}
+        .btn-sm{height:22px;padding:0 6px;font-size:12px;line-height:20px}
+        .btn-icon{height:22px;width:22px;padding:0;line-height:20px;text-align:center}
       `}</style>
 
       <h1 style={{ fontSize: 28, margin: "0 0 12px 0", fontWeight: 700 }}>Техники / Сотрудники</h1>
@@ -279,15 +282,29 @@ export default function AdminTechniciansPage() {
                     <span style={{ color: "#687076" }}>Отключи, если нужна только строка в technicians.</span>
                   </td>
                 </tr>
-                <tr>
-                  <td>Временный пароль {createAuth && "*"}</td>
-                  <td className="row-inline" style={{ justifyContent: "space-between" }}>
-                    <input className="input" type="text" value={password} onChange={e => setPassword(e.target.value)} disabled={!createAuth} />
-                    <button type="button" className="btn btn-sm" onClick={() => setPassword(genTempPassword())} title="Сгенерировать пароль">
-                      Сгенерировать
-                    </button>
-                  </td>
-                </tr>
+               <tr>
+  <td>Временный пароль {createAuth && "*"}</td>
+  <td>
+    <div className="input-row">
+      <input
+        className="input"
+        type="text"
+        value={password}
+        onChange={e => setPassword(e.target.value)}
+        disabled={!createAuth}
+        style={{ flex: 1 }}
+      />
+      <button
+        type="button"
+        className="btn btn-icon"
+        onClick={() => setPassword(genTempPassword())}
+        title="Сгенерировать пароль"
+      >
+        🎲
+      </button>
+    </div>
+  </td>
+</tr>
                 <tr>
                   <td />
                   <td className="row-inline">
@@ -344,3 +361,4 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
+
