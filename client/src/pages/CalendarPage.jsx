@@ -18,15 +18,25 @@ export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
   const [clients, setClients] = useState([]);
-  const [activeTech, setActiveTech] = useState(null);
+
+  const [activeTech, setActiveTech] = useState('all'); // 'all' | technician_id
+  const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
+  const [query, setQuery] = useState('');
+
   const extRef = useRef(null);
+  const calRef = useRef(null);
   const navigate = useNavigate();
 
+  /* ---------- загрузка данных ---------- */
   useEffect(() => {
     (async () => {
       const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
         supabase.from('jobs').select('*'),
-        supabase.from('technicians').select('id, name, role').eq('role', 'tech'),
+        supabase
+          .from('technicians')
+          .select('id, name, role')
+          .in('role', ['technician', 'tech'])
+          .order('name', { ascending: true }),
         supabase.from('clients').select('id, full_name, address'),
       ]);
       setJobs(j || []);
@@ -35,16 +45,53 @@ export default function CalendarPage() {
     })();
   }, []);
 
-  useEffect(() => {
-    if (!activeTech && techs?.length) setActiveTech(techs[0].id);
-  }, [techs, activeTech]);
+  /* ---------- палитры ---------- */
+  const statusKey = (s) => {
+    if (!s) return 'default';
+    const v = String(s).toLowerCase().trim();
+    if (v.includes('recall')) return 'recall';
+    if (v === 'диагностика') return 'diagnostics';
+    if (v === 'к финишу') return 'to_finish';
+    if (v.startsWith('ожид')) return 'waiting_parts';
+    if (v === 'заказ деталей') return 'parts_ordered';
+    if (v === 'в работе') return 'in_progress';
+    if (v === 'завершено' || v === 'выполнено') return 'finished';
+    return 'default';
+  };
 
+  const statusPalette = {
+    recall:        { bg: '#fee2e2', fg: '#7f1d1d', ring: '#ef4444' },
+    diagnostics:   { bg: '#fef9c3', fg: '#854d0e', ring: '#eab308' },
+    to_finish:     { bg: '#fffbeb', fg: '#92400e', ring: '#f59e0b' },
+    waiting_parts: { bg: '#ede9fe', fg: '#5b21b6', ring: '#8b5cf6' },
+    parts_ordered: { bg: '#e0e7ff', fg: '#3730a3', ring: '#6366f1' },
+    in_progress:   { bg: '#e0f2fe', fg: '#075985', ring: '#0ea5e9' },
+    finished:      { bg: '#d1fae5', fg: '#065f46', ring: '#10b981' },
+    default:       { bg: '#f3f4f6', fg: '#111827', ring: '#9ca3af' },
+  };
+
+  // стабильные цвета техников (для режима "Все техники")
+  const techColor = useMemo(() => {
+    const base = ['#0284c7', '#7c3aed', '#16a34a', '#db2777', '#0ea5e9', '#f59e0b', '#06b6d4', '#ef4444', '#84cc16'];
+    const map = {};
+    techs.forEach((t, i) => { map[String(t.id)] = base[i % base.length]; });
+    return map;
+  }, [techs]);
+
+  /* ---------- индексы ---------- */
   const clientsById = useMemo(() => {
     const m = new Map();
     for (const c of clients) m.set(String(c.id), c);
     return m;
   }, [clients]);
 
+  const techById = useMemo(() => {
+    const m = new Map();
+    for (const t of techs) m.set(String(t.id), t);
+    return m;
+  }, [techs]);
+
+  /* ---------- утилиты ---------- */
   const getClientName = (job) =>
     clientsById.get(String(job?.client_id))?.full_name ||
     job?.client_name ||
@@ -57,39 +104,11 @@ export default function CalendarPage() {
     job?.address ||
     '';
 
-  // ---- стиль по статусу/оплате
-  const normalizeStatus = (s) => {
-    if (!s) return '';
-    const v = String(s).toLowerCase().trim();
-    if (v === 'recall' || v === 'recal' || v === 'reсall' || v === 'рекол' || v === 'реколл') return 'recall';
-    if (v === 'диагностика') return 'diagnostics';
-    if (v === 'к финишу') return 'to_finish';
-    if (v === 'ожидание' || v === 'ожидание деталей') return 'waiting_parts';
-    if (v === 'заказ деталей') return 'parts_ordered';
-    if (v === 'в работе') return 'in_progress';
-    if (v === 'завершено' || v === 'выполнено') return 'finished';
-    return v;
-  };
+  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.payment_method;
+  const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
+  const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
 
-  const palette = {
-    recall:        { bg: '#fee2e2', fg: '#7f1d1d', ring: '#ef4444' }, // красный
-    diagnostics:   { bg: '#fef9c3', fg: '#854d0e', ring: '#eab308' },
-    to_finish:     { bg: '#fffbeb', fg: '#92400e', ring: '#f59e0b' },
-    waiting_parts: { bg: '#ede9fe', fg: '#5b21b6', ring: '#8b5cf6' },
-    parts_ordered: { bg: '#e0e7ff', fg: '#3730a3', ring: '#6366f1' },
-    in_progress:   { bg: '#e0f2fe', fg: '#075985', ring: '#0ea5e9' },
-    finished:      { bg: '#d1fae5', fg: '#065f46', ring: '#10b981' },
-    default:       { bg: '#f3f4f6', fg: '#111827', ring: '#9ca3af' },
-  };
-
-  const styleForJob = (job) => {
-    const key = normalizeStatus(job.status);
-    const base = palette[key] || palette.default;
-    const unpaid = !job?.payment || job.payment === '—';
-    return { ...base, unpaid };
-  };
-
-  // ---- внешние (без мастера) карточки — делаем draggable
+  /* ---------- внешние карточки (без мастера) ---------- */
   useEffect(() => {
     if (!extRef.current) return;
     const d = new Draggable(extRef.current, {
@@ -103,40 +122,52 @@ export default function CalendarPage() {
     return () => d.destroy();
   }, [extRef, jobs]);
 
+  /* ---------- события календаря ---------- */
+  const filteredJobs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (jobs || []).filter((j) => {
+      if (!j.appointment_time) return false;
+      if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
+      if (!q) return true;
+      const name = getClientName(j).toLowerCase();
+      const addr = getClientAddress(j).toLowerCase();
+      return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
+    });
+  }, [jobs, activeTech, query, clientsById]);
+
   const events = useMemo(() => {
-    if (!activeTech) return [];
-    return (jobs || [])
-      .filter(
-        (j) =>
-          j.appointment_time &&
-          String(j.technician_id) === String(activeTech)
-      )
-      .map((j) => {
-        const s = styleForJob(j);
-        return {
-          id: String(j.id),
-          title: `#${j.job_number || j.id} — ${getClientName(j)}`,
-          start: j.appointment_time,
-          allDay: false,
-          backgroundColor: s.bg,
-          borderColor: s.unpaid ? '#ef4444' : s.ring,
-          textColor: s.fg,
-          extendedProps: {
-            clientName: getClientName(j),
-            address: getClientAddress(j),
-            unpaid: s.unpaid,
-            isRecall: normalizeStatus(j.status) === 'recall',
-            job: j,
-          },
-        };
-      });
-  }, [jobs, activeTech, clientsById]); // clientsById завязан на clients
+    return filteredJobs.map((j) => {
+      const k = statusKey(j.status);
+      const s = statusPalette[k] || statusPalette.default;
+      const tName = techById.get(String(j.technician_id))?.name || '';
+      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
+      const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
+
+      return {
+        id: String(j.id),
+        title,
+        start: j.appointment_time,
+        allDay: false,
+        backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
+        borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
+        textColor: s.fg,
+        extendedProps: {
+          address: getClientAddress(j),
+          unpaid: isUnpaid(j),
+          isRecall: statusKey(j.status) === 'recall',
+          job: j,
+          techName: tName,
+        },
+      };
+    });
+  }, [filteredJobs, activeTech, techById, techColor]);
 
   const unassigned = useMemo(
     () => (jobs || []).filter((j) => !j.technician_id),
     [jobs]
   );
 
+  /* ---------- обработчики DnD/клика ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
     const newStart = info.event.start?.toISOString() ?? null;
@@ -152,9 +183,9 @@ export default function CalendarPage() {
 
   const handleEventReceive = async (info) => {
     const id = info.event.id;
-    if (!activeTech) {
+    if (activeTech === 'all') {
       info.event.remove();
-      alert('Сначала выберите мастера, затем перетащите заявку в его календарь.');
+      alert('Выберите вкладку конкретного мастера и повторите перетаскивание.');
       return;
     }
     const newStart = info.event.start?.toISOString() ?? null;
@@ -167,22 +198,23 @@ export default function CalendarPage() {
       return;
     }
     setJobs((prev) =>
-      prev.map((j) => (String(j.id) === id ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech) } : j))
+      prev.map((j) =>
+        String(j.id) === id ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech) } : j
+      )
     );
   };
 
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
-  // собственный рендер содержимого события
   const renderEventContent = (arg) => {
-    const { clientName, address } = arg.event.extendedProps;
+    const { address } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
     wrap.style.fontSize = '12px';
     const line1 = document.createElement('div');
     line1.style.fontWeight = '700';
-    line1.textContent = arg.event.title; // "#номер — Имя"
+    line1.textContent = arg.event.title;
     wrap.appendChild(line1);
     if (address) {
       const line2 = document.createElement('div');
@@ -193,7 +225,6 @@ export default function CalendarPage() {
     return { domNodes: [wrap] };
   };
 
-  // пост-рендер стили (пунктир если неоплачено; жирнее для ReCall)
   const eventDidMount = (info) => {
     const { unpaid, isRecall } = info.event.extendedProps || {};
     if (unpaid) {
@@ -206,28 +237,48 @@ export default function CalendarPage() {
     }
   };
 
+  /* ---------- UI ---------- */
   return (
     <div style={{ padding: 16 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>🗓 Календарь</h1>
 
-      {/* вкладки мастеров */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        {techs.map((t) => (
-          <Tab
-            key={t.id}
-            active={String(activeTech) === String(t.id)}
-            onClick={() => setActiveTech(t.id)}
+      {/* панель управления */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Tab active={activeTech === 'all'} onClick={() => setActiveTech('all')}>Все техники</Tab>
+          {techs.map((t) => (
+            <Tab key={t.id} active={String(activeTech) === String(t.id)} onClick={() => setActiveTech(t.id)}>
+              {t.name}
+            </Tab>
+          ))}
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Поиск: клиент/адрес/№"
+            style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 10px', minWidth: 220 }}
+          />
+          <select
+            value={view}
+            onChange={(e) => {
+              setView(e.target.value);
+              const api = calRef.current?.getApi?.();
+              if (api) api.changeView(e.target.value);
+            }}
+            style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 10px' }}
           >
-            {t.name}
-          </Tab>
-        ))}
+            <option value="dayGridMonth">Месяц</option>
+            <option value="timeGridWeek">Неделя</option>
+            <option value="timeGridDay">День</option>
+          </select>
+        </div>
       </div>
 
       {/* без мастера */}
       <div style={{ marginBottom: 12 }}>
-        <div style={{ marginBottom: 6, fontWeight: 600 }}>
-          Без мастера (перетащите карточку заявки в календарь выбранной вкладки мастера):
-        </div>
+        <div style={{ marginBottom: 6, fontWeight: 600 }}>Без мастера (перетащите на календарь выбранной вкладки мастера):</div>
         <div
           ref={extRef}
           style={{
@@ -241,7 +292,6 @@ export default function CalendarPage() {
           }}
         >
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— нет заявок —</div>}
-
           {unassigned.map((j) => {
             const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
             const addr = getClientAddress(j);
@@ -269,9 +319,7 @@ export default function CalendarPage() {
                 <div style={{ fontWeight: 700 }}>#{j.job_number || j.id}</div>
                 <div style={{ color: '#111827', fontWeight: 600 }}>{getClientName(j)}</div>
                 {addr && (
-                  <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>
-                    {addr}
-                  </div>
+                  <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
                 )}
                 {j.issue && (
                   <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>
@@ -283,9 +331,10 @@ export default function CalendarPage() {
       </div>
 
       <FullCalendar
+        ref={calRef}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-        initialView="timeGridWeek"
-        headerToolbar={{ left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,timeGridDay' }}
+        initialView={view}
+        headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
         locale="ru"
         height="72vh"
         editable
@@ -303,10 +352,7 @@ export default function CalendarPage() {
         eventDidMount={eventDidMount}
       />
 
-      <p style={{ marginTop: 8, color: '#6b7280', fontSize: 13 }}>
-        Подсказка: выберите вкладку мастера, затем перетащите заявку из блока «Без мастера» в календарь.
-        Двойной клик по карточке/событию откроет страницу заявки.
-      </p>
+      <Legend />
     </div>
   );
 }
@@ -327,5 +373,37 @@ function Tab({ active, onClick, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function Legend() {
+  const item = (bg, text, label) => (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '2px 8px',
+        borderRadius: 999,
+        background: bg,
+        color: text,
+        fontSize: 12,
+        marginRight: 8,
+      }}
+    >
+      ● {label}
+    </span>
+  );
+  return (
+    <div style={{ marginTop: 8, color: '#6b7280', fontSize: 13 }}>
+      {item('#fee2e2', '#7f1d1d', 'ReCall')}
+      {item('#fef9c3', '#854d0e', 'Диагностика')}
+      {item('#e0f2fe', '#075985', 'В работе')}
+      {item('#e0e7ff', '#3730a3', 'Заказ деталей')}
+      {item('#ede9fe', '#5b21b6', 'Ожидание деталей')}
+      {item('#fffbeb', '#92400e', 'К финишу')}
+      {item('#d1fae5', '#065f46', 'Завершено')}
+      <span style={{ marginLeft: 12 }}>Неоплаченные помечены пунктирной рамкой.</span>
+    </div>
   );
 }
