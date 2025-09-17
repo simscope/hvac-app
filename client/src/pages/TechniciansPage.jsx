@@ -275,7 +275,7 @@ export default function AdminTechniciansPage() {
   }
 
   // ——— ОПАСНО: Полностью удалить запись из technicians (нужно, только если действительно надо)
-  async function onHardDelete(row) {
+  async function (row) {
     if (!isAdmin) { setBanner({ title: "Нет доступа", text: "Только администратор." }); return; }
     if (!row?.id) return;
     const ok = window.confirm(
@@ -288,11 +288,21 @@ export default function AdminTechniciansPage() {
     try {
       // Используем твою edge-функцию, если она поддерживает hard delete,
       // либо замени на rpc('remove_technician', { p_tech_id, p_reassign_to })
-      const { ok: edgeOk, status, data } = await callEdge("admin-ensure-user", {
-        action: "delete_hard",
-        technician_id: row.id,
-        alsoDeleteAuth: true,
-      });
+     let ok = true, status = 200, data = {};
+  if (row.auth_user_id) {
+    // через edge удаляем учётку + самого техника
+    const resp = await callEdge("admin-ensure-user", {
+      action: "delete",           // <-- этот action у тебя уже есть
+      technician_id: row.id,
+      alsoDeleteAuth: true,
+      hard: true                  // опционально: флаг, если твоя edge это понимает
+    });
+    ok = resp.ok; status = resp.status; data = resp.data;
+  } else {
+    // учётки нет — удаляем напрямую в БД
+    const resp = await supabase.rpc("remove_technician", { p_tech_id: row.id, p_reassign_to: null });
+    ok = !resp.error; status = resp.error ? 400 : 200; data = resp.error || { ok: true };
+  }
       if (!edgeOk || data?.error) {
         setBanner({ title: "Ошибка удаления", text: data?.error || "Edge-функция вернула ошибку.", details: { status, ...data } });
         return;
@@ -462,3 +472,4 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
+
