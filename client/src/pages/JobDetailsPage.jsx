@@ -155,11 +155,12 @@ export default function JobDetailsPage() {
     (async () => {
       setLoading(true);
 
-      const { data: t } = await supabase
-        .from('technicians')
-        .select('id,name,role')
-        .order('name', { ascending: true });
-      setTechs(t || []);
+     const { data: techData, error } = await supabase
+       .from('technicians')
+       .select('id,name,role,is_active')
+       .in('role', ['technician', 'tech'])  // поддерживаем оба значения
+       .eq('is_active', true)               // только активные
+       .order('name', { ascending: true });
 
       const { data: j, error: e1 } = await supabase
         .from('jobs')
@@ -1135,3 +1136,4 @@ function Td({ children, center }) {
     </td>
   );
 }
+
