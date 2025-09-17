@@ -127,7 +127,7 @@ export default function JobsPage() {
     try {
       const payload = {
         technician_id:
-          job.technician_id === '' || job.technician_id == null ? null : job.technician_id,
+          job.technician_id === '' || 'technician_id', e.target.value || null
         status: job.status ?? null,
         scf:
           job.scf === '' || job.scf == null
@@ -343,3 +343,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
