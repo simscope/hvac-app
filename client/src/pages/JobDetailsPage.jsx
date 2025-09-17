@@ -251,11 +251,17 @@ export default function JobDetailsPage() {
   };
 
   // Комментарии
-  // Комментарии
+// Помощник: фильтруем "ролевые" значения
+const isRoleLike = (v) => {
+  if (!v) return false;
+  const s = String(v).trim().toLowerCase();
+  return /^(admin(istrator)?|manager|technician|админ|администратор|менеджер|техник)$/.test(s);
+};
+
+// Комментарии
 const loadComments = async () => {
   setCommentsLoading(true);
 
-  // 1) сами комментарии
   const { data, error } = await supabase
     .from('comments')
     .select('id, job_id, text, image_url, author_user_id, created_at')
@@ -272,125 +278,48 @@ const loadComments = async () => {
   const list = data || [];
   const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
 
-  // 2) вытаскиваем имена из profiles и technicians
   let nameByUserId = {};
-
   if (ids.length) {
-    // profiles: id == auth user id
-    const { data: profs, error: profErr } = await supabase
-      .from('profiles')              // или 'public.profiles', если у тебя схема указана
-      .select('id, full_name')
-      .in('id', ids);
-
-    if (!profErr && profs) {
-      for (const p of profs) {
-        if (p?.id) nameByUserId[p.id] = p.full_name || null;
-      }
-    }
-
-    // technicians: auth_user_id -> name (на случай, если профиля нет)
-    const { data: people, error: techErr } = await supabase
+    // technicians: auth_user_id -> name
+    const { data: techs } = await supabase
       .from('technicians')
       .select('auth_user_id, name')
       .in('auth_user_id', ids);
 
-    if (!techErr && people) {
-      for (const t of people) {
-        if (t?.auth_user_id && !nameByUserId[t.auth_user_id]) {
-          nameByUserId[t.auth_user_id] = t.name || null;
+    if (techs) {
+      for (const t of techs) {
+        if (t?.auth_user_id && t?.name) {
+          nameByUserId[t.auth_user_id] = t.name;
+        }
+      }
+    }
+
+    // profiles: id -> full_name/name (если не похоже на роль)
+    const { data: profs } = await supabase
+      .from('profiles')               // или 'public.profiles' — если так названа таблица
+      .select('id, full_name, name')
+      .in('id', ids);
+
+    if (profs) {
+      for (const p of profs) {
+        if (!p?.id) continue;
+        if (!nameByUserId[p.id]) {
+          const candidate =
+            p.full_name?.trim() ||
+            (!isRoleLike(p.name) ? p.name?.trim() : null);
+          if (candidate) nameByUserId[p.id] = candidate;
         }
       }
     }
   }
 
-  // 3) маппим имя в список комментариев
   setComments(list.map(c => ({
     ...c,
-    author_name: nameByUserId[c.author_user_id] || null
+    author_name: nameByUserId[c.author_user_id] || null,
   })));
   setCommentsLoading(false);
 };
 
-  // Инвойсы (Storage + DB → merge)
-  const loadInvoices = async () => {
-    setInvoicesLoading(true);
-    try {
-      const [stRes, dbRes] = await Promise.all([
-        invStorage().list(`${jobId}`, {
-          limit: 200,
-          sortBy: { column: 'updated_at', order: 'desc' },
-        }),
-        supabase
-          .from('invoices')
-          .select('invoice_no, created_at')
-          .eq('job_id', jobId)
-          .order('created_at', { ascending: false }),
-      ]);
-
-      const stData = stRes?.data || [];
-      const stor = stData
-        .filter(o => /\.pdf$/i.test(o.name))
-        .map(o => {
-          const full = `${jobId}/${o.name}`;
-          const { data: pub } = invStorage().getPublicUrl(full);
-          const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
-          return {
-            source: 'storage',
-            name: o.name,
-            url: pub?.publicUrl || null,
-            updated_at: o.updated_at || o.created_at || null,
-            invoice_no: m ? String(m[1]) : null,
-            hasFile: true,
-          };
-        });
-
-      const rows = dbRes?.data || [];
-      const db = rows.map(r => ({
-        source: 'db',
-        name: `invoice_${r.invoice_no}.pdf`,
-        url: null,
-        updated_at: r.created_at,
-        invoice_no: String(r.invoice_no),
-        hasFile: stor.some(s => s.invoice_no === String(r.invoice_no)),
-      }));
-
-      const merged = [...stor];
-      db.forEach(d => {
-        if (!merged.some(x => x.invoice_no === d.invoice_no)) merged.push(d);
-      });
-
-      merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
-      setInvoices(merged);
-    } catch (e) {
-      console.error('loadInvoices merge error:', e);
-      setInvoices([]);
-    } finally {
-      setInvoicesLoading(false);
-    }
-  };
-
-  const addComment = async () => {
-    const text = commentText.trim();
-    if (!text) return;
-    const payload = {
-      job_id: jobId,
-      text,
-      author_user_id: user?.id ?? null,
-    };
-    const { data, error } = await supabase
-      .from('comments')
-      .insert(payload)
-      .select()
-      .single();
-    if (error) {
-      console.error('addComment', error);
-      alert('Не удалось сохранить комментарий');
-      return;
-    }
-    const authorName = profile?.full_name || profile?.name || user?.email || null;
-    setComments(prev => [...prev, { ...data, author_name: authorName }]);
-    setCommentText('');
-  };
 
   /* ---------- редактирование заявки ---------- */
   const setField = (k, v) => {
@@ -1169,6 +1098,7 @@ function Td({ children, center }) {
     </td>
   );
 }
+
 
 
 
