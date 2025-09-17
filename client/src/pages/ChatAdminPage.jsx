@@ -112,9 +112,7 @@ export default function ChatAdminPage() {
     setLoadingChats(true);
 
     const { data, error } = await supabase
-      .from('chats')
-      .select('id,title,is_group,org_id,created_by,created_at,updated_at,deleted')
-      .eq('org_id', 1);
+     .from('chats').select('id,title,is_group,org_id,created_by,created_at,updated_at,deleted')
 
     if (error) {
       alert('Ошибка загрузки чатов');
@@ -575,3 +573,4 @@ export default function ChatAdminPage() {
 /* ===== общие стили модалки ===== */
 const modalWrap = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', display: 'grid', placeItems: 'center', zIndex: 50 };
 const modal = { width: 560, maxWidth: '90vw', background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 10px 24px rgba(0,0,0,.15)' };
+
