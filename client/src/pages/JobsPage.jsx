@@ -115,7 +115,9 @@ export default function JobsPage() {
             ? null
             : Number.isNaN(Number(job.scf))
             ? null
-            : Number(job.scf)
+            : Number(job.scf),
+        // ← добавили сохранение текста проблемы
+        issue: job.issue === '' || job.issue == null ? null : job.issue
       };
       const { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
       if (error) throw error;
@@ -227,8 +229,14 @@ export default function JobsPage() {
                   <div className="cell-wrap">{job.system_type || '—'}</div>
                 </td>
 
-                <td>
-                  <div className="cell-wrap">{job.issue || '—'}</div>
+                {/* Проблема — снова редактируемая */}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="text"
+                    value={job.issue ?? ''}
+                    onChange={(e) => handleChange(job.id, 'issue', e.target.value)}
+                    placeholder="—"
+                  />
                 </td>
 
                 <td onClick={(e) => e.stopPropagation()}>
