@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import CreateJob from '../components/CreateJob';
 import { supabase } from '../supabaseClient';
 
-// Порядок приоритета статусов
 const STATUS_ORDER = [
   'ReCall',
   'диагностика',
@@ -12,16 +11,15 @@ const STATUS_ORDER = [
   'заказ деталей',
   'ожидание деталей',
   'к финишу',
-  'завершено',
+  'завершено'
 ];
 
-// Статусы, которые скрываем
 const HIDDEN_STATUSES = new Set([
   'завершено',
   'заверщено',
   'completed',
   'done',
-  'закрыто',
+  'закрыто'
 ]);
 
 export default function JobsPage() {
@@ -36,68 +34,50 @@ export default function JobsPage() {
   }, []);
 
   async function fetchAll() {
-    const [
-      { data: jobData, error: jobErr },
-      { data: clientData, error: clientErr },
-      { data: techData, error: techErr },
-    ] = await Promise.all([
-      supabase.from('jobs').select('*'),
-      supabase.from('clients').select('*'),
-      // Берём только активных техников; поддержка legacy 'tech'
-     const { data: techData, error: techErr } = await supabase
-  .from('technicians')
-  .select('id,name,role,is_active')
-  .in('role', ['technician', 'tech'])   // ← поддержка обоих значений
-  .eq('is_active', true)                 // ← только активные
-  .order('name', { ascending: true });
+    const jobsReq = supabase.from('jobs').select('*');
+    const clientsReq = supabase.from('clients').select('*');
+    const techsReq = supabase
+      .from('technicians')
+      .select('id,name,role,is_active')
+      .in('role', ['technician', 'tech'])
+      .eq('is_active', true)
+      .order('name', { ascending: true });
 
-if (techErr) console.error(techErr);
-setTechnicians(techData || []);
+    const [jobsRes, clientsRes, techsRes] = await Promise.all([jobsReq, clientsReq, techsReq]);
 
-    ]);
+    if (jobsRes.error) console.error(jobsRes.error);
+    if (clientsRes.error) console.error(clientsRes.error);
+    if (techsRes.error) console.error(techsRes.error);
 
-    if (jobErr) console.error(jobErr);
-    if (clientErr) console.error(clientErr);
-    if (techErr) console.error(techErr);
-
-    setJobs(jobData || []);
-    setClients(clientData || []);
-    setTechnicians(techData || []);
+    setJobs(jobsRes.data || []);
+    setClients(clientsRes.data || []);
+    setTechnicians(techsRes.data || []);
   }
 
-  const fmtDate = (iso) => {
+  function fmtDate(iso) {
     if (!iso) return '—';
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-  };
+  }
 
-  // Вьюха для таблицы (обогащаем данными клиента)
-  const jobsView = useMemo(
-    () =>
-      (jobs || []).map((j) => {
-        const c = clients.find((x) => x.id === j.client_id);
-        return {
-          ...j,
-          client_name: c?.full_name || c?.name || '—',
-          client_phone: c?.phone || '',
-          created_at_fmt: fmtDate(j.created_at),
-        };
-      }),
-    [jobs, clients]
-  );
+  const jobsView = useMemo(() => {
+    return (jobs || []).map((j) => {
+      const c = clients.find((x) => x.id === j.client_id);
+      return {
+        ...j,
+        client_name: c?.full_name || c?.name || '—',
+        client_phone: c?.phone || '',
+        created_at_fmt: fmtDate(j.created_at)
+      };
+    });
+  }, [jobs, clients]);
 
-  // Скрываем завершённые
-  const activeJobsView = useMemo(
-    () =>
-      jobsView.filter(
-        (j) => !HIDDEN_STATUSES.has(String(j.status || '').toLowerCase())
-      ),
-    [jobsView]
-  );
+  const activeJobsView = useMemo(() => {
+    return jobsView.filter((j) => !HIDDEN_STATUSES.has(String(j.status || '').toLowerCase()));
+  }, [jobsView]);
 
-  // Карта приоритетов для сортировки
   const orderMap = useMemo(() => {
     const m = new Map(STATUS_ORDER.map((s, i) => [s.toLowerCase(), i]));
     if (!m.has('завершено') && m.has('заверщено')) {
@@ -106,7 +86,6 @@ setTechnicians(techData || []);
     return m;
   }, []);
 
-  // Сортировка
   const sortedJobs = useMemo(() => {
     return [...activeJobsView].sort((a, b) => {
       const ar = orderMap.has(String(a.status || '').toLowerCase())
@@ -120,13 +99,11 @@ setTechnicians(techData || []);
     });
   }, [activeJobsView, orderMap]);
 
-  // Локальное редактирование ячеек
-  const handleChange = (id, field, value) => {
+  function handleChange(id, field, value) {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
-  };
+  }
 
-  // Сохранение
-  const handleSave = async (job) => {
+  async function handleSave(job) {
     setSavingId(job.id);
     try {
       const payload = {
@@ -138,7 +115,7 @@ setTechnicians(techData || []);
             ? null
             : Number.isNaN(Number(job.scf))
             ? null
-            : Number(job.scf),
+            : Number(job.scf)
       };
       const { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
       if (error) throw error;
@@ -150,11 +127,10 @@ setTechnicians(techData || []);
     } finally {
       setSavingId(null);
     }
-  };
+  }
 
   const openJob = (id) => navigate(`/job/${id}`);
 
-  // Опции статусов
   const STATUS_OPTIONS = useMemo(() => {
     const set = new Set(STATUS_ORDER);
     set.add('завершено');
@@ -171,18 +147,8 @@ setTechnicians(techData || []);
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
         .row-click { cursor:pointer; }
         .row-click:hover { background:#f9fafb; }
-
-        .jobs-table input, .jobs-table select {
-          width: 100%;
-          height: 28px;
-          font-size: 14px;
-          padding: 2px 6px;
-          box-sizing: border-box;
-        }
-
-        @media (max-width: 1024px) {
-          .col-system, .col-date { display:none; }
-        }
+        .jobs-table input, .jobs-table select { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
+        @media (max-width: 1024px) { .col-system, .col-date { display:none; } }
       `}</style>
 
       <CreateJob onCreated={fetchAll} />
@@ -216,132 +182,121 @@ setTechnicians(techData || []);
           </thead>
 
           <tbody>
-            {sortedJobs.map((job) => {
-              return (
-                <tr
-                  key={job.id}
-                  className="row-click"
-                  role="button"
-                  tabIndex={0}
-                  onClick={(e) => {
-                    const tag = e.target.tagName;
-                    if (!['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) {
+            {sortedJobs.map((job) => (
+              <tr
+                key={job.id}
+                className="row-click"
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  const tag = e.target.tagName;
+                  if (!['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) {
+                    openJob(job.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
                       openJob(job.id);
                     }
-                  }}
-                  onKeyDown={(e) => {
-                    if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        openJob(job.id);
-                      }
-                    }
-                  }}
-                  title="Открыть заявку"
-                >
-                  {/* Job # */}
-                  <td>
-                    <div
-                      className="cell-wrap num-link"
+                  }
+                }}
+                title="Открыть заявку"
+              >
+                <td>
+                  <div
+                    className="cell-wrap num-link"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openJob(job.id);
+                    }}
+                  >
+                    {job.job_number || job.id}
+                  </div>
+                </td>
+
+                <td>
+                  <div className="cell-wrap">
+                    {job.client_name}
+                    {job.client_phone ? ` — ${job.client_phone}` : ''}
+                  </div>
+                </td>
+
+                <td className="col-system">
+                  <div className="cell-wrap">{job.system_type || '—'}</div>
+                </td>
+
+                <td>
+                  <div className="cell-wrap">{job.issue || '—'}</div>
+                </td>
+
+                <td onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="number"
+                    value={job.scf ?? ''}
+                    onChange={(e) => handleChange(job.id, 'scf', e.target.value)}
+                    placeholder="—"
+                  />
+                </td>
+
+                <td onClick={(e) => e.stopPropagation()}>
+                  <select
+                    value={job.technician_id || ''}
+                    onChange={(e) => handleChange(job.id, 'technician_id', e.target.value || null)}
+                  >
+                    <option value="">—</option>
+                    {technicians.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+
+                <td className="col-date">
+                  <div className="cell-wrap">{job.created_at_fmt}</div>
+                </td>
+
+                <td onClick={(e) => e.stopPropagation()}>
+                  <select
+                    value={job.status || ''}
+                    onChange={(e) => handleChange(job.id, 'status', e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <button
+                      title="Сохранить"
+                      onClick={() => handleSave(job)}
+                      disabled={savingId === job.id}
+                    >
+                      {savingId === job.id ? '…' : '💾'}
+                    </button>
+                    <button title="Редактировать" onClick={() => openJob(job.id)}>
+                      ✏️
+                    </button>
+                    <button
+                      title="Инвойс"
                       onClick={(e) => {
                         e.stopPropagation();
-                        openJob(job.id);
+                        navigate(`/invoice/${job.id}`);
                       }}
                     >
-                      {job.job_number || job.id}
-                    </div>
-                  </td>
-
-                  {/* Клиент */}
-                  <td>
-                    <div className="cell-wrap">
-                      {job.client_name}
-                      {job.client_phone ? ` — ${job.client_phone}` : ''}
-                    </div>
-                  </td>
-
-                  {/* Система */}
-                  <td className="col-system">
-                    <div className="cell-wrap">{job.system_type || '—'}</div>
-                  </td>
-
-                  {/* Проблема */}
-                  <td>
-                    <div className="cell-wrap">{job.issue || '—'}</div>
-                  </td>
-
-                  {/* SCF (editable) */}
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="number"
-                      value={job.scf ?? ''}
-                      onChange={(e) => handleChange(job.id, 'scf', e.target.value)}
-                      placeholder="—"
-                    />
-                  </td>
-
-                  {/* Техник (editable select) */}
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <select
-                      value={job.technician_id || ''}
-                      onChange={(e) => handleChange(job.id, 'technician_id', e.target.value || null)}
-                    >
-                      <option value="">—</option>
-                      {technicians.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-
-                  {/* Дата */}
-                  <td className="col-date">
-                    <div className="cell-wrap">{job.created_at_fmt}</div>
-                  </td>
-
-                  {/* Статус (editable select) */}
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <select
-                      value={job.status || ''}
-                      onChange={(e) => handleChange(job.id, 'status', e.target.value)}
-                    >
-                      <option value="">—</option>
-                      {Array.from(STATUS_ORDER.concat('завершено')).map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-
-                  {/* Действия */}
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <button
-                        title="Сохранить"
-                        onClick={() => handleSave(job)}
-                        disabled={savingId === job.id}
-                      >
-                        {savingId === job.id ? '…' : '💾'}
-                      </button>
-                      <button title="Редактировать" onClick={() => openJob(job.id)}>
-                        ✏️
-                      </button>
-                      <button
-                        title="Инвойс"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/invoice/${job.id}`);
-                        }}
-                      >
-                        📄
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+                      📄
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
 
             {sortedJobs.length === 0 && (
               <tr>
@@ -356,4 +311,3 @@ setTechnicians(techData || []);
     </div>
   );
 }
-
