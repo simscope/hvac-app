@@ -37,7 +37,7 @@ const JoAllJobsPage = () => {
     setLoading(true);
     const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
       supabase.from('jobs').select('*'),
-      supabase.from('technicians').select('id, name, role').eq('role', 'tech'),
+      supabase..from('technicians').select('id,name,role,is_active').in('role', ['technician', 'tech']).eq('is_active', true).order('name', { ascending: true }),
       supabase.from('clients').select('*'),
     ]);
     setJobs(j || []);
@@ -511,4 +511,5 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
+
 
