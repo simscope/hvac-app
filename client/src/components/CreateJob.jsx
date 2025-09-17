@@ -7,15 +7,6 @@ const input = {
   padding: '8px 10px',
   boxSizing: 'border-box',
   border: '1px solid #e5e7eb',
-  borderRadius: 8,// client/src/components/CreateJob.jsx
-import React, { useEffect, useState } from 'react';
-import { supabase } from '../supabaseClient';
-
-const input = {
-  width: '100%',
-  padding: '8px 10px',
-  boxSizing: 'border-box',
-  border: '1px solid #e5e7eb',
   borderRadius: 8,
   height: 36,
 };
@@ -523,4 +514,5 @@ export default function CreateJob({ onCreated }) {
     </form>
   );
 }
+
 
