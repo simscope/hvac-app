@@ -273,8 +273,10 @@ export default function JobDetailsPage() {
     if (ids.length) {
       const { data: people } = await supabase
         .from('technicians')
-        .select('auth_user_id, name')
-        .in('auth_user_id', ids);
+        .select('id,name,role,is_active')
+        .in('role', ['technician', 'tech'])
+        .eq('is_active', true)
+        .order('name', { ascending: true })
       map = Object.fromEntries((people || []).map(p => [p.auth_user_id, p.name]));
     }
 
@@ -1140,5 +1142,6 @@ function Td({ children, center }) {
     </td>
   );
 }
+
 
 
