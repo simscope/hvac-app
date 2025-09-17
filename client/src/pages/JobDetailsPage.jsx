@@ -141,7 +141,7 @@ export default function JobDetailsPage() {
   const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
 
   // Комментарии
-  the const [comments, setComments] = useState([]);
+  const [comments, setComments] = useState([]);
   const [commentText, setCommentText] = useState('');
   const [commentsLoading, setCommentsLoading] = useState(true);
 
@@ -1140,3 +1140,4 @@ function Td({ children, center }) {
     </td>
   );
 }
+
