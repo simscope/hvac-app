@@ -1,29 +1,30 @@
+// client/src/pages/JobDetailsPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
 /* ---------- UI ---------- */
-const PAGE  = { padding: 16, display: 'grid', gap: 12 };
-const BOX   = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
+const PAGE = { padding: 16, display: 'grid', gap: 12 };
+const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
 const GRID2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 };
-const COL   = { display: 'grid', gap: 12 };
-const ROW   = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' };
+const COL = { display: 'grid', gap: 12 };
+const ROW = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' };
 const INPUT = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' };
 const SELECT = { ...INPUT };
-const TA    = { ...INPUT, minHeight: 80, resize: 'vertical' };
+const TA = { ...INPUT, minHeight: 80, resize: 'vertical' };
 
 const H1 = { fontWeight: 800, fontSize: 22 };
 const H2 = { fontWeight: 700, fontSize: 16, marginBottom: 8 };
 const MUTED = { color: '#6b7280' };
 
-const BTN     = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' };
+const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' };
 const PRIMARY = { ...BTN, background: '#2563eb', color: '#fff', borderColor: '#2563eb' };
-const DANGER  = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
-const GHOST   = { ...BTN, background: '#f8fafc' };
+const DANGER = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
+const GHOST = { ...BTN, background: '#f8fafc' };
 
 /* ---------- Storage ---------- */
-const PHOTOS_BUCKET   = 'job-photos';
+const PHOTOS_BUCKET = 'job-photos';
 const INVOICES_BUCKET = 'invoices';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
@@ -40,10 +41,10 @@ const STATUS_OPTIONS = [
   'отменено',
 ];
 const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'invoice'];
-const SYSTEM_OPTIONS  = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
+const SYSTEM_OPTIONS = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
 
 /* ---------- Хелперы ---------- */
-const toNum = (v) => (v === '' || v === null || isNaN(v) ? null : Number(v));
+const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
 
 // корректный URL для HashRouter и BrowserRouter
@@ -85,16 +86,16 @@ const normalizeStatusForDb = (s) => {
 
 /* ---------- Санитизация имён для Storage ---------- */
 const RU_MAP = {
-  а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ё:'e', ж:'zh', з:'z', и:'i', й:'y',
-  к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u', ф:'f',
-  х:'h', ц:'c', ч:'ch', ш:'sh', щ:'sch', ъ:'', ы:'y', ь:'', э:'e', ю:'yu', я:'ya'
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
+  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
+  х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 function slugifyFileName(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'bin';
   const stem = name.replace(/\.[^/.]+$/, '').toLowerCase();
   const translit = stem
     .split('')
-    .map(ch => {
+    .map((ch) => {
       if (/[a-z0-9]/.test(ch)) return ch;
       const m = RU_MAP[ch];
       if (m) return m;
@@ -138,7 +139,7 @@ export default function JobDetailsPage() {
 
   // Выбор фото
   const [checked, setChecked] = useState({});
-  const allChecked = useMemo(() => photos.length > 0 && photos.every(p => checked[p.name]), [photos, checked]);
+  const allChecked = useMemo(() => photos.length > 0 && photos.every((p) => checked[p.name]), [photos, checked]);
 
   // Комментарии
   const [comments, setComments] = useState([]);
@@ -154,18 +155,18 @@ export default function JobDetailsPage() {
     (async () => {
       setLoading(true);
 
-      const { data: techData, error } = await supabase
+      const { data: techData, error: techErr } = await supabase
         .from('technicians')
         .select('id,name,role,is_active')
         .in('role', ['technician', 'tech'])
         .eq('is_active', true)
         .order('name', { ascending: true });
 
-      if (error) {
-        console.error('load techs', error);
+      if (techErr) {
+        console.error('load techs', techErr);
         setTechs([]);
       } else {
-        setTechs(techData || []); // ← добавлено
+        setTechs(techData || []);
       }
 
       const { data: j, error: e1 } = await supabase
@@ -231,6 +232,7 @@ export default function JobDetailsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
+  /* ---------- загрузка фото ---------- */
   const loadPhotos = async () => {
     const { data, error } = await storage().list(`${jobId}`, {
       limit: 200,
@@ -250,76 +252,107 @@ export default function JobDetailsPage() {
     setChecked({});
   };
 
-  // Комментарии
-// Помощник: фильтруем "ролевые" значения
-const isRoleLike = (v) => {
-  if (!v) return false;
-  const s = String(v).trim().toLowerCase();
-  return /^(admin(istrator)?|manager|technician|админ|администратор|менеджер|техник)$/.test(s);
-};
+  /* ---------- Комментарии ---------- */
+  const isRoleLike = (v) => {
+    if (!v) return false;
+    const s = String(v).trim().toLowerCase();
+    return /^(admin(istrator)?|manager|technician|админ|администратор|менеджер|техник)$/.test(s);
+  };
 
-// Комментарии
-const loadComments = async () => {
-  setCommentsLoading(true);
+  const loadComments = async () => {
+    setCommentsLoading(true);
 
-  const { data, error } = await supabase
-    .from('comments')
-    .select('id, job_id, text, image_url, author_user_id, created_at')
-    .eq('job_id', jobId)
-    .order('created_at', { ascending: true });
+    const { data, error } = await supabase
+      .from('comments')
+      .select('id, job_id, text, image_url, author_user_id, created_at')
+      .eq('job_id', jobId)
+      .order('created_at', { ascending: true });
 
-  if (error) {
-    console.error('loadComments', error);
-    setComments([]);
-    setCommentsLoading(false);
-    return;
-  }
-
-  const list = data || [];
-  const ids = Array.from(new Set(list.map(c => c.author_user_id).filter(Boolean)));
-
-  let nameByUserId = {};
-  if (ids.length) {
-    // technicians: auth_user_id -> name
-    const { data: techs } = await supabase
-      .from('technicians')
-      .select('auth_user_id, name')
-      .in('auth_user_id', ids);
-
-    if (techs) {
-      for (const t of techs) {
-        if (t?.auth_user_id && t?.name) {
-          nameByUserId[t.auth_user_id] = t.name;
-        }
-      }
+    if (error) {
+      console.error('loadComments', error);
+      setComments([]);
+      setCommentsLoading(false);
+      return;
     }
 
-    // profiles: id -> full_name/name (если не похоже на роль)
-    const { data: profs } = await supabase
-      .from('profiles')               // или 'public.profiles' — если так названа таблица
-      .select('id, full_name, name')
-      .in('id', ids);
+    const list = data || [];
+    const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
 
-    if (profs) {
-      for (const p of profs) {
-        if (!p?.id) continue;
+    const nameByUserId = {};
+
+    if (ids.length) {
+      // приоритет: technicians.name
+      const { data: techPeople } = await supabase
+        .from('technicians')
+        .select('auth_user_id, name')
+        .in('auth_user_id', ids);
+
+      (techPeople || []).forEach((t) => {
+        if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
+      });
+
+      // затем profiles.full_name, и только если не «похоже на роль» — profiles.name
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('id, full_name, name')
+        .in('id', ids);
+
+      (profs || []).forEach((p) => {
+        if (!p?.id) return;
         if (!nameByUserId[p.id]) {
-          const candidate =
-            p.full_name?.trim() ||
-            (!isRoleLike(p.name) ? p.name?.trim() : null);
+          const candidate = (p.full_name && p.full_name.trim())
+            || (p.name && !isRoleLike(p.name) ? p.name.trim() : null);
           if (candidate) nameByUserId[p.id] = candidate;
         }
-      }
+      });
     }
-  }
 
-  setComments(list.map(c => ({
-    ...c,
-    author_name: nameByUserId[c.author_user_id] || null,
-  })));
-  setCommentsLoading(false);
-};
+    setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
+    setCommentsLoading(false);
+  };
 
+  const addComment = async () => {
+    const text = commentText.trim();
+    if (!text) return;
+
+    const payload = {
+      job_id: jobId,
+      text,
+      author_user_id: user?.id ?? null,
+    };
+    const { data, error } = await supabase
+      .from('comments')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('addComment', error);
+      alert('Не удалось сохранить комментарий');
+      return;
+    }
+
+    // подбираем «красивое» имя
+    let authorName = null;
+
+    if (user?.id) {
+      const { data: t } = await supabase
+        .from('technicians')
+        .select('name')
+        .eq('auth_user_id', user.id)
+        .maybeSingle();
+      if (t?.name) authorName = t.name;
+    }
+
+    if (!authorName) {
+      if (profile?.full_name) authorName = profile.full_name;
+      else if (profile?.name && !isRoleLike(profile.name)) authorName = profile.name;
+      else authorName = user?.email || null;
+    }
+
+    setComments((prev) => [...prev, { ...data, author_name: authorName }]);
+    setCommentText('');
+  };
 
   /* ---------- редактирование заявки ---------- */
   const setField = (k, v) => {
@@ -339,9 +372,7 @@ const loadComments = async () => {
       issue: job.issue || null,
       scf: toNum(job.scf),
       labor_price: toNum(job.labor_price),
-      payment_method: !job.payment_method || job.payment_method === '—'
-        ? null
-        : String(job.payment_method),
+      payment_method: !job.payment_method || job.payment_method === '—' ? null : String(job.payment_method),
       status: normalizeStatusForDb(job.status),
       job_number: stringOrNull(job.job_number),
     };
@@ -390,10 +421,10 @@ const loadComments = async () => {
     }
 
     const patch = {};
-    if ('client_name' in (job || {}))   patch.client_name   = client.full_name || '';
-    if ('client_phone' in (job || {}))  patch.client_phone  = client.phone || '';
-    if ('client_email' in (job || {}))  patch.client_email  = client.email || '';
-    if ('client_address' in (job || {}))patch.client_address = client.address || '';
+    if ('client_name' in (job || {})) patch.client_name = client.full_name || '';
+    if ('client_phone' in (job || {})) patch.client_phone = client.phone || '';
+    if ('client_email' in (job || {})) patch.client_email = client.email || '';
+    if ('client_address' in (job || {})) patch.client_address = client.address || '';
 
     if (Object.keys(patch).length) {
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
@@ -539,7 +570,9 @@ const loadComments = async () => {
   const toggleAllPhotos = (v) => {
     if (v) {
       const next = {};
-      photos.forEach((p) => { next[p.name] = true; });
+      photos.forEach((p) => {
+        next[p.name] = true;
+      });
       setChecked(next);
     } else {
       setChecked({});
@@ -570,7 +603,64 @@ const loadComments = async () => {
     for (const n of names) await downloadOne(n);
   };
 
-  /* ---------- инвойсы: действия ---------- */
+  /* ---------- инвойсы ---------- */
+  const loadInvoices = async () => {
+    setInvoicesLoading(true);
+    try {
+      const [stRes, dbRes] = await Promise.all([
+        invStorage().list(`${jobId}`, {
+          limit: 200,
+          sortBy: { column: 'updated_at', order: 'desc' },
+        }),
+        supabase
+          .from('invoices')
+          .select('invoice_no, created_at')
+          .eq('job_id', jobId)
+          .order('created_at', { ascending: false }),
+      ]);
+
+      const stData = stRes?.data || [];
+      const stor = stData
+        .filter((o) => /\.pdf$/i.test(o.name))
+        .map((o) => {
+          const full = `${jobId}/${o.name}`;
+          const { data: pub } = invStorage().getPublicUrl(full);
+          const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
+          return {
+            source: 'storage',
+            name: o.name,
+            url: pub?.publicUrl || null,
+            updated_at: o.updated_at || o.created_at || null,
+            invoice_no: m ? String(m[1]) : null,
+            hasFile: true,
+          };
+        });
+
+      const rows = dbRes?.data || [];
+      const db = rows.map((r) => ({
+        source: 'db',
+        name: `invoice_${r.invoice_no}.pdf`,
+        url: null,
+        updated_at: r.created_at,
+        invoice_no: String(r.invoice_no),
+        hasFile: stor.some((s) => s.invoice_no === String(r.invoice_no)),
+      }));
+
+      const merged = [...stor];
+      db.forEach((d) => {
+        if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d);
+      });
+
+      merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+      setInvoices(merged);
+    } catch (e) {
+      console.error('loadInvoices merge error:', e);
+      setInvoices([]);
+    } finally {
+      setInvoicesLoading(false);
+    }
+  };
+
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) {
       window.open(item.url, '_blank', 'noopener,noreferrer');
@@ -678,7 +768,9 @@ const loadComments = async () => {
                   onChange={(e) => setField('system_type', e.target.value)}
                 >
                   {SYSTEM_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{s}</option>
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -721,7 +813,9 @@ const loadComments = async () => {
                     onChange={(e) => setField('payment_method', e.target.value === '—' ? null : e.target.value)}
                   >
                     {PAYMENT_OPTIONS.map((p) => (
-                      <option key={p} value={p}>{p}</option>
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
                     ))}
                   </select>
                   {isUnpaid && (
@@ -759,27 +853,23 @@ const loadComments = async () => {
 
               <div style={ROW}>
                 <div>Job № (необязательно)</div>
-                <input
-                  style={INPUT}
-                  value={job.job_number || ''}
-                  onChange={(e) => setField('job_number', e.target.value)}
-                />
+                <input style={INPUT} value={job.job_number || ''} onChange={(e) => setField('job_number', e.target.value)} />
               </div>
 
               {'tech_comment' in (job || {}) && (
                 <div style={ROW}>
                   <div>Комментарий от техника</div>
-                  <textarea
-                    style={TA}
-                    value={job.tech_comment || ''}
-                    onChange={(e) => setField('tech_comment', e.target.value)}
-                  />
+                  <textarea style={TA} value={job.tech_comment || ''} onChange={(e) => setField('tech_comment', e.target.value)} />
                 </div>
               )}
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>Сохранить заявку</button>
-                <button style={GHOST} onClick={() => navigate(-1)}>Назад</button>
+                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>
+                  Сохранить заявку
+                </button>
+                <button style={GHOST} onClick={() => navigate(-1)}>
+                  Назад
+                </button>
                 {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
               </div>
             </div>
@@ -792,12 +882,14 @@ const loadComments = async () => {
           <div style={BOX}>
             <div style={H2}>Клиент</div>
             <div style={{ display: 'grid', gap: 10 }}>
-              <Row label="ФИО"    value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
-              <Row label="Телефон" value={client.phone}     onChange={(v) => setClientField('phone', v)} />
-              <Row label="Email"   value={client.email}     onChange={(v) => setClientField('email', v)} />
-              <Row label="Адрес"   value={client.address}   onChange={(v) => setClientField('address', v)} />
+              <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
+              <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
+              <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
+              <Row label="Адрес" value={client.address} onChange={(v) => setClientField('address', v)} />
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
+                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>
+                  Сохранить клиента
+                </button>
                 {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
               </div>
             </div>
@@ -808,26 +900,16 @@ const loadComments = async () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Инвойсы (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  style={BTN}
-                  onClick={loadInvoices}
-                  disabled={invoicesLoading}
-                >
+                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
                   {invoicesLoading ? '...' : 'Обновить'}
                 </button>
-                <button
-                  type="button"
-                  style={PRIMARY}
-                  onClick={createInvoice}
-                  title="Создать новый инвойс для этой заявки"
-                >
+                <button type="button" style={PRIMARY} onClick={createInvoice} title="Создать новый инвойс для этой заявки">
                   + Создать инвойс
                 </button>
               </div>
             </div>
 
-            {(!invoices || invoices.length === 0) ? (
+            {!invoices || invoices.length === 0 ? (
               <div style={MUTED}>Пока нет инвойсов для этой заявки</div>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
@@ -840,16 +922,14 @@ const loadComments = async () => {
                       alignItems: 'center',
                       padding: '8px 10px',
                       border: '1px solid #eef2f7',
-                      borderRadius: 8
+                      borderRadius: 8,
                     }}
                   >
                     <div>
                       <div style={{ fontWeight: 600 }}>
                         {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
                         {!inv.hasFile && (
-                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>
-                            (PDF ещё не в хранилище)
-                          </span>
+                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF ещё не в хранилище)</span>
                         )}
                       </div>
                       <div style={{ fontSize: 12, color: '#6b7280' }}>
@@ -903,19 +983,10 @@ const loadComments = async () => {
               {materials.map((m, i) => (
                 <tr key={m.id}>
                   <Td>
-                    <input
-                      style={INPUT}
-                      value={m.name || ''}
-                      onChange={(e) => chMat(i, 'name', e.target.value)}
-                    />
+                    <input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
                   </Td>
                   <Td>
-                    <input
-                      style={INPUT}
-                      type="number"
-                      value={m.price ?? ''}
-                      onChange={(e) => chMat(i, 'price', e.target.value)}
-                    />
+                    <input style={INPUT} type="number" value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} />
                   </Td>
                   <Td>
                     <input
@@ -926,14 +997,12 @@ const loadComments = async () => {
                     />
                   </Td>
                   <Td>
-                    <input
-                      style={INPUT}
-                      value={m.supplier || ''}
-                      onChange={(e) => chMat(i, 'supplier', e.target.value)}
-                    />
+                    <input style={INPUT} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} />
                   </Td>
                   <Td center>
-                    <button style={DANGER} onClick={() => delMat(m)}>🗑</button>
+                    <button style={DANGER} onClick={() => delMat(m)}>
+                      🗑
+                    </button>
                   </Td>
                 </tr>
               ))}
@@ -941,8 +1010,12 @@ const loadComments = async () => {
           </table>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button style={GHOST} onClick={addMat}>+ Добавить</button>
-          <button style={PRIMARY} onClick={saveMats}>Сохранить материалы</button>
+          <button style={GHOST} onClick={addMat}>
+            + Добавить
+          </button>
+          <button style={PRIMARY} onClick={saveMats}>
+            Сохранить материалы
+          </button>
         </div>
       </div>
 
@@ -990,7 +1063,9 @@ const loadComments = async () => {
                 onChange={(e) => setCommentText(e.target.value)}
                 placeholder="Написать комментарий…"
               />
-              <button style={PRIMARY} onClick={addComment}>Отправить</button>
+              <button style={PRIMARY} onClick={addComment}>
+                Отправить
+              </button>
             </div>
           </>
         )}
@@ -1002,18 +1077,10 @@ const loadComments = async () => {
           <div style={H2}>Фото / файлы</div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <label style={{ userSelect: 'none', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={allChecked}
-                onChange={(e) => toggleAllPhotos(e.target.checked)}
-              />{' '}
-              Выбрать всё
+              <input type="checkbox" checked={allChecked} onChange={(e) => toggleAllPhotos(e.target.checked)} /> Выбрать
+              всё
             </label>
-            <button
-              style={PRIMARY}
-              onClick={downloadSelected}
-              disabled={!Object.values(checked).some(Boolean)}
-            >
+            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>
               Скачать выбранные
             </button>
           </div>
@@ -1035,30 +1102,30 @@ const loadComments = async () => {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
           {photos.map((p) => (
             <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
-              <label style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6, userSelect:'none', cursor:'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={!!checked[p.name]}
-                  onChange={() => toggleOnePhoto(p.name)}
-                />
-                <span style={{ fontSize:12, wordBreak:'break-all' }}>{p.name}</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, userSelect: 'none', cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!checked[p.name]} onChange={() => toggleOnePhoto(p.name)} />
+                <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{p.name}</span>
               </label>
 
               {/\.(pdf)$/i.test(p.name) ? (
-                <div style={{ height: 120, display:'grid', placeItems:'center', background:'#f1f5f9', borderRadius:8, marginBottom:6 }}>
+                <div style={{ height: 120, display: 'grid', placeItems: 'center', background: '#f1f5f9', borderRadius: 8, marginBottom: 6 }}>
                   📄 PDF
                 </div>
               ) : (
                 <img
                   src={p.url}
                   alt={p.name}
-                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display:'block', marginBottom:6 }}
+                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }}
                 />
               )}
 
               <div style={{ display: 'flex', gap: 6 }}>
-                <button style={BTN} onClick={() => downloadOne(p.name)}>Скачать</button>
-                <button style={DANGER} onClick={() => delPhoto(p.name)}>Удалить</button>
+                <button style={BTN} onClick={() => downloadOne(p.name)}>
+                  Скачать
+                </button>
+                <button style={DANGER} onClick={() => delPhoto(p.name)}>
+                  Удалить
+                </button>
               </div>
             </div>
           ))}
@@ -1093,13 +1160,6 @@ function Th({ children, center }) {
 }
 function Td({ children, center }) {
   return (
-    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>
-      {children}
-    </td>
+    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
-
-
-
