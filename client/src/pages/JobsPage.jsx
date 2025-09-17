@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import CreateJob from '../components/CreateJob';
 import { supabase } from '../supabaseClient';
 
-// Порядок приоритета статусов (оставляю как у тебя)
+// Порядок приоритета статусов
 const STATUS_ORDER = [
   'ReCall',
   'диагностика',
@@ -15,7 +15,7 @@ const STATUS_ORDER = [
   'завершено',
 ];
 
-// Статусы, которые НЕ должны отображаться в списке (скрываем)
+// Статусы, которые скрываем
 const HIDDEN_STATUSES = new Set([
   'завершено',
   'заверщено',
@@ -43,7 +43,7 @@ export default function JobsPage() {
     ] = await Promise.all([
       supabase.from('jobs').select('*'),
       supabase.from('clients').select('*'),
-      // 🔧 ВАЖНО: роль в базе = 'technician' (а не 'tech'); берём только активных
+      // Берём только активных техников; поддержка legacy 'tech'
       supabase
         .from('technicians')
         .select('id,name,role,is_active')
@@ -127,7 +127,7 @@ export default function JobsPage() {
     try {
       const payload = {
         technician_id:
-          job.technician_id === '' || 'technician_id', e.target.value || null
+          job.technician_id === '' || job.technician_id == null ? null : job.technician_id,
         status: job.status ?? null,
         scf:
           job.scf === '' || job.scf == null
@@ -235,6 +235,7 @@ export default function JobsPage() {
                   }}
                   title="Открыть заявку"
                 >
+                  {/* Job # */}
                   <td>
                     <div
                       className="cell-wrap num-link"
@@ -247,6 +248,7 @@ export default function JobsPage() {
                     </div>
                   </td>
 
+                  {/* Клиент */}
                   <td>
                     <div className="cell-wrap">
                       {job.client_name}
@@ -254,14 +256,17 @@ export default function JobsPage() {
                     </div>
                   </td>
 
+                  {/* Система */}
                   <td className="col-system">
                     <div className="cell-wrap">{job.system_type || '—'}</div>
                   </td>
 
+                  {/* Проблема */}
                   <td>
                     <div className="cell-wrap">{job.issue || '—'}</div>
                   </td>
 
+                  {/* SCF (editable) */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <input
                       type="number"
@@ -271,6 +276,7 @@ export default function JobsPage() {
                     />
                   </td>
 
+                  {/* Техник (editable select) */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <select
                       value={job.technician_id || ''}
@@ -285,17 +291,19 @@ export default function JobsPage() {
                     </select>
                   </td>
 
+                  {/* Дата */}
                   <td className="col-date">
                     <div className="cell-wrap">{job.created_at_fmt}</div>
                   </td>
 
+                  {/* Статус (editable select) */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <select
                       value={job.status || ''}
                       onChange={(e) => handleChange(job.id, 'status', e.target.value)}
                     >
                       <option value="">—</option>
-                      {STATUS_OPTIONS.map((s) => (
+                      {Array.from(STATUS_ORDER.concat('завершено')).map((s) => (
                         <option key={s} value={s}>
                           {s}
                         </option>
@@ -303,6 +311,7 @@ export default function JobsPage() {
                     </select>
                   </td>
 
+                  {/* Действия */}
                   <td onClick={(e) => e.stopPropagation()}>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                       <button
@@ -343,4 +352,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
