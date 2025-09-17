@@ -1,5 +1,9 @@
+// src/pages/AdminTechniciansPage.jsx
 // Простая админ-страница сотрудников.
-// Создаёт техников (с/без учётки Auth), показывает список, удаляет (в т.ч. учётку Auth).
+// Создаёт техников (с/без учётки Auth), показывает список.
+// «Уволить» = удалить учётку Auth и оставить сотрудника неактивным в technicians.
+// «Удалить (полностью)» = удалить строку из technicians и (по возможности) учётку Auth.
+
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
 
@@ -9,7 +13,6 @@ function genTempPassword(len = 12) {
 }
 
 async function callEdge(path, body) {
-  // Надёжный вызов через fetch (на случай, если functions.invoke вернёт редкую ошибку)
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || "";
   const url = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${path}`;
@@ -70,7 +73,8 @@ export default function AdminTechniciansPage() {
 
   // filters
   const [q, setQ] = useState("");
-  const [roleFilter, setRoleFilter] = useState("all");
+  const [roleFilter, setRoleFilter] = useState("all"); // admin | manager | technician | all
+  const [statusFilter, setStatusFilter] = useState("active"); // active | inactive | all
 
   const isAdmin = useMemo(() => {
     if (!me) return false;
@@ -97,9 +101,10 @@ export default function AdminTechniciansPage() {
   }, []);
 
   async function fetchTechnicians() {
+    // Требуются поля: is_active, auth_user_id
     const { data, error } = await supabase
       .from("technicians")
-      .select("id, name, phone, role, auth_user_id, email")
+      .select("id, name, phone, role, auth_user_id, email, is_active")
       .order("name", { ascending: true });
 
     if (error) {
@@ -112,8 +117,23 @@ export default function AdminTechniciansPage() {
 
   function filteredRows() {
     return (list || [])
-      .filter(r => !q ? true : [r.name, r.email, r.phone].some(v => String(v || "").toLowerCase().includes(q.toLowerCase())))
-      .filter(r => (roleFilter === "all" ? true : r.role === roleFilter || (roleFilter === "technician" && r.role === "tech")));
+      .filter(r =>
+        !q
+          ? true
+          : [r.name, r.email, r.phone]
+              .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
+      )
+      .filter(r => {
+        if (roleFilter === "all") return true;
+        // поддержка старого значения 'tech'
+        const roleNorm = r.role === "tech" ? "technician" : r.role;
+        return roleNorm === roleFilter;
+      })
+      .filter(r => {
+        if (statusFilter === "all") return true;
+        const active = r.is_active !== false; // по умолчанию считаем true, если null
+        return statusFilter === "active" ? active : !active;
+      });
   }
 
   function resetForm() {
@@ -140,9 +160,11 @@ export default function AdminTechniciansPage() {
       password,
       name: name.trim(),
       phone: phone.trim() || null,
-      role: role === "tech" ? "technician" : role, // унифицируем
+      role: role === "tech" ? "technician" : role,
       createAuth,
       link_if_exists: true,
+      // гарантируем активность при создании
+      is_active: true,
     };
 
     setLoading(true);
@@ -172,7 +194,98 @@ export default function AdminTechniciansPage() {
     }
   }
 
-  async function deleteTech(row, alsoDeleteAuth = true) {
+  // === «Уволить» ===
+  // 1) Переводим в неактивные: technicians.is_active=false, technicians.auth_user_id=null
+  // 2) Пытаемся удалить учётку Auth по прежнему user_id через Edge
+  async function fireTech(row) {
+    if (!isAdmin) {
+      setBanner({ title: "Нет доступа", text: "Только администратор может изменять сотрудников." });
+      return;
+    }
+    if (!row?.id) return;
+
+    const ok = window.confirm(
+      `Уволить сотрудника "${row.name}"?\n` +
+      `Запись останется в списке (статус: не активная), учётка Auth будет удалена.`
+    );
+    if (!ok) return;
+
+    setLoading(true);
+    setBanner(null);
+
+    const prevAuthUserId = row.auth_user_id;
+
+    try {
+      // Шаг 1: деактивируем и отвязываем учётку в technicians
+      const { error: updErr } = await supabase
+        .from("technicians")
+        .update({ is_active: false, auth_user_id: null })
+        .eq("id", row.id);
+
+      if (updErr) {
+        setBanner({ title: "Ошибка увольнения", text: updErr.message });
+        return;
+      }
+
+      // Шаг 2: удаляем Auth (если был привязан)
+      if (prevAuthUserId) {
+        // ВАЖНО: при необходимости переименуй action под свою edge-функцию:
+        // например, "delete_auth_only" или "delete_auth". Ниже — вариант "delete_auth_by_user_id".
+        const { ok: delOk, status, data } = await callEdge("admin-ensure-user", {
+          action: "delete_auth_by_user_id",
+          user_id: prevAuthUserId,
+        });
+
+        if (!delOk || data?.error) {
+          setBanner({
+            title: "Частичный успех",
+            text: "Сотрудник переведён в неактивные, но удалить учётку Auth не удалось.",
+            details: { status, ...data },
+          });
+          await fetchTechnicians();
+          return;
+        }
+      }
+
+      setBanner({ title: "Готово", text: `Сотрудник "${row.name}" уволен (не активная).` });
+      await fetchTechnicians();
+    } catch (err) {
+      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Восстановить: просто is_active=true (учётку Auth при необходимости создадим заново через форму)
+  async function restoreTech(row) {
+    if (!isAdmin) {
+      setBanner({ title: "Нет доступа", text: "Только администратор может изменять сотрудников." });
+      return;
+    }
+    if (!row?.id) return;
+
+    setLoading(true);
+    setBanner(null);
+    try {
+      const { error } = await supabase
+        .from("technicians")
+        .update({ is_active: true })
+        .eq("id", row.id);
+      if (error) {
+        setBanner({ title: "Ошибка восстановления", text: error.message });
+        return;
+      }
+      setBanner({ title: "Готово", text: `Сотрудник "${row.name}" снова активен.` });
+      await fetchTechnicians();
+    } catch (err) {
+      setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Полное удаление строки из technicians (+ Auth, если выбрать «полностью»)
+  async function deleteTechCompletely(row) {
     if (!isAdmin) {
       setBanner({ title: "Нет доступа", text: "Только администратор может удалять сотрудников." });
       return;
@@ -180,8 +293,8 @@ export default function AdminTechniciansPage() {
     if (!row?.id) return;
 
     const ok = window.confirm(
-      `Удалить сотрудника "${row.name}"?\n` +
-      (alsoDeleteAuth ? "Также будет удалена учётка Auth (если привязана)." : "Учётка Auth не будет удалена.")
+      `Удалить сотрудника "${row.name}" полностью?\n` +
+      `Будет удалена строка из technicians и учётка Auth (если привязана).`
     );
     if (!ok) return;
 
@@ -189,18 +302,19 @@ export default function AdminTechniciansPage() {
     setBanner(null);
 
     try {
-      const { ok, status, data } = await callEdge("admin-ensure-user", {
+      // Сначала Edge (чтобы убрать Auth, если есть запись)
+      const { ok: edgeOk, status, data } = await callEdge("admin-ensure-user", {
         action: "delete",
-        technician_id: row.id,         // ключ, который функция теперь точно понимает
-        alsoDeleteAuth: !!alsoDeleteAuth,
+        technician_id: row.id,
+        alsoDeleteAuth: true,
       });
 
-      if (!ok || data?.error) {
+      if (!edgeOk || data?.error) {
         setBanner({ title: "Ошибка удаления", text: data?.error || "Edge-функция вернула ошибку.", details: { status, ...data } });
         return;
       }
 
-      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён.`, details: data });
+      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён полностью.`, details: data });
       await fetchTechnicians();
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
@@ -224,6 +338,9 @@ export default function AdminTechniciansPage() {
         .table th,.table td{border:1px solid #e0e5ea;padding:6px 8px;vertical-align:top}
         .table th{background:#f6f7f9;text-align:left}
         .row-inline{display:flex;gap:8px;align-items:center}
+        .pill{display:inline-block;border:1px solid #e0e5ea;border-radius:999px;padding:2px 8px}
+        .pill.green{background:#eefbea;border-color:#b7e2b1}
+        .pill.gray{background:#f2f3f5;border-color:#d8dde3;color:#555}
       `}</style>
 
       <h1 style={{ fontSize: 28, margin: "0 0 12px 0", fontWeight: 700 }}>Техники / Сотрудники</h1>
@@ -287,7 +404,7 @@ export default function AdminTechniciansPage() {
         </div>
 
         <div className="col-right" style={{ flex: 1, minWidth: 0 }}>
-          <div className="row-inline" style={{ marginBottom: 8 }}>
+          <div className="row-inline" style={{ marginBottom: 8, flexWrap: 'wrap' }}>
             <input className="input" placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
             <select className="select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
               <option value="all">Все роли</option>
@@ -295,6 +412,11 @@ export default function AdminTechniciansPage() {
               <option value="manager">Менеджер</option>
               <option value="technician">Техник</option>
             </select>
+            <div className="row-inline" style={{ gap: 6 }}>
+              <button type="button" className="btn" onClick={() => setStatusFilter("active")} style={{ fontWeight: statusFilter==="active" ? 700 : 400 }}>Активные</button>
+              <button type="button" className="btn" onClick={() => setStatusFilter("inactive")} style={{ fontWeight: statusFilter==="inactive" ? 700 : 400 }}>Не активные</button>
+              <button type="button" className="btn" onClick={() => setStatusFilter("all")} style={{ fontWeight: statusFilter==="all" ? 700 : 400 }}>Все</button>
+            </div>
             <button className="btn" onClick={fetchTechnicians}>Обновить список</button>
           </div>
 
@@ -305,24 +427,43 @@ export default function AdminTechniciansPage() {
                 <th>E-mail</th>
                 <th>Телефон</th>
                 <th>Роль</th>
-                <th>Действия</th>
+                <th>Статус</th>
+                <th style={{ width: 280 }}>Действия</th>
               </tr>
             </thead>
             <tbody>
-              {filteredRows().map((row) => (
-                <tr key={row.id}>
-                  <td>{row.name}</td>
-                  <td>{row.email || "—"}</td>
-                  <td>{row.phone || "—"}</td>
-                  <td>{row.role}</td>
-                  <td className="row-inline">
-                    <button className="btn" onClick={() => deleteTech(row, false)}>Удалить</button>
-                    <button className="btn" onClick={() => deleteTech(row, true)} title="Удалить запись и учётку Auth">Удалить (полностью)</button>
-                  </td>
-                </tr>
-              ))}
+              {filteredRows().map((row) => {
+                const isActive = row.is_active !== false; // null/undefined трактуем как активный
+                return (
+                  <tr key={row.id}>
+                    <td>{row.name}</td>
+                    <td>{row.email || "—"}</td>
+                    <td>{row.phone || "—"}</td>
+                    <td>{row.role === "tech" ? "technician" : row.role}</td>
+                    <td>
+                      {isActive
+                        ? <span className="pill green">активная</span>
+                        : <span className="pill gray">не активная</span>
+                      }
+                    </td>
+                    <td className="row-inline" style={{ flexWrap: 'wrap' }}>
+                      {isActive ? (
+                        <>
+                          <button className="btn" onClick={() => fireTech(row)} title="Удалит учётку Auth, оставит сотрудника неактивным">Уволить</button>
+                          <button className="btn" onClick={() => deleteTechCompletely(row)} title="Удалить запись и учётку Auth">Удалить (полностью)</button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="btn" onClick={() => restoreTech(row)} title="Сделать сотрудника активным">Восстановить</button>
+                          <button className="btn" onClick={() => deleteTechCompletely(row)} title="Удалить запись и (при наличии) учётку Auth">Удалить (полностью)</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {filteredRows().length === 0 && (
-                <tr><td colSpan={5}>Нет сотрудников</td></tr>
+                <tr><td colSpan={6}>Нет сотрудников</td></tr>
               )}
             </tbody>
           </table>
