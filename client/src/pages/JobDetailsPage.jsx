@@ -881,7 +881,7 @@ export default function JobDetailsPage() {
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '8px 10px',
-                      border: '1px solid '#eef2f7',
+                      border: '1px solid #eef2f7',
                       borderRadius: 8
                     }}
                   >
@@ -1140,4 +1140,5 @@ function Td({ children, center }) {
     </td>
   );
 }
+
 
