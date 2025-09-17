@@ -44,12 +44,16 @@ export default function JobsPage() {
       supabase.from('jobs').select('*'),
       supabase.from('clients').select('*'),
       // Берём только активных техников; поддержка legacy 'tech'
-      supabase
-        .from('technicians')
-        .select('id,name,role,is_active')
-        .in('role', ['technician', 'tech'])
-        .eq('is_active', true)
-        .order('name', { ascending: true }),
+     const { data: techData, error: techErr } = await supabase
+  .from('technicians')
+  .select('id,name,role,is_active')
+  .in('role', ['technician', 'tech'])   // ← поддержка обоих значений
+  .eq('is_active', true)                 // ← только активные
+  .order('name', { ascending: true });
+
+if (techErr) console.error(techErr);
+setTechnicians(techData || []);
+
     ]);
 
     if (jobErr) console.error(jobErr);
@@ -352,3 +356,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
