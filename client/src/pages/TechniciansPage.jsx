@@ -1,8 +1,8 @@
 // src/pages/AdminTechniciansPage.jsx
-// Админ-страница: создаёт сотрудников и показывает список.
-// "Уволить" = пометить is_active=false, удалить из чатов, опционально удалить учётку Auth.
-// "Удалить учётку" = удалить только учётку Auth (без изменения technicians).
-// "Удалить полностью" = опасное удаление строки из technicians (используй редко).
+// Создание сотрудников + список.
+// Уволить = is_active=false, убрать из чатов, при наличии удалить учётку Auth через edge.
+// Удалить учётку = только удалить пользователя в Auth.
+// Удалить полностью = стереть строку из technicians (опасно, используйте редко).
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase, supabaseUrl } from "../supabaseClient";
@@ -18,15 +18,12 @@ async function callEdge(path, body) {
   const url = `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/${path}`;
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  const text = await res.text();
-  let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
-  return { ok: res.ok, status: res.status, data: json };
+  let data;
+  try { data = await res.json(); } catch { data = { raw: await res.text() }; }
+  return { ok: res.ok, status: res.status, data };
 }
 
 function Banner({ title, text, details }) {
@@ -36,18 +33,18 @@ function Banner({ title, text, details }) {
     <div style={{ border: "1px solid #d0d7de", borderRadius: 4, padding: 8, background: "#fff", margin: "12px 0" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <b>{title}</b>
-        {details && (
+        {details ? (
           <button type="button" className="btn" onClick={() => setOpen(v => !v)}>
             {open ? "Скрыть детали" : "Показать детали"}
           </button>
-        )}
+        ) : null}
       </div>
-      {text && <div style={{ marginTop: 4 }}>{text}</div>}
-      {open && details && (
+      {text ? <div style={{ marginTop: 4 }}>{text}</div> : null}
+      {open && details ? (
         <pre style={{ background: "#fff", border: "1px solid #eee", padding: 8, borderRadius: 3, overflow: "auto", maxHeight: 280 }}>
           {JSON.stringify(details, null, 2)}
         </pre>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -64,7 +61,7 @@ export default function AdminTechniciansPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState("technician"); // admin | manager | technician
+  const [role, setRole] = useState("technician");
   const [createAuth, setCreateAuth] = useState(true);
   const [password, setPassword] = useState(genTempPassword());
 
@@ -73,7 +70,7 @@ export default function AdminTechniciansPage() {
 
   // filters
   const [q, setQ] = useState("");
-  const [roleFilter, setRoleFilter] = useState("all"); // admin | manager | technician | all
+  const [roleFilter, setRoleFilter] = useState("all");     // admin | manager | technician | all
   const [activeFilter, setActiveFilter] = useState("only"); // only | inactive | all
   const [fireNote, setFireNote] = useState("");
 
@@ -94,7 +91,7 @@ export default function AdminTechniciansPage() {
         const p = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle();
         setMeProfileRole(p.data?.role ?? null);
 
-        // если technicians.auth_user_id существует в схеме — оставь; иначе можно убрать этот запрос
+        // если есть technicians.auth_user_id
         const t = await supabase.from("technicians").select("role, is_admin").eq("auth_user_id", user.id).maybeSingle();
         setMeTechInfo(t.data || null);
       }
@@ -118,12 +115,11 @@ export default function AdminTechniciansPage() {
 
   function filteredRows() {
     return (list || [])
-      .filter(r =>
-        !q
-          ? true
-          : [r.name, r.email, r.phone]
-              .some(v => String(v || "").toLowerCase().includes(q.toLowerCase()))
-      )
+      .filter(r => {
+        if (!q) return true;
+        const s = q.toLowerCase();
+        return [r.name, r.email, r.phone].some(v => String(v || "").toLowerCase().includes(s));
+      })
       .filter(r => {
         if (roleFilter === "all") return true;
         const roleNorm = r.role === "tech" ? "technician" : r.role;
@@ -163,26 +159,24 @@ export default function AdminTechniciansPage() {
       phone: phone.trim() || null,
       role: role === "tech" ? "technician" : role,
       createAuth,
-      link_if_exists: true,
+      link_if_exists: true
     };
 
     setLoading(true);
     try {
-      const { ok, status, data } = await callEdge("admin-ensure-user", payload);
-
-      if (!ok || data?.error || data?.warning) {
+      const resp = await callEdge("admin-ensure-user", payload);
+      if (!resp.ok || resp.data?.error || resp.data?.warning) {
         setBanner({
           title: "Создание не выполнено",
-          text: data?.error || "Edge-функция вернула ошибку.",
-          details: { status, ...data },
+          text: resp.data?.error || "Edge-функция вернула ошибку.",
+          details: { status: resp.status, ...resp.data }
         });
         return;
       }
-
       setBanner({
         title: "Сотрудник создан",
         text: createAuth ? "Учётка Auth создана/привязана, запись в technicians добавлена." : "Добавлена запись в technicians.",
-        details: data,
+        details: resp.data
       });
       resetForm();
       await fetchTechnicians();
@@ -193,7 +187,7 @@ export default function AdminTechniciansPage() {
     }
   }
 
-  // ——— Уволить (soft): is_active=false, удалить из чатов; + удалить учётку Auth (через edge), если есть
+  // Уволить (soft) + удалить учётку Auth, если есть
   async function onFire(row) {
     if (!isAdmin) {
       setBanner({ title: "Нет доступа", text: "Только администратор может увольнять сотрудников." });
@@ -202,8 +196,7 @@ export default function AdminTechniciansPage() {
     if (!row?.id) return;
 
     const ok = window.confirm(
-      `Уволить "${row.name}"?\n` +
-      `Будет: is_active=false, удалим из всех чатов. Также удалим учётку Auth, если есть.`
+      `Уволить "${row.name}"?\nБудет: is_active=false, удаление из всех чатов. Также удалим учётку Auth, если есть.`
     );
     if (!ok) return;
 
@@ -211,34 +204,36 @@ export default function AdminTechniciansPage() {
     setBanner(null);
 
     try {
-      // 1) soft-delete техника (RPC из БД)
       const rpc = await supabase.rpc("deactivate_technician", {
         p_tech_id: row.id,
-        p_reason: fireNote || null,
+        p_reason: fireNote || null
       });
       if (rpc.error) {
         setBanner({ title: "Ошибка увольнения", text: rpc.error.message });
         return;
       }
 
-      // 2) удалить учётку в Auth (через edge, если есть auth_user_id)
       if (row.auth_user_id) {
-        const { ok: eok, status, data } = await callEdge("staff-terminate", {
+        const resp = await callEdge("staff-terminate", {
           tech_id: row.id,
           auth_user_id: row.auth_user_id,
-          reason: fireNote || null,
+          reason: fireNote || null
         });
-        if (!eok || data?.error) {
+        if (!resp.ok || resp.data?.error) {
           setBanner({
             title: "Частично выполнено",
-            text: "Техник уволен (неактивен), но учётку Auth удалить не удалось.",
-            details: { status, ...data },
+            text: "Техник помечен неактивным, но учётку Auth удалить не удалось.",
+            details: { status: resp.status, ...resp.data }
           });
         } else {
-          setBanner({ title: "Сотрудник уволен", text: `Помечен неактивным и удалён из Auth.`, details: data });
+          setBanner({
+            title: "Сотрудник уволен",
+            text: "Помечен неактивным и удалён из Auth.",
+            details: resp.data
+          });
         }
       } else {
-        setBanner({ title: "Сотрудник уволен", text: `Помечен неактивным.` });
+        setBanner({ title: "Сотрудник уволен", text: "Помечен неактивным." });
       }
 
       setFireNote("");
@@ -250,68 +245,100 @@ export default function AdminTechniciansPage() {
     }
   }
 
-  // ——— Удалить только учётку Auth (без изменения technicians)
+  // Удалить только учётку Auth
   async function onDeleteAuth(row) {
-    if (!isAdmin) { setBanner({ title: "Нет доступа", text: "Только администратор." }); return; }
-    if (!row?.auth_user_id) { setBanner({ title: "Нет учётки", text: "У этого сотрудника нет связанной Auth-учётки." }); return; }
+    if (!isAdmin) {
+      setBanner({ title: "Нет доступа", text: "Только администратор." });
+      return;
+    }
+    if (!row?.auth_user_id) {
+      setBanner({ title: "Нет учётки", text: "У этого сотрудника нет связанной Auth-учётки." });
+      return;
+    }
     if (!window.confirm(`Удалить учётку Auth у "${row.name}"?`)) return;
 
-    setLoading(true); setBanner(null);
+    setLoading(true);
+    setBanner(null);
+
     try {
-      const { ok, status, data } = await callEdge("staff-terminate", {
+      const resp = await callEdge("staff-terminate", {
         tech_id: row.id,
         auth_user_id: row.auth_user_id,
-        reason: "manual delete auth",
+        reason: "manual delete auth"
       });
-      if (!ok || data?.error) {
-        setBanner({ title: "Ошибка удаления Auth", text: data?.error || "Edge-функция вернула ошибку.", details: { status, ...data } });
+      if (!resp.ok || resp.data?.error) {
+        setBanner({
+          title: "Ошибка удаления Auth",
+          text: resp.data?.error || "Edge-функция вернула ошибку.",
+          details: { status: resp.status, ...resp.data }
+        });
         return;
       }
       setBanner({ title: "Auth-учётка удалена", text: `У "${row.name}" больше нет доступа.` });
       await fetchTechnicians();
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
 
-  // ——— ОПАСНО: Полностью удалить запись из technicians (нужно, только если действительно надо)
-  async function (row) {
-    if (!isAdmin) { setBanner({ title: "Нет доступа", text: "Только администратор." }); return; }
+  // Полное удаление: без учётки — RPC remove_technician; с учёткой — edge "delete"
+  async function onHardDelete(row) {
+    if (!isAdmin) {
+      setBanner({ title: "Нет доступа", text: "Только администратор." });
+      return;
+    }
     if (!row?.id) return;
+
     const ok = window.confirm(
-      `ОПАСНО: Полностью удалить "${row.name}" из technicians?\n` +
-      `Рекомендуется использовать «Уволить». Продолжить?`
+      `ОПАСНО: Полностью удалить "${row.name}" из technicians?\nРекомендуется использовать «Уволить». Продолжить?`
     );
     if (!ok) return;
 
-    setLoading(true); setBanner(null);
+    setLoading(true);
+    setBanner(null);
+
     try {
-      // Используем твою edge-функцию, если она поддерживает hard delete,
-      // либо замени на rpc('remove_technician', { p_tech_id, p_reassign_to })
-     let ok = true, status = 200, data = {};
-  if (row.auth_user_id) {
-    // через edge удаляем учётку + самого техника
-    const resp = await callEdge("admin-ensure-user", {
-      action: "delete",           // <-- этот action у тебя уже есть
-      technician_id: row.id,
-      alsoDeleteAuth: true,
-      hard: true                  // опционально: флаг, если твоя edge это понимает
-    });
-    ok = resp.ok; status = resp.status; data = resp.data;
-  } else {
-    // учётки нет — удаляем напрямую в БД
-    const resp = await supabase.rpc("remove_technician", { p_tech_id: row.id, p_reassign_to: null });
-    ok = !resp.error; status = resp.error ? 400 : 200; data = resp.error || { ok: true };
-  }
-      if (!edgeOk || data?.error) {
-        setBanner({ title: "Ошибка удаления", text: data?.error || "Edge-функция вернула ошибку.", details: { status, ...data } });
+      let success = true;
+      let status = 200;
+      let payload = {};
+
+      if (row.auth_user_id) {
+        const resp = await callEdge("admin-ensure-user", {
+          action: "delete",
+          technician_id: row.id,
+          alsoDeleteAuth: true
+        });
+        success = resp.ok && !resp.data?.error;
+        status = resp.status;
+        payload = resp.data;
+      } else {
+        const resp = await supabase.rpc("remove_technician", {
+          p_tech_id: row.id,
+          p_reassign_to: null
+        });
+        success = !resp.error;
+        status = resp.error ? 400 : 200;
+        payload = resp.error ? { error: resp.error.message } : { ok: true };
+      }
+
+      if (!success) {
+        setBanner({
+          title: "Ошибка удаления",
+          text: payload?.error || "Операция удаления не выполнена.",
+          details: { status, ...payload }
+        });
         return;
       }
-      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён полностью.`, details: data });
+
+      setBanner({ title: "Удалено", text: `Сотрудник "${row.name}" удалён полностью.`, details: payload });
       await fetchTechnicians();
     } catch (err) {
       setBanner({ title: "Необработанная ошибка", text: String(err?.message || err) });
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
 
   const disableSubmit = loading || !name.trim() || (createAuth && (!email.trim() || !password));
@@ -319,38 +346,31 @@ export default function AdminTechniciansPage() {
   return (
     <div className="page" style={{ maxWidth: 1100, margin: "0 auto", padding: 16, font: "14px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", color: "#111" }}>
       <style>{`
-        .input,.select,.btn{
-          height:28px;border:1px solid #cfd4d9;border-radius:3px;background:#fff;
-          padding:0 8px;font-size:14px;line-height:26px; box-sizing:border-box;
-        }
-        .btn{cursor:pointer}
-        .btn:hover{background:#f7f7f7}
+        .input,.select,.btn{height:28px;border:1px solid #cfd4d9;border-radius:3px;background:#fff;padding:0 8px;font-size:14px;line-height:26px;box-sizing:border-box}
+        .btn{cursor:pointer}.btn:hover{background:#f7f7f7}
         .btn-sm{height:22px;padding:0 6px;font-size:12px;line-height:20px}
+        .btn-icon{height:22px;width:22px;padding:0;line-height:20px;text-align:center}
+        .badge{display:inline-block;border:1px solid #e0e5ea;border-radius:999px;padding:0 8px;font-size:12px;background:#f7f8fa;color:#555}
         .table{width:100%;border-collapse:collapse;font-size:14px}
         .table th,.table td{border:1px solid #e0e5ea;padding:6px 8px;vertical-align:top}
         .table th{background:#f6f7f9;text-align:left}
         .row-inline{display:flex;gap:8px;align-items:center}
         .input-row{display:flex;align-items:center;gap:6px}
-        .btn-sm{height:22px;padding:0 6px;font-size:12px;line-height:20px}
-        .btn-icon{height:22px;width:22px;padding:0;line-height:20px;text-align:center}
-        .badge{display:inline-block;border:1px solid #e0e5ea;border-radius:999px;padding:0 8px;font-size:12px;background:#f7f8fa;color:#555}
       `}</style>
 
       <h1 style={{ fontSize: 28, margin: "0 0 12px 0", fontWeight: 700 }}>Техники / Сотрудники</h1>
 
-      {banner && <Banner title={banner.title} text={banner.text} details={banner.details} />}
+      {banner ? <Banner title={banner.title} text={banner.text} details={banner.details} /> : null}
 
       <div className="two-cols" style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-        {/* ===== Левая колонка — СОЗДАНИЕ СОТРУДНИКА ===== */}
+        {/* Левая колонка — создание */}
         <div className="col-left" style={{ flex: "0 0 420px", maxWidth: 420 }}>
           <form onSubmit={onCreate}>
             <table className="table" style={{ marginBottom: 12, tableLayout: "fixed" }}>
-              <thead>
-                <tr><th colSpan={2}>Создание сотрудника</th></tr>
-              </thead>
+              <thead><tr><th colSpan={2}>Создание сотрудника</th></tr></thead>
               <tbody>
                 <tr>
-                  <td style={{ width: 140 }}>E-mail {createAuth && "*"}</td>
+                  <td style={{ width: 140 }}>E-mail {createAuth ? "*" : ""}</td>
                   <td><input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} disabled={!createAuth} /></td>
                 </tr>
                 <tr>
@@ -375,29 +395,15 @@ export default function AdminTechniciansPage() {
                   <td>Создавать учётку Auth</td>
                   <td className="row-inline">
                     <input type="checkbox" checked={createAuth} onChange={e => setCreateAuth(e.target.checked)} />
-                    <span style={{ color: "#687076" }}>Отключи, если нужна только строка в technicians.</span>
+                    <span style={{ color: "#687076" }}>Отключите, если нужна только строка в technicians.</span>
                   </td>
                 </tr>
                 <tr>
-                  <td>Временный пароль {createAuth && "*"}</td>
+                  <td>Временный пароль {createAuth ? "*" : ""}</td>
                   <td>
                     <div className="input-row">
-                      <input
-                        className="input"
-                        type="text"
-                        value={password}
-                        onChange={e => setPassword(e.target.value)}
-                        disabled={!createAuth}
-                        style={{ flex: 1 }}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-icon"
-                        onClick={() => setPassword(genTempPassword())}
-                        title="Сгенерировать пароль"
-                      >
-                        🎲
-                      </button>
+                      <input className="input" type="text" value={password} onChange={e => setPassword(e.target.value)} disabled={!createAuth} style={{ flex: 1 }} />
+                      <button type="button" className="btn btn-icon" onClick={() => setPassword(genTempPassword())} title="Сгенерировать пароль">🎲</button>
                     </div>
                   </td>
                 </tr>
@@ -413,7 +419,7 @@ export default function AdminTechniciansPage() {
           </form>
         </div>
 
-        {/* ===== Правая колонка — СПИСОК ===== */}
+        {/* Правая колонка — список */}
         <div className="col-right" style={{ flex: 1, minWidth: 0 }}>
           <div className="row-inline" style={{ marginBottom: 8, flexWrap: "wrap" }}>
             <input className="input" placeholder="Поиск (имя, email, телефон)" value={q} onChange={e => setQ(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
@@ -446,25 +452,24 @@ export default function AdminTechniciansPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows().map((row) => (
+              {filteredRows().map(row => (
                 <tr key={row.id} style={{ opacity: row.is_active === false ? 0.6 : 1 }}>
                   <td>
-                    {row.name}{" "}
-                    {row.is_active === false && <span className="badge">неактивен</span>}
+                    {row.name} {row.is_active === false ? <span className="badge">неактивен</span> : null}
                   </td>
                   <td>{row.email || "—"}</td>
                   <td>{row.phone || "—"}</td>
                   <td>{row.role === "tech" ? "technician" : row.role}</td>
-                  <td className="row-inline" style={{ flexWrap: 'wrap' }}>
+                  <td className="row-inline" style={{ flexWrap: "wrap" }}>
                     <button className="btn" onClick={() => onFire(row)} title="Пометить неактивным и удалить учётку Auth">Уволить</button>
                     <button className="btn" onClick={() => onDeleteAuth(row)} title="Удалить только учётку Auth">Удалить учётку</button>
                     <button className="btn" onClick={() => onHardDelete(row)} title="ОПАСНО: Полностью удалить запись из technicians">Удалить полностью</button>
                   </td>
                 </tr>
               ))}
-              {filteredRows().length === 0 && (
+              {filteredRows().length === 0 ? (
                 <tr><td colSpan={5}>Нет сотрудников</td></tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>
@@ -472,4 +477,3 @@ export default function AdminTechniciansPage() {
     </div>
   );
 }
-
