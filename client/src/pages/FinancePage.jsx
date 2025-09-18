@@ -4,18 +4,20 @@ import { supabase } from '../supabaseClient';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 
+const PAYMENT_OPTIONS = ['Наличные', 'Zelle', 'Чек', 'Карта', 'Другое'];
+
 const FinancePage = () => {
   const [jobs, setJobs] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [materialsSum, setMaterialsSum] = useState({}); // job_id -> sum(price*quantity)
 
-  // Фильтры (требование: оставить только период и технику; добавлен статус выплат — не тип оплаты)
+  // Фильтры: период, техник, статус выплат
   const [filterTech, setFilterTech] = useState('all');
   const [filterPeriod, setFilterPeriod] = useState('month');
   const [filterPaid, setFilterPaid] = useState('all'); // all | unpaid | paid
 
-  // Выделение строк
-  const [selected, setSelected] = useState(new Set()); // set of job.id
+  // Выделение строк (массовая выплата/отмена)
+  const [selected, setSelected] = useState(new Set());
 
   // ----- стили -----
   const COL = {
@@ -23,28 +25,18 @@ const FinancePage = () => {
     JOB: 80,
     TECH: 220,
     SCF: 90,
-    SCF_PAY: 120,
+    SCF_PAY: 140,
     LABOR: 110,
     LABOR_PAY: 140,
     MATERIALS: 110,
     TOTAL: 130,
     SALARY: 180,
-    PAID: 120,
+    PAID: 140,
     ACTION: 170,
   };
   const TABLE_WIDTH =
-    COL.SEL +
-    COL.JOB +
-    COL.TECH +
-    COL.SCF +
-    COL.SCF_PAY +
-    COL.LABOR +
-    COL.LABOR_PAY +
-    COL.MATERIALS +
-    COL.TOTAL +
-    COL.SALARY +
-    COL.PAID +
-    COL.ACTION;
+    COL.SEL + COL.JOB + COL.TECH + COL.SCF + COL.SCF_PAY + COL.LABOR + COL.LABOR_PAY +
+    COL.MATERIALS + COL.TOTAL + COL.SALARY + COL.PAID + COL.ACTION;
 
   const tableStyle = { tableLayout: 'fixed', borderCollapse: 'collapse', width: `${TABLE_WIDTH}px` };
   const thStyle = (w, align = 'left') => ({
@@ -56,6 +48,7 @@ const FinancePage = () => {
     verticalAlign: 'top', whiteSpace: 'normal', wordBreak: 'break-word',
   });
   const selectStyle = { width: '100%', padding: '6px 8px' };
+  const inlineSelect = { width: '100%', padding: '4px 6px' };
   const btn = { padding: '8px 12px', cursor: 'pointer', borderRadius: 6, border: 'none' };
 
   const periodOptions = [
@@ -193,7 +186,7 @@ const FinancePage = () => {
     XLSX.writeFile(wb, 'finance_export.xlsx');
   };
 
-  // ===== Пометки выплат =====
+  // ===== Работа с выплатами =====
   const getCurrentUserName = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -231,7 +224,6 @@ const FinancePage = () => {
 
   const bulkPay = async (ids) => {
     const paid_by = await getCurrentUserName();
-    // Подсчитываем снапшот для каждой заявки
     const patches = {};
     filteredJobs.forEach((j) => {
       if (!ids.has(j.id)) return;
@@ -243,13 +235,11 @@ const FinancePage = () => {
         salary_paid_amount: salary,
       };
     });
-
-    // Применяем пачками
     for (const id of ids) {
       const patch = patches[id];
       if (!patch) continue;
       const { error } = await supabase.from('jobs').update(patch).eq('id', id);
-      if (error) console.error('Ошибка массовой выплаты для id=', id, error);
+      if (error) console.error('Ошибка массовой выплаты id=', id, error);
     }
     setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, ...patches[j.id] } : j)));
     setSelected(new Set());
@@ -264,15 +254,29 @@ const FinancePage = () => {
     };
     for (const id of ids) {
       const { error } = await supabase.from('jobs').update(patch).eq('id', id);
-      if (error) console.error('Ошибка отмены выплаты для id=', id, error);
+      if (error) console.error('Ошибка отмены выплаты id=', id, error);
     }
     setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, ...patch } : j)));
     setSelected(new Set());
   };
 
+  // ===== Редактирование методов оплаты =====
+  const updatePaymentMethod = async (jobId, field, value) => {
+    const patch = { [field]: value || null };
+    const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
+    if (error) {
+      console.error('Ошибка обновления метода оплаты:', error);
+      return;
+    }
+    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...patch } : j)));
+  };
+
   // ===== Выделение строк =====
   const allVisibleIds = useMemo(() => new Set(filteredJobs.map((j) => j.id)), [filteredJobs]);
-  const allVisibleSelected = useMemo(() => filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id)), [filteredJobs, selected]);
+  const allVisibleSelected = useMemo(
+    () => filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id)),
+    [filteredJobs, selected]
+  );
 
   const toggleSelectAllVisible = () => {
     if (allVisibleSelected) {
@@ -313,7 +317,7 @@ const FinancePage = () => {
     <div style={{ padding: 16 }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>💰 Финансовый отчёт</h1>
 
-      {/* Панель фильтров (период, техник, статус выплат) */}
+      {/* Панель фильтров */}
       <div
         style={{
           display: 'grid',
@@ -361,7 +365,7 @@ const FinancePage = () => {
             onClick={() => bulkUnpay(selected)}
             disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
             style={{ ...btn, background: '#ef4444', color: '#fff' }}
-            title="Отменить выплату для выбранных"
+            title="Отменить выплату выбранным"
           >
             Отменить выплату выбранным
           </button>
@@ -433,10 +437,39 @@ const FinancePage = () => {
                   </td>
                   <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
                   <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
+
                   <td style={tdStyle(COL.SCF, 'right')}>{formatMoney(scf)}</td>
-                  <td style={tdStyle(COL.SCF_PAY)}>{j.scf_payment_method || '—'}</td>
+
+                  {/* Редактируемый SCF метод оплаты */}
+                  <td style={tdStyle(COL.SCF_PAY)}>
+                    <select
+                      value={j.scf_payment_method || ''}
+                      onChange={(e) => updatePaymentMethod(j.id, 'scf_payment_method', e.target.value)}
+                      style={inlineSelect}
+                    >
+                      <option value="">—</option>
+                      {PAYMENT_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </td>
+
                   <td style={tdStyle(COL.LABOR, 'right')}>{formatMoney(labor)}</td>
-                  <td style={tdStyle(COL.LABOR_PAY)}>{j.labor_payment_method || '—'}</td>
+
+                  {/* Редактируемый метод оплаты работы */}
+                  <td style={tdStyle(COL.LABOR_PAY)}>
+                    <select
+                      value={j.labor_payment_method || ''}
+                      onChange={(e) => updatePaymentMethod(j.id, 'labor_payment_method', e.target.value)}
+                      style={inlineSelect}
+                    >
+                      <option value="">—</option>
+                      {PAYMENT_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </td>
+
                   <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
                   <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>{formatMoney(total)}</td>
                   <td style={tdStyle(COL.SALARY, 'right')}>
