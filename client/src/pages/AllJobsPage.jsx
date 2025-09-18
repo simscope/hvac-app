@@ -130,7 +130,7 @@ const JoAllJobsPage = () => {
       status: job.status ?? null,
       appointment_time: toISO(job.appointment_time),
       labor_price: job.labor_price !== '' && job.labor_price != null ? parseFloat(job.labor_price) : null,
-      payment_method: job.scf_payment_method ?? null,             // SCF
+      scf_payment_method: job.scf_payment_method ?? null,             // SCF
       labor_payment_method: job.labor_payment_method ?? null, // Работа
       system_type: job.system_type ?? null,
       issue: job.issue ?? null,
@@ -513,6 +513,7 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
+
 
 
 
