@@ -40,8 +40,8 @@ const STATUS_OPTIONS = [
   'завершено',
   'отменено',
 ];
-const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'invoice'];
-const SYSTEM_OPTIONS = ['HVAC', 'Appliance', 'Plumbing', 'Electrical'];
+const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'check'];
+const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -1163,3 +1163,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
