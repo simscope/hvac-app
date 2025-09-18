@@ -9,6 +9,7 @@ const FinancePage = () => {
   const [technicians, setTechnicians] = useState([]);
   const [materialsSum, setMaterialsSum] = useState({}); // job_id -> sum(price*quantity)
 
+  // Фильтры: ТОЛЬКО период и техник
   const [filterTech, setFilterTech] = useState('all'); // строка
   const [filterPeriod, setFilterPeriod] = useState('month');
 
@@ -17,10 +18,12 @@ const FinancePage = () => {
     JOB: 80,
     TECH: 220,
     SCF: 90,
+    SCF_PAY: 120,
     LABOR: 110,
+    LABOR_PAY: 140,
     MATERIALS: 110,
-    TOTAL: 120,
-    SALARY: 160,
+    TOTAL: 130,
+    SALARY: 180,
     PAID: 110,
     ACTION: 170,
   };
@@ -28,7 +31,9 @@ const FinancePage = () => {
     COL.JOB +
     COL.TECH +
     COL.SCF +
+    COL.SCF_PAY +
     COL.LABOR +
+    COL.LABOR_PAY +
     COL.MATERIALS +
     COL.TOTAL +
     COL.SALARY +
@@ -133,7 +138,7 @@ const FinancePage = () => {
     return true;
   };
 
-  // ===== Фильтрация =====
+  // ===== Фильтрация (только период и техник) =====
   const filteredJobs = useMemo(() => {
     return jobs.filter((job) => {
       const matchTech = filterTech === 'all' || String(job.technician_id) === String(filterTech);
@@ -152,7 +157,7 @@ const FinancePage = () => {
     return { scf, labor, materials, total, salary };
   };
 
-  // ===== Деньги по методам оплаты (SCF + Работа) =====
+  // ===== Отчёт по деньгам (SCF + Работа) =====
   const moneyReport = useMemo(() => {
     const buckets = {
       'Наличные': 0,
@@ -224,13 +229,12 @@ const FinancePage = () => {
       console.error('Не удалось пометить как выплаченное:', error);
       return;
     }
-    // Оптимистично обновляем состояние
     setJobs((prev) =>
       prev.map((j) => (j.id === jobId ? { ...j, salary_paid: true, salary_paid_at: new Date().toISOString() } : j))
     );
   };
 
-  // ===== Итог общих сумм (SCF + Работа) =====
+  // ===== Для справки (тот же общий итог) =====
   const overallTotal = useMemo(() => {
     return filteredJobs.reduce((acc, j) => {
       const { scf, labor } = calcRow(j);
@@ -305,7 +309,9 @@ const FinancePage = () => {
             <col style={{ width: COL.JOB }} />
             <col style={{ width: COL.TECH }} />
             <col style={{ width: COL.SCF }} />
+            <col style={{ width: COL.SCF_PAY }} />
             <col style={{ width: COL.LABOR }} />
+            <col style={{ width: COL.LABOR_PAY }} />
             <col style={{ width: COL.MATERIALS }} />
             <col style={{ width: COL.TOTAL }} />
             <col style={{ width: COL.SALARY }} />
@@ -313,70 +319,74 @@ const FinancePage = () => {
             <col style={{ width: COL.ACTION }} />
           </colgroup>
 
-          <thead>
-            <tr>
-              <th style={thStyle(COL.JOB)}>Job #</th>
-              <th style={thStyle(COL.TECH)}>Техник</th>
-              <th style={thStyle(COL.SCF, 'right')}>SCF</th>
-              <th style={thStyle(COL.LABOR, 'right')}>Работа</th>
-              <th style={thStyle(COL.MATERIALS, 'right')}>Детали</th>
-              <th style={thStyle(COL.TOTAL, 'right')}>Итого (SCF+Работа)</th>
-              <th style={thStyle(COL.SALARY, 'right')}>Зарплата (0.5*Раб + 50 - Детали)</th>
-              <th style={thStyle(COL.PAID, 'center')}>Выплачено</th>
-              <th style={thStyle(COL.ACTION, 'center')}>Действие</th>
-            </tr>
-          </thead>
+        <thead>
+          <tr>
+            <th style={thStyle(COL.JOB)}>Job #</th>
+            <th style={thStyle(COL.TECH)}>Техник</th>
+            <th style={thStyle(COL.SCF, 'right')}>SCF</th>
+            <th style={thStyle(COL.SCF_PAY)}>Оплата SCF</th>
+            <th style={thStyle(COL.LABOR, 'right')}>Работа</th>
+            <th style={thStyle(COL.LABOR_PAY)}>Оплата работы</th>
+            <th style={thStyle(COL.MATERIALS, 'right')}>Детали</th>
+            <th style={thStyle(COL.TOTAL, 'right')}>Итого (SCF+Работа)</th>
+            <th style={thStyle(COL.SALARY, 'right')}>Зарплата (0.5*Раб + 50 - Детали)</th>
+            <th style={thStyle(COL.PAID, 'center')}>Выплачено</th>
+            <th style={thStyle(COL.ACTION, 'center')}>Действие</th>
+          </tr>
+        </thead>
 
-          <tbody>
-            {filteredJobs.map((j) => {
-              const { scf, labor, materials, total, salary } = calcRow(j);
-              const paid = !!j.salary_paid;
-              return (
-                <tr
-                  key={j.id}
-                  style={{
-                    background: paid ? '#ecfdf5' : 'transparent', // зелёный оттенок для выплаченных
-                  }}
-                >
-                  <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
-                  <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
-                  <td style={tdStyle(COL.SCF, 'right')}>{formatMoney(scf)}</td>
-                  <td style={tdStyle(COL.LABOR, 'right')}>{formatMoney(labor)}</td>
-                  <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
-                  <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>
-                    {formatMoney(total)}
-                  </td>
-                  <td style={tdStyle(COL.SALARY, 'right')}>
-                    {formatMoney(salary)}
-                  </td>
-                  <td style={{ ...tdStyle(COL.PAID, 'center'), fontWeight: 600 }}>
-                    {paid ? 'Да' : 'Нет'}
-                  </td>
-                  <td style={{ ...tdStyle(COL.ACTION, 'center') }}>
-                    {!paid ? (
-                      <button
-                        onClick={() => markSalaryPaid(j.id)}
-                        style={{ ...btn, background: '#2563eb', color: '#fff' }}
-                        title="Пометить как выплаченное"
-                      >
-                        Выплатил зарплату
-                      </button>
-                    ) : (
-                      <span style={{ color: '#16a34a' }}>✔ Выплачено</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-
-            {filteredJobs.length === 0 && (
-              <tr>
-                <td style={tdStyle(TABLE_WIDTH)} colSpan={9}>
-                  Нет данных для выбранных фильтров
+        <tbody>
+          {filteredJobs.map((j) => {
+            const { scf, labor, materials, total, salary } = calcRow(j);
+            const paid = !!j.salary_paid;
+            return (
+              <tr
+                key={j.id}
+                style={{
+                  background: paid ? '#ecfdf5' : 'transparent',
+                }}
+              >
+                <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
+                <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
+                <td style={tdStyle(COL.SCF, 'right')}>{formatMoney(scf)}</td>
+                <td style={tdStyle(COL.SCF_PAY)}>{j.scf_payment_method || '—'}</td>
+                <td style={tdStyle(COL.LABOR, 'right')}>{formatMoney(labor)}</td>
+                <td style={tdStyle(COL.LABOR_PAY)}>{j.labor_payment_method || '—'}</td>
+                <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
+                <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>
+                  {formatMoney(total)}
+                </td>
+                <td style={tdStyle(COL.SALARY, 'right')}>
+                  {formatMoney(salary)}
+                </td>
+                <td style={{ ...tdStyle(COL.PAID, 'center'), fontWeight: 600 }}>
+                  {paid ? 'Да' : 'Нет'}
+                </td>
+                <td style={{ ...tdStyle(COL.ACTION, 'center') }}>
+                  {!paid ? (
+                    <button
+                      onClick={() => markSalaryPaid(j.id)}
+                      style={{ ...btn, background: '#2563eb', color: '#fff' }}
+                      title="Пометить как выплаченное"
+                    >
+                      Выплатил зарплату
+                    </button>
+                  ) : (
+                    <span style={{ color: '#16a34a' }}>✔ Выплачено</span>
+                  )}
                 </td>
               </tr>
-            )}
-          </tbody>
+            );
+          })}
+
+          {filteredJobs.length === 0 && (
+            <tr>
+              <td style={tdStyle(TABLE_WIDTH)} colSpan={11}>
+                Нет данных для выбранных фильтров
+              </td>
+            </tr>
+          )}
+        </tbody>
         </table>
       </div>
 
