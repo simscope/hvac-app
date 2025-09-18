@@ -4,8 +4,6 @@ import { supabase } from '../supabaseClient';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 
-const PAYMENT_OPTIONS = ['Наличные', 'Zelle', 'Чек', 'Карта', 'Другое'];
-
 const FinancePage = () => {
   const [jobs, setJobs] = useState([]);
   const [technicians, setTechnicians] = useState([]);
@@ -16,7 +14,7 @@ const FinancePage = () => {
   const [filterPeriod, setFilterPeriod] = useState('month');
   const [filterPaid, setFilterPaid] = useState('all'); // all | unpaid | paid
 
-  // Выделение строк (массовая выплата/отмена)
+  // Массовая отметка
   const [selected, setSelected] = useState(new Set());
 
   // ----- стили -----
@@ -48,7 +46,6 @@ const FinancePage = () => {
     verticalAlign: 'top', whiteSpace: 'normal', wordBreak: 'break-word',
   });
   const selectStyle = { width: '100%', padding: '6px 8px' };
-  const inlineSelect = { width: '100%', padding: '4px 6px' };
   const btn = { padding: '8px 12px', cursor: 'pointer', borderRadius: 6, border: 'none' };
 
   const periodOptions = [
@@ -63,9 +60,26 @@ const FinancePage = () => {
     { label: 'Только выплаченные', value: 'paid' },
   ];
 
-  // ===== Загрузка =====
-  useEffect(() => { fetchAll(); }, []);
+  // ===== helpers =====
+  const normalizePaymentLabel = (raw) => {
+    if (!raw) return '—';
+    const v = String(raw).trim().toLowerCase();
+    if (['cash', 'наличные'].includes(v)) return 'Наличные';
+    if (['zelle'].includes(v)) return 'Zelle';
+    if (['card', 'карта'].includes(v)) return 'Карта';
+    if (['check', 'чек'].includes(v)) return 'Чек';
+    // любые другие значения показываем как есть (с первой заглавной)
+    return String(raw);
+  };
 
+  const formatMoney = (n) => `$${(Number.isFinite(Number(n)) ? Number(n) : 0).toFixed(2)}`;
+  const getTechnicianName = (id) => {
+    const tech = technicians.find((t) => String(t.id) === String(id));
+    return tech ? tech.name : '—';
+  };
+
+  // ===== load =====
+  useEffect(() => { fetchAll(); }, []);
   const fetchAll = async () => {
     await Promise.all([fetchJobs(), fetchTechnicians(), fetchMaterialsSum()]);
     setSelected(new Set());
@@ -83,14 +97,9 @@ const FinancePage = () => {
     else setTechnicians(data || []);
   };
 
-  // Сумма деталей = sum(price * quantity) по job_id
   const fetchMaterialsSum = async () => {
     const { data, error } = await supabase.from('materials').select('job_id, price, quantity');
-    if (error) {
-      console.error('Ошибка загрузки материалов:', error);
-      setMaterialsSum({});
-      return;
-    }
+    if (error) { console.error('Ошибка загрузки материалов:', error); setMaterialsSum({}); return; }
     const acc = {};
     (data || []).forEach((m) => {
       const jid = m.job_id;
@@ -101,14 +110,7 @@ const FinancePage = () => {
     setMaterialsSum(acc);
   };
 
-  // ===== Утилиты =====
-  const getTechnicianName = (id) => {
-    const tech = technicians.find((t) => String(t.id) === String(id));
-    return tech ? tech.name : '—';
-  };
-
-  const formatMoney = (n) => `$${(Number.isFinite(Number(n)) ? Number(n) : 0).toFixed(2)}`;
-
+  // ===== filters =====
   const now = dayjs();
   const inPeriod = (createdAt) => {
     if (!createdAt) return filterPeriod === 'all';
@@ -121,7 +123,6 @@ const FinancePage = () => {
     return true;
   };
 
-  // ===== Фильтрация =====
   const filteredJobs = useMemo(() => {
     return jobs.filter((job) => {
       const byTech = filterTech === 'all' || String(job.technician_id) === String(filterTech);
@@ -134,32 +135,37 @@ const FinancePage = () => {
     });
   }, [jobs, filterTech, filterPeriod, filterPaid]);
 
-  // ===== Расчёты по строке =====
+  // ===== row math =====
   const calcRow = (j) => {
     const scf = Number(j.scf || 0);
     const labor = Number(j.labor_price || 0);
     const materials = Number(materialsSum[j.id] || 0);
     const total = scf + labor;
-    const salary = labor * 0.5 + 50 - materials; // формула из ТЗ
+    const salary = labor * 0.5 + 50 - materials; // ТЗ
     return { scf, labor, materials, total, salary };
   };
 
-  // ===== Отчёт по деньгам (SCF + Работа) =====
+  // ===== money report =====
   const moneyReport = useMemo(() => {
     const buckets = { 'Наличные': 0, 'Zelle': 0, 'Чек': 0, 'Карта': 0, 'Другое': 0 };
     filteredJobs.forEach((j) => {
-      const scf = Number(j.scf || 0);
-      const labor = Number(j.labor_price || 0);
-      const scfMethod = (j.scf_payment_method || '').trim();
-      const laborMethod = (j.labor_payment_method || '').trim();
-      if (scf) buckets.hasOwnProperty(scfMethod) ? (buckets[scfMethod] += scf) : (buckets['Другое'] += scf);
-      if (labor) buckets.hasOwnProperty(laborMethod) ? (buckets[laborMethod] += labor) : (buckets['Другое'] += labor);
+      const { scf, labor } = calcRow(j);
+      const scfLabel = normalizePaymentLabel(j.scf_payment_method);
+      const laborLabel = normalizePaymentLabel(j.labor_payment_method);
+      if (scf) {
+        if (buckets[scfLabel] !== undefined) buckets[scfLabel] += scf;
+        else buckets['Другое'] += scf;
+      }
+      if (labor) {
+        if (buckets[laborLabel] !== undefined) buckets[laborLabel] += labor;
+        else buckets['Другое'] += labor;
+      }
     });
     const total = Object.values(buckets).reduce((a, b) => a + b, 0);
     return { buckets, total };
   }, [filteredJobs]);
 
-  // ===== Экспорт =====
+  // ===== export =====
   const handleExport = () => {
     const rows = filteredJobs.map((j) => {
       const { scf, labor, materials, total, salary } = calcRow(j);
@@ -167,9 +173,9 @@ const FinancePage = () => {
         'Job #': j.job_number || j.id,
         'Техник': getTechnicianName(j.technician_id),
         'SCF': scf,
-        'Оплата SCF': j.scf_payment_method || '',
+        'Оплата SCF': normalizePaymentLabel(j.scf_payment_method),
         'Работа': labor,
-        'Оплата работы': j.labor_payment_method || '',
+        'Оплата работы': normalizePaymentLabel(j.labor_payment_method),
         'Детали (сумма)': materials,
         'Итого (SCF+Работа)': total,
         'Зарплата (0.5*Работа + 50 - Детали)': salary,
@@ -186,7 +192,7 @@ const FinancePage = () => {
     XLSX.writeFile(wb, 'finance_export.xlsx');
   };
 
-  // ===== Работа с выплатами =====
+  // ===== pay flow =====
   const getCurrentUserName = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -260,24 +266,12 @@ const FinancePage = () => {
     setSelected(new Set());
   };
 
-  // ===== Редактирование методов оплаты =====
-  const updatePaymentMethod = async (jobId, field, value) => {
-    const patch = { [field]: value || null };
-    const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
-    if (error) {
-      console.error('Ошибка обновления метода оплаты:', error);
-      return;
-    }
-    setJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, ...patch } : j)));
-  };
-
-  // ===== Выделение строк =====
+  // ===== selection =====
   const allVisibleIds = useMemo(() => new Set(filteredJobs.map((j) => j.id)), [filteredJobs]);
   const allVisibleSelected = useMemo(
     () => filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id)),
     [filteredJobs, selected]
   );
-
   const toggleSelectAllVisible = () => {
     if (allVisibleSelected) {
       const next = new Set(selected);
@@ -296,7 +290,7 @@ const FinancePage = () => {
     setSelected(next);
   };
 
-  // ===== Итоги (для справки) =====
+  // ===== totals =====
   const overallTotal = useMemo(() => {
     return filteredJobs.reduce((acc, j) => {
       const { scf, labor } = calcRow(j);
@@ -357,7 +351,6 @@ const FinancePage = () => {
             onClick={() => bulkPay(selected)}
             disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
             style={{ ...btn, background: '#2563eb', color: '#fff' }}
-            title="Пометить выбранные строки как выплаченные"
           >
             Выплатить выбранным
           </button>
@@ -365,7 +358,6 @@ const FinancePage = () => {
             onClick={() => bulkUnpay(selected)}
             disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
             style={{ ...btn, background: '#ef4444', color: '#fff' }}
-            title="Отменить выплату выбранным"
           >
             Отменить выплату выбранным
           </button>
@@ -428,47 +420,20 @@ const FinancePage = () => {
               return (
                 <tr key={j.id} style={{ background: paid ? '#ecfdf5' : 'transparent' }}>
                   <td style={{ ...tdStyle(COL.SEL, 'center') }}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(j.id)}
-                      onChange={() => toggleRow(j.id)}
-                      title="Выбрать строку"
-                    />
+                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleRow(j.id)} />
                   </td>
                   <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
                   <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
 
                   <td style={tdStyle(COL.SCF, 'right')}>{formatMoney(scf)}</td>
 
-                  {/* Редактируемый SCF метод оплаты */}
-                  <td style={tdStyle(COL.SCF_PAY)}>
-                    <select
-                      value={j.scf_payment_method || ''}
-                      onChange={(e) => updatePaymentMethod(j.id, 'scf_payment_method', e.target.value)}
-                      style={inlineSelect}
-                    >
-                      <option value="">—</option>
-                      {PAYMENT_OPTIONS.map((opt) => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
-                    </select>
-                  </td>
+                  {/* Показ из БД, без выбора */}
+                  <td style={tdStyle(COL.SCF_PAY)}>{normalizePaymentLabel(j.scf_payment_method)}</td>
 
                   <td style={tdStyle(COL.LABOR, 'right')}>{formatMoney(labor)}</td>
 
-                  {/* Редактируемый метод оплаты работы */}
-                  <td style={tdStyle(COL.LABOR_PAY)}>
-                    <select
-                      value={j.labor_payment_method || ''}
-                      onChange={(e) => updatePaymentMethod(j.id, 'labor_payment_method', e.target.value)}
-                      style={inlineSelect}
-                    >
-                      <option value="">—</option>
-                      {PAYMENT_OPTIONS.map((opt) => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
-                    </select>
-                  </td>
+                  {/* Показ из БД, без выбора */}
+                  <td style={tdStyle(COL.LABOR_PAY)}>{normalizePaymentLabel(j.labor_payment_method)}</td>
 
                   <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
                   <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>{formatMoney(total)}</td>
