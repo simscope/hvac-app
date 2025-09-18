@@ -72,9 +72,9 @@ const JoAllJobsPage = () => {
   };
 
   /* ====== ОПЛАТЫ ====== */
-  const needsScfPayment   = (j) => Number(j.scf || 0) > 0 && !j.payment_method;
+  const needsScfPayment   = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
   const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
-  const scfPaidOk         = (j) => Number(j.scf || 0) <= 0 || !!j.payment_method;
+  const scfPaidOk         = (j) => Number(j.scf || 0) <= 0 || !!j.scf_payment_method;
   const laborPaidOk       = (j) => Number(j.labor_price || 0) <= 0 || !!j.labor_payment_method;
 
   /* ====== ГАРАНТИЯ/АРХИВ считаем по СОХРАНЁННОМУ состоянию (origJobs) ====== */
@@ -90,7 +90,7 @@ const JoAllJobsPage = () => {
 
   const persistedFullyPaid = (j) => {
     const o = origById(j.id) || j;
-    const scfOK   = Number(o.scf || 0) <= 0 || !!o.payment_method;
+    const scfOK   = Number(o.scf || 0) <= 0 || !!o.scf_payment_method;
     const laborOK = Number(o.labor_price || 0) <= 0 || !!o.labor_payment_method;
     return scfOK && laborOK;
   };
@@ -130,7 +130,7 @@ const JoAllJobsPage = () => {
       status: job.status ?? null,
       appointment_time: toISO(job.appointment_time),
       labor_price: job.labor_price !== '' && job.labor_price != null ? parseFloat(job.labor_price) : null,
-      payment_method: job.payment_method ?? null,             // SCF
+      payment_method: job.scf_payment_method ?? null,             // SCF
       labor_payment_method: job.labor_payment_method ?? null, // Работа
       system_type: job.system_type ?? null,
       issue: job.issue ?? null,
@@ -175,7 +175,7 @@ const JoAllJobsPage = () => {
         Телефон: client?.phone || '',
         Адрес: formatAddress(client),
         SCF: job.scf,
-        'Оплата SCF': job.payment_method,
+        'Оплата SCF': job.scf_payment_method,
         Работа: job.labor_price,
         'Оплата работы': job.labor_payment_method,
         Статус: job.status,
@@ -223,10 +223,10 @@ const JoAllJobsPage = () => {
       })
       .filter((j) => {
         if (filterPaid === 'paid')
-          return (Number(j.scf || 0) <= 0 || !!j.payment_method) &&
+          return (Number(j.scf || 0) <= 0 || !!j.scf_payment_method) &&
                  (Number(j.labor_price || 0) <= 0 || !!j.labor_payment_method);
         if (filterPaid === 'unpaid')
-          return (Number(j.scf || 0) > 0 && !j.payment_method) ||
+          return (Number(j.scf || 0) > 0 && !j.scf_payment_method) ||
                  (Number(j.labor_price || 0) > 0 && !j.labor_payment_method);
         return true;
       })
@@ -414,14 +414,15 @@ const JoAllJobsPage = () => {
                       <td>
                         <select
                           className={scfError ? 'error' : ''}
-                          value={job.payment_method || ''} // SCF
-                          onChange={(e) => handleChange(job.id, 'payment_method', e.target.value || null)}
+                          value={job.scf_payment_method || ''} // SCF
+                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value || null)}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
-                          <option value="Наличные">Наличные</option>
+                          <option value="Cash">cash</option>
                           <option value="Zelle">Zelle</option>
-                          <option value="Карта">Карта</option>
+                          <option value="Card">card</option>
+                          <option value="check">chek</option>
                         </select>
                       </td>
 
@@ -442,9 +443,10 @@ const JoAllJobsPage = () => {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
-                          <option value="Наличные">Наличные</option>
+                          <option value="Cash">cash</option>
                           <option value="Zelle">Zelle</option>
-                          <option value="Карта">Карта</option>
+                          <option value="Card">card</option>
+                          <option value="check">chek</option>
                         </select>
                       </td>
 
