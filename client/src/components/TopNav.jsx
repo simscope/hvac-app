@@ -1,68 +1,43 @@
-// client/src/components/TopNav.jsx
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
+const NavItem = ({ to, label, active }) => (
+  <Link
+    to={to}
+    style={{
+      padding: '10px 14px',
+      borderRadius: 10,
+      textDecoration: 'none',
+      color: active ? '#111827' : '#374151',
+      background: active ? '#e5e7eb' : 'transparent',
+      fontWeight: 600,
+    }}
+  >
+    {label}
+  </Link>
+);
+
 function isActive(pathname, to) {
   return pathname === to || pathname.startsWith(to + '/');
-}
-
-function NavItem({ to, label, active, badge }) {
-  return (
-    <span style={{ position: 'relative' }}>
-      <Link
-        to={to}
-        style={{
-          padding: '10px 14px',
-          borderRadius: 10,
-          textDecoration: 'none',
-          color: active ? '#111827' : '#374151',
-          background: active ? '#e5e7eb' : 'transparent',
-          fontWeight: 600,
-          display: 'inline-block',
-        }}
-      >
-        {label}
-      </Link>
-      {!!badge && (
-        <span
-          style={{
-            position: 'absolute',
-            top: -6,
-            right: -12,
-            background: '#ef4444',
-            color: '#fff',
-            borderRadius: 9999,
-            padding: '2px 6px',
-            fontSize: 12,
-            fontWeight: 700,
-            minWidth: 18,
-            textAlign: 'center',
-            lineHeight: 1,
-          }}
-        >
-          {badge}
-        </span>
-      )}
-    </span>
-  );
 }
 
 export default function TopNav() {
   const { role, logout, profile } = useAuth();
   const { pathname } = useLocation();
 
-  // unread badge for Chat
-  const [unread, setUnread] = useState(
-    Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0)
-  );
+  // глобальный бейдж «Чат»
+  const [unread, setUnread] = useState(Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0));
   useEffect(() => {
-    const h = (e) => setUnread(Number(e.detail?.total || 0));
+    const h = (e) => {
+      const total = Number(e.detail?.total || 0);
+      setUnread(total);
+      localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
+    };
     window.addEventListener('chat-unread-changed', h);
     return () => window.removeEventListener('chat-unread-changed', h);
   }, []);
 
-  // техники вебом не пользуются
   if (role === 'tech') return null;
 
   const baseItems = [
@@ -70,6 +45,7 @@ export default function TopNav() {
     ['/calendar', '📅 Календарь'],
     ['/jobs/all', '📄 Все заявки'],
     ['/materials', '📦 Детали'],
+    ['/chat', '💬 Чат'],
   ];
   const adminOnly = [
     ['/chat-admin', '🛡️ Чат-админка'],
@@ -97,15 +73,29 @@ export default function TopNav() {
         <div style={{ fontWeight: 800 }}>Sim&nbsp;Scope</div>
         <div style={{ width: 1, height: 20, background: '#e5e7eb' }} />
         {items.map(([to, label]) => (
-          <NavItem key={to} to={to} label={label} active={isActive(pathname, to)} />
+          <span key={to} style={{ position: 'relative' }}>
+            <NavItem to={to} label={label} active={isActive(pathname, to)} />
+            {to === '/chat' && unread > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: -6,
+                  right: -12,
+                  background: '#ef4444',
+                  color: '#fff',
+                  borderRadius: 9999,
+                  padding: '2px 6px',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  minWidth: 18,
+                  textAlign: 'center',
+                }}
+              >
+                {unread}
+              </span>
+            )}
+          </span>
         ))}
-        {/* Чат с бейджем непрочитанного */}
-        <NavItem
-          to="/chat"
-          label="💬 Чат"
-          active={isActive(pathname, '/chat')}
-          badge={unread > 0 ? unread : undefined}
-        />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
