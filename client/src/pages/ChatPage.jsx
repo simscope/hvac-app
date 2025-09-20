@@ -8,14 +8,12 @@ import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
 
-/** ВАЖНО: колонка пользователя в message_receipts */
 const RECEIPTS_USER_COLUMN = 'user_id';
-
-/** Вспомогалка: вкладка активна/видима? */
-const isVisible = () => typeof document !== 'undefined' && document.visibilityState === 'visible';
+const isVisible = () =>
+  typeof document !== 'undefined' && document.visibilityState === 'visible';
 
 export default function ChatPage() {
-  // ===== AUTH =====
+  // === auth ===
   const [sessionUser, setSessionUser] = useState(null);
   useEffect(() => {
     let unsub;
@@ -32,39 +30,14 @@ export default function ChatPage() {
   const selfId = sessionUser?.id ?? null;
   const canSend = Boolean(selfId);
 
-  // ===== ЛЕВАЯ КОЛОНКА (чаты) =====
-  const [chats, setChats] = useState([]); // [{chat_id,title,is_group,last_at,unread_count}]
+  // === left: chats ===
+  const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
 
-  // ===== ПРАВАЯ КОЛОНКА (сообщения) =====
-  const [messages, setMessages] = useState([]);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-
-  // Квитанции по message_id: { delivered:Set<uid>, read:Set<uid> }
-  const [receipts, setReceipts] = useState({});
-
-  // typing/rtc
-  const receiptsSubRef = useRef(null);
-  const messagesSubRef = useRef(null);
-  const typingChannelRef = useRef(null);
-
-  // участники для имён/звонков
-  const [memberNames, setMemberNames] = useState({});
-  const [members, setMembers] = useState([]);
-  const [callState, setCallState] = useState(null);
-
-  // глобальный бейдж «Чат»
-  const unreadTotal = useMemo(() => chats.reduce((s, c) => s + (c.unread_count || 0), 0), [chats]);
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: unreadTotal } }));
-  }, [unreadTotal]);
-
-  // ====== УТИЛИТЫ ДЛЯ UNREAD ======
   const bumpUnread = useCallback((chatId, delta) => {
     setChats(prev => prev.map(c => c.chat_id === chatId
       ? { ...c, unread_count: Math.max(0, (c.unread_count || 0) + delta) }
-      : c
-    ));
+      : c));
   }, []);
   const zeroUnread = useCallback((chatId) => {
     setChats(prev => prev.map(c => c.chat_id === chatId ? { ...c, unread_count: 0 } : c));
@@ -73,7 +46,14 @@ export default function ChatPage() {
     setChats(prev => prev.map(c => c.chat_id === chatId ? { ...c, last_at: ts || c.last_at } : c));
   }, []);
 
-  // ====== ЗАГРУЗКА ЧАТОВ ======
+  const unreadTotal = useMemo(
+    () => chats.reduce((s, c) => s + (c.unread_count || 0), 0),
+    [chats]
+  );
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: unreadTotal } }));
+  }, [unreadTotal]);
+
   const loadChats = useCallback(async () => {
     const { data: mems, error: memErr } = await supabase
       .from('chat_members')
@@ -91,14 +71,13 @@ export default function ChatPage() {
 
     const { data: lastMsgs } = await supabase
       .from('chat_messages')
-      .select('id, chat_id, created_at')
+      .select('chat_id, created_at')
       .in('chat_id', chatIds)
       .order('created_at', { ascending: false });
 
     const lastByChat = {};
     (lastMsgs || []).forEach(m => { if (!lastByChat[m.chat_id]) lastByChat[m.chat_id] = m.created_at; });
 
-    // Начально ставим unread = 0, дальше управляем локально
     const mapped = (chatsData || [])
       .map(c => ({
         chat_id: c.id,
@@ -116,14 +95,11 @@ export default function ChatPage() {
   useEffect(() => {
     loadChats();
 
-    // Подписка: новые сообщения (для обновления левой колонки)
     const ch = supabase
       .channel('overview-messages')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
         const m = payload.new;
         touchLastAt(m.chat_id, m.created_at);
-
-        // Если это НЕ наш чат или вкладка не видима — увеличиваем unread для чужих сообщений
         if (m.author_id !== selfId) {
           const sameChatOpen = m.chat_id === activeChatId;
           if (!sameChatOpen || !isVisible()) bumpUnread(m.chat_id, 1);
@@ -134,7 +110,18 @@ export default function ChatPage() {
     return () => { try { supabase.removeChannel(ch); } catch {} };
   }, [loadChats, selfId, activeChatId, bumpUnread, touchLastAt]);
 
-  // ====== УЧАСТНИКИ АКТИВНОГО ЧАТА ======
+  // === right: messages & receipts ===
+  const [messages, setMessages] = useState([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [receipts, setReceipts] = useState({});
+  const [memberNames, setMemberNames] = useState({});
+  const [members, setMembers] = useState([]);
+  const [callState, setCallState] = useState(null);
+
+  const receiptsSubRef = useRef(null);
+  const messagesSubRef = useRef(null);
+  const typingChannelRef = useRef(null);
+
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -157,21 +144,27 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  // ====== ЗАГРУЗКА СООБЩЕНИЙ ЧАТА ======
   const fetchMessages = useCallback(async (chatId) => {
-    if (!chatId) return;
+    if (!chatId) return [];
     setLoadingMessages(true);
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .select('id, chat_id, author_id, body, attachment_url, created_at, file_url, file_name, file_type, file_size')
-      .eq('chat_id', chatId)
-      .order('created_at', { ascending: true });
-    setLoadingMessages(false);
-    if (error) console.error('chat_messages', error);
-    setMessages(data || []);
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('id, chat_id, author_id, body, attachment_url, created_at, file_url, file_name, file_type, file_size')
+        .eq('chat_id', chatId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      setMessages(data || []);
+      return data || [];
+    } catch (e) {
+      console.error('fetchMessages', e);
+      setMessages([]);
+      return [];
+    } finally {
+      setLoadingMessages(false);
+    }
   }, []);
 
-  // ====== КВИТАНЦИИ (начальная загрузка/обновление/поллинг) ======
   const loadReceipts = useCallback(async (chatId) => {
     if (!chatId) { setReceipts({}); return; }
     const { data } = await supabase
@@ -189,12 +182,10 @@ export default function ChatPage() {
     setReceipts(map);
   }, []);
 
-  // ====== ПОМЕТИТЬ ВЕСЬ ЧАТ КАК ПРОЧИТАННЫЙ ПРИ ОТКРЫТИИ ======
-  const markChatOpened = useCallback(async (chatId) => {
+  const markChatOpened = useCallback(async (chatId, msgs) => {
     if (!chatId || !selfId) return;
 
-    // Берём все входящие из уже загруженных messages
-    const idsToRead = (messages || [])
+    const idsToRead = (msgs || messages || [])
       .filter(m => m.author_id !== selfId)
       .map(m => m.id);
 
@@ -205,13 +196,10 @@ export default function ChatPage() {
         [RECEIPTS_USER_COLUMN]: selfId,
         status: 'read',
       }));
-
       await supabase
         .from('message_receipts')
         .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true })
         .catch(() => {});
-
-      // локально сразу «синие ✓✓»
       setReceipts(prev => {
         const next = { ...prev };
         for (const mid of idsToRead) {
@@ -224,32 +212,28 @@ export default function ChatPage() {
       });
     }
 
-    // last_read_at = now (или время последнего сообщения)
-    const latest = (messages || []).length ? messages[messages.length - 1].created_at : new Date().toISOString();
+    const latest = (msgs || messages || []).length
+      ? (msgs || messages)[(msgs || messages).length - 1].created_at
+      : new Date().toISOString();
+
     await supabase
       .from('chat_members')
       .update({ last_read_at: latest })
       .eq('chat_id', chatId)
       .eq('member_id', selfId)
       .catch(() => {});
-
-    // локально сбросим счетчик у этого чата
     zeroUnread(chatId);
   }, [messages, selfId, zeroUnread]);
 
-  // ====== ПОДПИСКИ НА АКТИВНЫЙ ЧАТ ======
   useEffect(() => {
     if (!activeChatId) return;
 
-    // загрузка истории + квитанций
     (async () => {
-      await fetchMessages(activeChatId);
+      const fresh = await fetchMessages(activeChatId); // <= возвращаем массив
       await loadReceipts(activeChatId);
-      // мгновенно считаем чат прочитанным при входе
-      await markChatOpened(activeChatId);
+      await markChatOpened(activeChatId, fresh);       // <= передаём свежие сообщения
     })();
 
-    // realtime по сообщениям этого чата
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
     const msgCh = supabase
       .channel(`chat-${activeChatId}`)
@@ -263,14 +247,12 @@ export default function ChatPage() {
 
           if (!selfId) return;
 
-          // для чужого сообщения — ставим delivered
           if (m.author_id !== selfId) {
             await supabase.from('message_receipts').upsert(
               [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' }],
               { onConflict: 'message_id,user_id,status', ignoreDuplicates: true }
             ).catch(() => {});
 
-            // если чат открыт и вкладка видима — сразу read
             if (isVisible()) {
               await supabase.from('message_receipts').upsert(
                 [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'read' }],
@@ -281,17 +263,14 @@ export default function ChatPage() {
                 .eq('chat_id', m.chat_id)
                 .eq('member_id', selfId)
                 .catch(() => {});
-
               setReceipts(prev => {
                 const cur = prev[m.id] || { delivered: new Set(), read: new Set() };
                 const delivered = new Set(cur.delivered); delivered.add(selfId);
                 const read = new Set(cur.read); read.add(selfId);
                 return { ...prev, [m.id]: { delivered, read } };
               });
-
               zeroUnread(m.chat_id);
             } else {
-              // вкладка не видима — считаем как непрочитанное
               bumpUnread(m.chat_id, 1);
             }
           }
@@ -300,7 +279,6 @@ export default function ChatPage() {
       .subscribe();
     messagesSubRef.current = msgCh;
 
-    // realtime по квитанциям
     if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
     const rCh = supabase
       .channel(`receipts-${activeChatId}`)
@@ -322,14 +300,11 @@ export default function ChatPage() {
       .subscribe();
     receiptsSubRef.current = rCh;
 
-    // typing канал (опционально)
     if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } }).subscribe();
     typingChannelRef.current = tCh;
 
-    // резервный поллинг квитанций (на всякий)
     const poll = setInterval(() => loadReceipts(activeChatId), 4000);
-
     return () => {
       clearInterval(poll);
       try { if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current); } catch {}
@@ -338,7 +313,6 @@ export default function ChatPage() {
     };
   }, [activeChatId, selfId, fetchMessages, loadReceipts, markChatOpened, bumpUnread, zeroUnread, touchLastAt]);
 
-  // ====== ПОМЕТИТЬ КОНКРЕТНЫЕ СООБЩЕНИЯ ПРОЧИТАННЫМИ (вызывается из MessageList) ======
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
 
@@ -353,7 +327,6 @@ export default function ChatPage() {
       .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true })
       .catch(() => {});
 
-    // last_read_at — временем последнего в пачке или now
     const lastMessage = messages.find(m => m.id === ids[ids.length - 1]);
     const ts = lastMessage?.created_at || new Date().toISOString();
     await supabase.from('chat_members')
@@ -362,7 +335,6 @@ export default function ChatPage() {
       .eq('member_id', selfId)
       .catch(() => {});
 
-    // локально сразу ✓✓ + сброс счётчика
     setReceipts(prev => {
       const next = { ...prev };
       for (const mid of ids) {
@@ -376,7 +348,6 @@ export default function ChatPage() {
     zeroUnread(activeChatId);
   }, [activeChatId, selfId, messages, zeroUnread]);
 
-  // ====== typing text (из CallHeader) — при желании можно расширить ======
   const [typing, setTyping] = useState({});
   const typingNames = useMemo(() => {
     const arr = Object.values(typing).map(t => t?.name).filter(Boolean);
@@ -385,8 +356,10 @@ export default function ChatPage() {
     return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
-  // ====== UI ======
-  const activeChat = useMemo(() => chats.find(c => c.chat_id === activeChatId) || null, [chats, activeChatId]);
+  const activeChat = useMemo(
+    () => chats.find(c => c.chat_id === activeChatId) || null,
+    [chats, activeChatId]
+  );
 
   const startCallTo = useCallback((targetId) => {
     if (!activeChatId || !selfId || !targetId || targetId === selfId) return;
@@ -395,7 +368,6 @@ export default function ChatPage() {
 
   return (
     <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
-      {/* Левая колонка — список чатов */}
       <div style={{borderRight:'1px solid #eee'}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
           <h3 style={{margin:0}}>Чаты</h3>
@@ -403,7 +375,6 @@ export default function ChatPage() {
         <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
       </div>
 
-      {/* Правая колонка — текущий диалог */}
       <div style={{display:'flex', flexDirection:'column'}}>
         <ChatHeader
           chat={activeChat}
@@ -460,8 +431,6 @@ export default function ChatPage() {
                 }
               }
 
-              // своё сообщение считаем прочитанным мгновенно (для счётчика это неважно,
-              // но держим одинаковую логику last_read_at)
               await supabase.from('chat_members')
                 .update({ last_read_at: msg.created_at })
                 .eq('chat_id', activeChatId)
