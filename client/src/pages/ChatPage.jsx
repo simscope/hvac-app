@@ -30,16 +30,86 @@ export default function ChatPage() {
   const [memberNames, setMemberNames] = useState({});
   const [members, setMembers] = useState([]);       // [{id,name}] для кнопок звонка
 
-  // кто мы: auth.uid или technicians.id из localStorage / window
+  // ===== уведомления =====
+  const canNotify = typeof window !== 'undefined' && 'Notification' in window;
+  const [notifPerm, setNotifPerm] = useState(canNotify ? Notification.permission : 'denied');
+  const [tabFocused, setTabFocused] = useState(typeof document !== 'undefined' ? document.hasFocus() : true);
+
+  useEffect(() => {
+    const onFocus = () => setTabFocused(true);
+    const onBlur = () => setTabFocused(false);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  const askNotif = useCallback(async () => {
+    if (!canNotify) return;
+    try {
+      const p = await Notification.requestPermission();
+      setNotifPerm(p);
+    } catch {}
+  }, [canNotify]);
+
+  // короткий «пик» (если уведомления запрещены)
+  const beep = useCallback((duration = 120, freq = 880, volume = 0.08) => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.value = volume;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => { osc.stop(); ctx.close(); }, duration);
+    } catch {}
+  }, []);
+
+  const showNotification = useCallback((title, body, onClick) => {
+    if (canNotify && notifPerm === 'granted') {
+      try {
+        const n = new Notification(title, { body });
+        n.onclick = () => {
+          try { window.focus(); } catch {}
+          onClick?.();
+          n.close();
+        };
+      } catch {
+        beep();
+      }
+    } else {
+      // нет разрешения — хотя бы звук
+      beep();
+    }
+  }, [canNotify, notifPerm, beep]);
+
+  // в тайтле вкладки показываем суммарное непрочитанное
+  const totalUnread = useMemo(
+    () => (chats || []).reduce((s, c) => s + (c.unread_count || 0), 0),
+    [chats]
+  );
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\)\s*/, '');
+    if (totalUnread > 0) document.title = `(${totalUnread}) ${base}`;
+    else document.title = base;
+  }, [totalUnread]);
+
+  // === кто мы: auth.uid или technicians.id из localStorage / window ===
   const appMemberId = (typeof window !== 'undefined')
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
 
   const authUid = user?.id || null;        // строгое auth.uid() — для квитанций/прав
-  const selfId  = authUid || appMemberId;  // автор сообщений / участник
+  const selfId  = authUid || appMemberId;  // автор сообщений/участник
   const canSend = Boolean(selfId);
 
-  // AUTH session
+  // --- AUTH session
   useEffect(() => {
     let unsub;
     (async () => {
@@ -53,7 +123,7 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // безопасная вставка квитанции через RPC (DO NOTHING при дубле)
+  // безопасная вставка квитанции через RPC (сервер проглатывает дубли)
   const addReceipt = useCallback(async ({ chatId, messageId, status }) => {
     if (!authUid) return; // без логина квитанции не пишем
     try {
@@ -62,15 +132,12 @@ export default function ChatPage() {
         p_message_id: messageId,
         p_status: status,
       });
-      // RPC всегда вернёт 200/204 и проглотит дубли — без 409 в сети
     } catch (e) {
-      // только реальную ошибку логируем (например, не участник чата)
-      // eslint-disable-next-line no-console
       console.warn('[add_message_receipt RPC]', e);
     }
   }, [authUid]);
 
-  // === загрузка списка чатов ===
+  // === Загрузка СПИСКА чатов ===
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -121,7 +188,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === имена участников активного чата ===
+  // === Имена участников активного чата ===
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -144,7 +211,7 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  // === сообщения активного чата ===
+  // === Сообщения активного чата ===
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -158,7 +225,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // подписки: chat_messages + message_receipts + typing + call
+  // Подписки: chat_messages + message_receipts + typing + call
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -182,8 +249,31 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
+          // delivered — только если есть auth.uid(); user_id поставит триггер
           if (authUid && m.author_id !== authUid) {
             await addReceipt({ chatId: m.chat_id, messageId: m.id, status: 'delivered' });
+          }
+
+          // уведомление + непрочитанное, если сообщение не от нас
+          if (m.author_id !== selfId) {
+            const isActiveChat = m.chat_id === activeChatId;
+            if (!tabFocused || !isActiveChat) {
+              // имя автора (если знаем)
+              const authorName =
+                memberNames[m.author_id] ||
+                Object.values(memberNames)[0] ||
+                'Новый mesaj';
+              const chatTitle = (chats.find(c => c.chat_id === m.chat_id)?.title) || 'Чат';
+              showNotification(`${authorName} • ${chatTitle}`, (m.body || 'Вложение'), () => {
+                setActiveChatId(m.chat_id);
+              });
+
+              // увеличиваем счётчик непрочитанного
+              setChats((prev) => prev.map(c => c.chat_id === m.chat_id
+                ? { ...c, unread_count: (isActiveChat && tabFocused) ? 0 : (c.unread_count || 0) + 1 }
+                : c
+              ));
+            }
           }
         }
       )
@@ -223,7 +313,7 @@ export default function ChatPage() {
       .on('broadcast', { event: 'call' }, (payload) => {
         const msg = payload.payload;
         if (!msg || (selfId && msg.from === selfId)) return;
-        if (msg.to && selfId && msg.to !== selfId) return;
+        if (msg.to && selfId && msg.to !== selfId) return; // адресовано не нам
         if (msg.type === 'offer') {
           setCallState({ chatId: activeChatId, role: 'callee', offer: msg.offer, from: msg.from });
         }
@@ -247,9 +337,17 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, authUid, selfId, fetchMessages, addReceipt]);
+  }, [activeChatId, authUid, selfId, fetchMessages, addReceipt, memberNames, showNotification, chats, tabFocused]);
 
-  // read — через RPC (без 409)
+  // Сброс непрочитанного при открытии чата/фокусе
+  useEffect(() => {
+    if (!activeChatId) return;
+    if (tabFocused) {
+      setChats((prev) => prev.map(c => c.chat_id === activeChatId ? { ...c, unread_count: 0 } : c));
+    }
+  }, [activeChatId, tabFocused]);
+
+  // Отметка read — через RPC
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !authUid || !activeChatId) return;
     for (const messageId of ids) {
@@ -285,10 +383,15 @@ export default function ChatPage() {
     <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
       {/* Левая колонка — список чатов */}
       <div style={{borderRight:'1px solid #eee'}}>
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
-          <h3 style={{margin:0}}>Чаты</h3>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px', gap:8}}>
+          <h3 style={{margin:0}}>Чаты {totalUnread > 0 && <span style={{fontSize:12, color:'#2563eb'}}>• {totalUnread}</span>}</h3>
+          {canNotify && notifPerm !== 'granted' && (
+            <button onClick={askNotif} style={{padding:'6px 10px', border:'1px solid #d1d5db', borderRadius:8, background:'#fff', cursor:'pointer'}}>
+              🔔 Уведомления
+            </button>
+          )}
         </div>
-        <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
+        <ChatList chats={chats} activeChatId={activeChatId} onSelect={(id) => { setActiveChatId(id); }} />
       </div>
 
       {/* Правая колонка — текущий диалог */}
