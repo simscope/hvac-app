@@ -34,14 +34,13 @@ export default function ChatPage() {
   const appMemberId = (typeof window !== 'undefined')
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
-  const selfId = user?.id || appMemberId;
 
-  // В ТВОЕЙ схеме колонка user_id (а не member_id)
-  const RECEIPTS_USER_COLUMN = 'user_id';
-
+  const authUid = user?.id || null;        // строгое auth.uid() — используем ДЛЯ КВИТАНЦИЙ
+  const selfId  = authUid || appMemberId;  // автор сообщений/идентификатор участника
+  const RECEIPTS_USER_COLUMN = 'user_id';  // в вашей схеме — user_id
   const canSend = Boolean(selfId);
 
-  // --- AUTH session (если войдёшь — включатся отправка/✓✓ и т.п.)
+  // --- AUTH session
   useEffect(() => {
     let unsub;
     (async () => {
@@ -143,7 +142,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // Подписки: chat_messages + message_receipts + typing + адресный call
+  // Подписки
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -167,11 +166,12 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          if (selfId && m.author_id !== selfId) {
+          // доставлено — ТОЛЬКО если знаем auth.uid()
+          if (authUid && m.author_id !== authUid) {
             try {
               const { error } = await supabase
                 .from('message_receipts')
-                .insert({ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' });
+                .insert({ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: authUid, status: 'delivered' });
               if (error) console.warn('[message_receipts.insert delivered]', error);
             } catch (e) {
               console.warn('[message_receipts.insert delivered] thrown', e);
@@ -239,16 +239,16 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, selfId, fetchMessages]);
+  }, [activeChatId, authUid, selfId, fetchMessages]);
 
-  // Отметка read
+  // Отметка read — тоже строго от имени auth.uid()
   const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !selfId || !activeChatId) return;
+    if (!ids?.length || !authUid || !activeChatId) return; // без auth нельзя писать квитанции
     for (const message_id of ids) {
       try {
         const { error } = await supabase
           .from('message_receipts')
-          .insert({ chat_id: activeChatId, message_id, [RECEIPTS_USER_COLUMN]: selfId, status: 'read' });
+          .insert({ chat_id: activeChatId, message_id, [RECEIPTS_USER_COLUMN]: authUid, status: 'read' });
         if (error) console.warn('[message_receipts.insert read]', error);
       } catch (e) {
         console.warn('[message_receipts.insert read] thrown', e);
@@ -264,7 +264,7 @@ export default function ChatPage() {
     } catch (e) {
       console.warn('[chat_members.update last_read_at] thrown', e);
     }
-  }, [activeChatId, selfId]);
+  }, [activeChatId, authUid, selfId]);
 
   // «кто печатает»
   const typingNames = useMemo(() => {
@@ -314,7 +314,7 @@ export default function ChatPage() {
           <MessageInput
             chatId={activeChatId}
             currentUser={{ id: selfId }}
-            disabledSend={!canSend}
+            disabledSend={!canSend}   // печатать можно, отправка — только если есть selfId
             onTyping={(name) => {
               if (!typingChannelRef.current || !activeChatId || !selfId) return;
               typingChannelRef.current.send({
@@ -326,6 +326,7 @@ export default function ChatPage() {
             onSend={async ({ text, files }) => {
               if (!activeChatId || !selfId) return;
               try {
+                // создаём сообщение
                 const { data: msg, error: msgErr } = await supabase
                   .from('chat_messages')
                   .insert({ chat_id: activeChatId, author_id: selfId, body: (text?.trim() || null) })
@@ -333,6 +334,7 @@ export default function ChatPage() {
                   .single();
                 if (msgErr) { console.error('[chat_messages.insert]', msgErr); return; }
 
+                // вложения (если есть)
                 if (files && files.length) {
                   let i = 0;
                   for (const f of files) {
