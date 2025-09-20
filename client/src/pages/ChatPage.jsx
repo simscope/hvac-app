@@ -30,16 +30,16 @@ export default function ChatPage() {
   const [memberNames, setMemberNames] = useState({});
   const [members, setMembers] = useState([]);       // [{id,name}] для кнопок звонка
 
-  // === кто мы: auth.uid или technicians.id из localStorage / window ===
+  // кто мы: auth.uid или technicians.id из localStorage / window
   const appMemberId = (typeof window !== 'undefined')
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
 
-  const authUid = user?.id || null;        // строгое auth.uid() — используем ДЛЯ КВИТАНЦИЙ
-  const selfId  = authUid || appMemberId;  // автор сообщений/идентификатор участника
+  const authUid = user?.id || null;        // строгое auth.uid() — для квитанций/прав
+  const selfId  = authUid || appMemberId;  // автор сообщений / участник
   const canSend = Boolean(selfId);
 
-  // --- AUTH session
+  // AUTH session
   useEffect(() => {
     let unsub;
     (async () => {
@@ -53,26 +53,24 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // helper: безопасная вставка квитанции с игнором дубликатов
-  const safeInsertReceipt = useCallback(async ({ chatId, messageId, status }) => {
+  // безопасная вставка квитанции через RPC (DO NOTHING при дубле)
+  const addReceipt = useCallback(async ({ chatId, messageId, status }) => {
+    if (!authUid) return; // без логина квитанции не пишем
     try {
-      const { error } = await supabase
-        .from('message_receipts')
-        .insert(
-          { chat_id: chatId, message_id: messageId, status },
-          { onConflict: 'message_id,user_id,status', ignoreDuplicates: true }
-        );
-      // если БД вернула ошибку, но это не уникальный конфликт — покажем в консоли
-      if (error && error.code !== '23505') {
-        console.warn('[message_receipts.insert]', status, error);
-      }
+      await supabase.rpc('add_message_receipt', {
+        p_chat_id: chatId,
+        p_message_id: messageId,
+        p_status: status,
+      });
+      // RPC всегда вернёт 200/204 и проглотит дубли — без 409 в сети
     } catch (e) {
-      // сетевые/иные — просто лог
-      console.warn('[message_receipts.insert thrown]', status, e);
+      // только реальную ошибку логируем (например, не участник чата)
+      // eslint-disable-next-line no-console
+      console.warn('[add_message_receipt RPC]', e);
     }
-  }, []);
+  }, [authUid]);
 
-  // === Загрузка СПИСКА чатов ===
+  // === загрузка списка чатов ===
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -123,7 +121,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === Имена участников активного чата ===
+  // === имена участников активного чата ===
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -146,7 +144,7 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  // === Сообщения активного чата ===
+  // === сообщения активного чата ===
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -160,7 +158,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // Подписки: chat_messages + message_receipts + typing + call
+  // подписки: chat_messages + message_receipts + typing + call
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -184,9 +182,8 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          // delivered — только если есть auth.uid(); user_id проставит триггер
           if (authUid && m.author_id !== authUid) {
-            await safeInsertReceipt({ chatId: m.chat_id, messageId: m.id, status: 'delivered' });
+            await addReceipt({ chatId: m.chat_id, messageId: m.id, status: 'delivered' });
           }
         }
       )
@@ -226,7 +223,7 @@ export default function ChatPage() {
       .on('broadcast', { event: 'call' }, (payload) => {
         const msg = payload.payload;
         if (!msg || (selfId && msg.from === selfId)) return;
-        if (msg.to && selfId && msg.to !== selfId) return; // адресовано не нам
+        if (msg.to && selfId && msg.to !== selfId) return;
         if (msg.type === 'offer') {
           setCallState({ chatId: activeChatId, role: 'callee', offer: msg.offer, from: msg.from });
         }
@@ -250,13 +247,13 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, authUid, selfId, fetchMessages, safeInsertReceipt]);
+  }, [activeChatId, authUid, selfId, fetchMessages, addReceipt]);
 
-  // Отметка read — только при наличии auth.uid(); user_id выставит триггер
+  // read — через RPC (без 409)
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !authUid || !activeChatId) return;
     for (const messageId of ids) {
-      await safeInsertReceipt({ chatId: activeChatId, messageId, status: 'read' });
+      await addReceipt({ chatId: activeChatId, messageId, status: 'read' });
     }
     try {
       const { error } = await supabase
@@ -268,7 +265,7 @@ export default function ChatPage() {
     } catch (e) {
       console.warn('[chat_members.update last_read_at] thrown', e);
     }
-  }, [activeChatId, authUid, selfId, safeInsertReceipt]);
+  }, [activeChatId, authUid, selfId, addReceipt]);
 
   // «кто печатает»
   const typingNames = useMemo(() => {
