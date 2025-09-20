@@ -1,7 +1,31 @@
 // client/src/components/TopNav.jsx
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+
+export default function TopNav() {
+  const [unread, setUnread] = useState(Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0));
+  useEffect(() => {
+    const h = (e) => setUnread(Number(e.detail?.total || 0));
+    window.addEventListener('chat-unread-changed', h);
+    return () => window.removeEventListener('chat-unread-changed', h);
+  }, []);
+  return (
+    <nav>
+      {/* ... другие пункты ... */}
+      <span style={{position:'relative', marginLeft:12}}>
+        <Link to="/chat">Чат</Link>
+        {unread > 0 && (
+          <span style={{
+            position:'absolute', top:-6, right:-12,
+            background:'#ef4444', color:'#fff', borderRadius:9999, padding:'2px 6px',
+            fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
+          }}>{unread}</span>
+        )}
+      </span>
+    </nav>
+  );
+}
 
 const NavItem = ({ to, label, active }) => (
   <Link
