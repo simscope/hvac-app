@@ -371,10 +371,9 @@ export default function JobDetailsPage() {
     }
 
     if (!authorName) {
-      if (profile?.full_name) authorName = profile.full_name;
-      else if (profile?.name && !isRoleLike(profile.name)) authorName = profile.name;
-      else authorName = user?.email || null;
-    }
+       if (profile?.full_name) authorName = profile.full_name;
+       else authorName = user?.email || null;
+     }
 
     setComments((prev) => [...prev, { ...data, author_name: authorName }]);
     setCommentText('');
@@ -1203,5 +1202,6 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
