@@ -35,14 +35,17 @@ export default function ChatPage() {
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
   const selfId = user?.id || appMemberId;
-  const RECEIPTS_USER_COLUMN = 'member_id'; // если в message_receipts колонка user_id — поменяй на 'user_id'
+
+  // В ТВОЕЙ схеме колонка user_id (а не member_id)
+  const RECEIPTS_USER_COLUMN = 'user_id';
+
   const canSend = Boolean(selfId);
 
   // --- AUTH session (если войдёшь — включатся отправка/✓✓ и т.п.)
   useEffect(() => {
     let unsub;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession(); // ← фикс
+      const { data: { session } } = await supabase.auth.getSession();
       setUser(session?.user ?? null);
       const { data } = supabase.auth.onAuthStateChange((_evt, sess) => {
         setUser(sess?.user ?? null);
@@ -52,7 +55,7 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // === Загрузка СПИСКА чатов (chat_members -> chats -> last chat_messages) ===
+  // === Загрузка СПИСКА чатов ===
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -103,7 +106,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === Имена участников активного чата (и массив для кнопок вызова) ===
+  // === Имена участников активного чата ===
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -238,7 +241,7 @@ export default function ChatPage() {
     };
   }, [activeChatId, selfId, fetchMessages]);
 
-  // Отметка read (только если знаем selfId)
+  // Отметка read
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
     for (const message_id of ids) {
@@ -311,7 +314,7 @@ export default function ChatPage() {
           <MessageInput
             chatId={activeChatId}
             currentUser={{ id: selfId }}
-            disabledSend={!canSend}   // печатать можно, отправка — только если есть selfId
+            disabledSend={!canSend}
             onTyping={(name) => {
               if (!typingChannelRef.current || !activeChatId || !selfId) return;
               typingChannelRef.current.send({
@@ -323,7 +326,6 @@ export default function ChatPage() {
             onSend={async ({ text, files }) => {
               if (!activeChatId || !selfId) return;
               try {
-                // создаём сообщение
                 const { data: msg, error: msgErr } = await supabase
                   .from('chat_messages')
                   .insert({ chat_id: activeChatId, author_id: selfId, body: (text?.trim() || null) })
@@ -331,7 +333,6 @@ export default function ChatPage() {
                   .single();
                 if (msgErr) { console.error('[chat_messages.insert]', msgErr); return; }
 
-                // вложения (если есть)
                 if (files && files.length) {
                   let i = 0;
                   for (const f of files) {
@@ -368,10 +369,10 @@ export default function ChatPage() {
 
       {callState && (
         <CallModal
-          state={callState}              // { role, to?, offer? }
+          state={callState}
           user={{ id: selfId }}
           onClose={() => setCallState(null)}
-          channelName={`typing:${activeChatId}`} // тот же канал broadcast, что и typing
+          channelName={`typing:${activeChatId}`}
         />
       )}
     </div>
