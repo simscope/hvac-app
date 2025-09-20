@@ -39,7 +39,7 @@ export default function ChatPage() {
   const selfId  = authUid || appMemberId;  // автор сообщений/идентификатор участника
   const canSend = Boolean(selfId);
 
-  // --- AUTH session (если войдёшь — включатся отправка/✓✓ и т.п.)
+  // --- AUTH session
   useEffect(() => {
     let unsub;
     (async () => {
@@ -53,7 +53,26 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // === Загрузка СПИСКА чатов (chat_members -> chats -> last chat_messages) ===
+  // helper: безопасная вставка квитанции с игнором дубликатов
+  const safeInsertReceipt = useCallback(async ({ chatId, messageId, status }) => {
+    try {
+      const { error } = await supabase
+        .from('message_receipts')
+        .insert(
+          { chat_id: chatId, message_id: messageId, status },
+          { onConflict: 'message_id,user_id,status', ignoreDuplicates: true }
+        );
+      // если БД вернула ошибку, но это не уникальный конфликт — покажем в консоли
+      if (error && error.code !== '23505') {
+        console.warn('[message_receipts.insert]', status, error);
+      }
+    } catch (e) {
+      // сетевые/иные — просто лог
+      console.warn('[message_receipts.insert thrown]', status, e);
+    }
+  }, []);
+
+  // === Загрузка СПИСКА чатов ===
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -104,7 +123,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === Имена участников активного чата (и массив для кнопок вызова) ===
+  // === Имена участников активного чата ===
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -141,7 +160,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // Подписки: chat_messages + message_receipts + typing + адресный call
+  // Подписки: chat_messages + message_receipts + typing + call
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -165,16 +184,9 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          // «доставлено»: шлём ТОЛЬКО если есть auth.uid(); user_id проставит триггер в БД
+          // delivered — только если есть auth.uid(); user_id проставит триггер
           if (authUid && m.author_id !== authUid) {
-            try {
-              const { error } = await supabase
-                .from('message_receipts')
-                .insert({ chat_id: m.chat_id, message_id: m.id, status: 'delivered' });
-              if (error) console.warn('[message_receipts.insert delivered]', error);
-            } catch (e) {
-              console.warn('[message_receipts.insert delivered] thrown', e);
-            }
+            await safeInsertReceipt({ chatId: m.chat_id, messageId: m.id, status: 'delivered' });
           }
         }
       )
@@ -238,20 +250,13 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, authUid, selfId, fetchMessages]);
+  }, [activeChatId, authUid, selfId, fetchMessages, safeInsertReceipt]);
 
-  // Отметка read — тоже строго при наличии auth.uid(); user_id выставит триггер
+  // Отметка read — только при наличии auth.uid(); user_id выставит триггер
   const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !authUid || !activeChatId) return; // без auth нельзя писать квитанции
-    for (const message_id of ids) {
-      try {
-        const { error } = await supabase
-          .from('message_receipts')
-          .insert({ chat_id: activeChatId, message_id, status: 'read' });
-        if (error) console.warn('[message_receipts.insert read]', error);
-      } catch (e) {
-        console.warn('[message_receipts.insert read] thrown', e);
-      }
+    if (!ids?.length || !authUid || !activeChatId) return;
+    for (const messageId of ids) {
+      await safeInsertReceipt({ chatId: activeChatId, messageId, status: 'read' });
     }
     try {
       const { error } = await supabase
@@ -263,7 +268,7 @@ export default function ChatPage() {
     } catch (e) {
       console.warn('[chat_members.update last_read_at] thrown', e);
     }
-  }, [activeChatId, authUid, selfId]);
+  }, [activeChatId, authUid, selfId, safeInsertReceipt]);
 
   // «кто печатает»
   const typingNames = useMemo(() => {
@@ -313,7 +318,7 @@ export default function ChatPage() {
           <MessageInput
             chatId={activeChatId}
             currentUser={{ id: selfId }}
-            disabledSend={!canSend}   // печатать можно, отправка — только если есть selfId
+            disabledSend={!canSend}
             onTyping={(name) => {
               if (!typingChannelRef.current || !activeChatId || !selfId) return;
               typingChannelRef.current.send({
@@ -325,7 +330,6 @@ export default function ChatPage() {
             onSend={async ({ text, files }) => {
               if (!activeChatId || !selfId) return;
               try {
-                // создаём сообщение
                 const { data: msg, error: msgErr } = await supabase
                   .from('chat_messages')
                   .insert({ chat_id: activeChatId, author_id: selfId, body: (text?.trim() || null) })
@@ -333,7 +337,6 @@ export default function ChatPage() {
                   .single();
                 if (msgErr) { console.error('[chat_messages.insert]', msgErr); return; }
 
-                // вложения (если есть)
                 if (files && files.length) {
                   let i = 0;
                   for (const f of files) {
@@ -370,10 +373,10 @@ export default function ChatPage() {
 
       {callState && (
         <CallModal
-          state={callState}              // { role, to?, offer? }
+          state={callState}
           user={{ id: selfId }}
           onClose={() => setCallState(null)}
-          channelName={`typing:${activeChatId}`} // тот же канал broadcast, что и typing
+          channelName={`typing:${activeChatId}`}
         />
       )}
     </div>
