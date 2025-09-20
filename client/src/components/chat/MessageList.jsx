@@ -1,57 +1,44 @@
-// client/src/components/chat/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import MessageInput from './MessageInput.jsx';
 
-/* ====== Галочки доставлено/прочитано ====== */
+// Галочки как в Телеграме: ✓ отправлено, ✓✓ (синие) прочитано кем-то
 function Ticks({ mine, stats, memberNames }) {
   if (!mine) return null;
-
-  const delivered = stats?.delivered && stats.delivered.size > 0;
   const read = stats?.read && stats.read.size > 0;
   const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
-  const title = readers.length
-    ? `Прочитали: ${readers.join(', ')}`
-    : delivered ? 'Доставлено' : 'Отправлено';
-
+  const title = read ? `Прочитали: ${readers.join(', ')}` : 'Отправлено';
   return (
     <span title={title} style={{ marginLeft: 6, fontSize: 12, userSelect: 'none' }}>
-      {!delivered && '✓'}
-      {delivered && !read && '✓✓'}
-      {delivered && read && <span style={{ color: '#1a73e8' }}>✓✓</span>}
+      {!read && '✓'}
+      {read && <span style={{ color: '#1a73e8' }}>✓✓</span>}
     </span>
   );
 }
 
-/* ====== Один вложенный файл (с подписью URL из Storage) ====== */
 function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-attachments' }) {
   const [url, setUrl] = useState(null);
   const isHttp = /^https?:\/\//i.test(pathOrUrl || '');
 
   useEffect(() => {
-    let alive = true;
+    let mounted = true;
     (async () => {
       if (!pathOrUrl) return;
       if (isHttp) { setUrl(pathOrUrl); return; }
-      try {
-        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
-        if (!error && alive) setUrl(data?.signedUrl || null);
-      } catch { /* noop */ }
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
+      if (!error && mounted) setUrl(data?.signedUrl || null);
     })();
-    return () => { alive = false; };
+    return () => { mounted = false; };
   }, [pathOrUrl, bucket, isHttp]);
 
   const isImage = (fileType || '').startsWith('image/');
-  if (!url) return <div style={{ color: '#94a3b8', fontSize: 12 }}>Загрузка файла…</div>;
-
   return (
     <div>
       {isImage ? (
-        <a href={url} target="_blank" rel="noreferrer">
-          <img src={url} alt={fileName || 'image'} style={{ maxWidth: '50%', borderRadius: 6 }} />
+        <a href={url || '#'} target="_blank" rel="noreferrer">
+          <img src={url || ''} alt={fileName || 'image'} style={{ maxWidth: '50%', borderRadius: 6 }} />
         </a>
       ) : (
-        <a href={url} target="_blank" rel="noreferrer">
+        <a href={url || '#'} target="_blank" rel="noreferrer">
           {fileName || 'file'} {fileSize ? `(${Math.round(fileSize / 1024)} KB)` : ''}
         </a>
       )}
@@ -69,60 +56,61 @@ export default function MessageList({
   currentUserId,
   receipts = {},
   onMarkVisibleRead,
-  memberNames = {},
+  memberNames = {}
 }) {
-  const listRef = useRef(null);
   const bottomRef = useRef(null);
   const observerRef = useRef(null);
   const pendingToReadRef = useRef(new Set());
 
-  // автоскролл вниз при появлении новых сообщений
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages?.length]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages?.length]);
 
-  // наблюдаем видимость чужих сообщений и помечаем read батчем
   useEffect(() => {
-    // выключаем предыдущий наблюдатель
+    if (!messages?.length || !onMarkVisibleRead) return;
+
     if (observerRef.current) {
       try { observerRef.current.disconnect(); } catch {}
       observerRef.current = null;
     }
-    pendingToReadRef.current.clear();
-
-    if (!messages?.length || !onMarkVisibleRead) return;
 
     const flush = () => {
       const ids = Array.from(pendingToReadRef.current);
       pendingToReadRef.current.clear();
       if (ids.length) onMarkVisibleRead(ids);
     };
-    let timer = null;
-    const schedule = () => { clearTimeout(timer); timer = setTimeout(flush, 250); };
+    let t = null;
+    const flushDebounced = () => {
+      clearTimeout(t);
+      t = setTimeout(flush, 250);
+    };
 
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         if (!e.isIntersecting) continue;
         const id = e.target.getAttribute('data-mid');
         const mine = e.target.getAttribute('data-mine') === '1';
-        if (id && !mine) { pendingToReadRef.current.add(id); schedule(); }
+        if (id && !mine) {
+          pendingToReadRef.current.add(id);
+          flushDebounced();
+        }
       }
-    }, { root: listRef.current, rootMargin: '0px 0px -20% 0px', threshold: 0.5 });
+    }, { root: null, rootMargin: '0px 0px -20% 0px', threshold: 0.5 });
 
-    // подключаем к элементам после рендера
-    queueMicrotask(() => {
-      listRef.current?.querySelectorAll('[data-mid]').forEach(el => io.observe(el));
-    });
+    setTimeout(() => {
+      document.querySelectorAll('[data-mid]').forEach((el) => io.observe(el));
+    }, 0);
 
     observerRef.current = io;
-    return () => { clearTimeout(timer); try { io.disconnect(); } catch {}; };
+    return () => {
+      try { io.disconnect(); } catch {}
+      clearTimeout(t);
+    };
   }, [messages, onMarkVisibleRead, currentUserId]);
 
   if (loading) return <div>Загрузка…</div>;
   if (!messages?.length) return <div>Сообщений пока нет</div>;
 
   return (
-    <div ref={listRef}>
+    <div>
       {messages.map((m) => {
         const mine = (m.author_id || m.sender_id) === currentUserId;
         const stats = receipts[m.id];
@@ -134,15 +122,13 @@ export default function MessageList({
             data-mine={mine ? '1' : '0'}
             style={{ margin: '8px 0', display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}
           >
-            <div
-              style={{
-                maxWidth: '72%',
-                background: mine ? '#e8f0fe' : '#f5f5f5',
-                borderRadius: 10,
-                padding: '8px 10px',
-                wordBreak: 'break-word',
-              }}
-            >
+            <div style={{
+              maxWidth: '72%',
+              background: mine ? '#e8f0fe' : '#f5f5f5',
+              borderRadius: 10,
+              padding: '8px 10px',
+              wordBreak: 'break-word'
+            }}>
               {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
 
               {(m.file_url || m.attachment_url) && (
@@ -175,5 +161,3 @@ export default function MessageList({
     </div>
   );
 }
-
-
