@@ -42,7 +42,7 @@ export default function ChatPage() {
   useEffect(() => {
     let unsub;
     (async () => {
-      const { data: { session) } = await supabase.auth.getSession();
+      const { data: { session } } = await supabase.auth.getSession(); // ← фикс
       setUser(session?.user ?? null);
       const { data } = supabase.auth.onAuthStateChange((_evt, sess) => {
         setUser(sess?.user ?? null);
