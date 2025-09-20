@@ -2,19 +2,28 @@ import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const NavItem = ({ to, label, active }) => (
+const NavItem = ({ to, label, active, badge }) => (
   <Link
     to={to}
     style={{
+      position:'relative',
       padding: '10px 14px',
       borderRadius: 10,
       textDecoration: 'none',
       color: active ? '#111827' : '#374151',
       background: active ? '#e5e7eb' : 'transparent',
       fontWeight: 600,
+      display:'inline-block'
     }}
   >
     {label}
+    {badge > 0 && (
+      <span style={{
+        position:'absolute', top:-6, right:-6,
+        background:'#ef4444', color:'#fff', borderRadius:9999, padding:'2px 6px',
+        fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
+      }}>{badge}</span>
+    )}
   </Link>
 );
 
@@ -26,14 +35,9 @@ export default function TopNav() {
   const { role, logout, profile } = useAuth();
   const { pathname } = useLocation();
 
-  // глобальный бейдж «Чат»
-  const [unread, setUnread] = useState(Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0));
+  const [chatUnread, setChatUnread] = useState(Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0));
   useEffect(() => {
-    const h = (e) => {
-      const total = Number(e.detail?.total || 0);
-      setUnread(total);
-      localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-    };
+    const h = (e) => setChatUnread(Number(e.detail?.total || 0));
     window.addEventListener('chat-unread-changed', h);
     return () => window.removeEventListener('chat-unread-changed', h);
   }, []);
@@ -45,14 +49,15 @@ export default function TopNav() {
     ['/calendar', '📅 Календарь'],
     ['/jobs/all', '📄 Все заявки'],
     ['/materials', '📦 Детали'],
-    ['/chat', '💬 Чат'],
   ];
+
   const adminOnly = [
     ['/chat-admin', '🛡️ Чат-админка'],
     ['/technicians', '👥 Сотрудники'],
     ['/finance', '💵 Финансы'],
   ];
-  const items = role === 'admin' ? [...baseItems, ...adminOnly] : baseItems;
+
+  const items = (role === 'admin' ? [...baseItems, ['/chat','💬 Чат']] : [...baseItems, ['/chat','💬 Чат']]);
 
   return (
     <div
@@ -73,28 +78,22 @@ export default function TopNav() {
         <div style={{ fontWeight: 800 }}>Sim&nbsp;Scope</div>
         <div style={{ width: 1, height: 20, background: '#e5e7eb' }} />
         {items.map(([to, label]) => (
-          <span key={to} style={{ position: 'relative' }}>
-            <NavItem to={to} label={label} active={isActive(pathname, to)} />
-            {to === '/chat' && unread > 0 && (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: -6,
-                  right: -12,
-                  background: '#ef4444',
-                  color: '#fff',
-                  borderRadius: 9999,
-                  padding: '2px 6px',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  minWidth: 18,
-                  textAlign: 'center',
-                }}
-              >
-                {unread}
-              </span>
-            )}
-          </span>
+          <NavItem
+            key={to}
+            to={to}
+            label={label}
+            active={isActive(pathname, to)}
+            badge={to === '/chat' ? chatUnread : 0}
+          />
+        ))}
+        {role === 'admin' && adminOnly.map(([to, label]) => (
+          <NavItem
+            key={to}
+            to={to}
+            label={label}
+            active={isActive(pathname, to)}
+            badge={0}
+          />
         ))}
       </div>
 
