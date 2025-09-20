@@ -5,8 +5,8 @@ import { supabase } from '../supabaseClient';
 import ChatList from '../components/chat/ChatList.jsx';
 import MessageList from '../components/chat/MessageList.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
-import ChatInput from '../components/chat/MessageInput.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
+import MessageInput from '../components/chat/MessageInput';
 
 export default function ChatPage() {
   const [user, setUser] = useState(null);
@@ -336,4 +336,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
 
