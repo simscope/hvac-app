@@ -8,12 +8,18 @@ import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
 
-/**
- * ВАЖНО:
- * В таблице public.message_receipts колонка пользователя должна называться member_id.
- * Если у тебя в БД колонка называется user_id — замени строку ниже на 'user_id'.
+/** ====== НАСТРОЙКИ ДЛЯ КВИТАНЦИЙ ======
+ * Поставь имя колонки пользователя в message_receipts:
+ *  - если у тебя колонка member_id (рекомендовано) — оставь как есть;
+ *  - если user_id — замени на 'user_id'.
  */
 const RECEIPTS_USER_COLUMN = 'member_id';
+
+/** Если уникальный индекс в message_receipts:
+ *  - (message_id, member_id, status)  => оставь как есть;
+ *  - (message_id, member_id)          => замени на 'message_id,member_id'
+ */
+const RECEIPTS_ON_CONFLICT = 'message_id,member_id,status';
 
 export default function ChatPage() {
   const [authUser, setAuthUser] = useState(null);
@@ -24,30 +30,28 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // receipts: { [messageId]: { delivered:Set<memberId>, read:Set<memberId> } }
+  // receipts: { [messageId]: { delivered:Set<id>, read:Set<id> } }
   const [receipts, setReceipts] = useState({});
 
-  // typing users: { [id]: { name, untilTs } }
+  // typing
   const [typing, setTyping] = useState({});
   const typingChannelRef = useRef(null);
   const receiptsSubRef = useRef(null);
   const messagesSubRef = useRef(null);
 
-  const [callState, setCallState] = useState(null); // {chatId, role:'caller'|'callee', to?, offer?, from?}
+  // звонок
+  const [callState, setCallState] = useState(null);
   const [memberNames, setMemberNames] = useState({});
-  const [members, setMembers] = useState([]);       // [{id,name}] для кнопок звонка
+  const [members, setMembers] = useState([]);
 
-  // === Кто мы? Для квитанций НУЖЕН именно technicians.id (member_id), а не auth.uid
+  // кто мы (для отправки/квитанций нужен technicians.id, если используешь его)
   const appMemberId = (typeof window !== 'undefined')
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
-
-  // отдаём приоритет member_id из локалки; если его нет — используем auth.uid (хватает для чтения)
   const selfId = appMemberId || authUser?.id || null;
-
   const canSend = Boolean(selfId);
 
-  // --- AUTH session
+  // --- auth
   useEffect(() => {
     let unsub;
     (async () => {
@@ -61,7 +65,7 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // === Загрузка СПИСКА чатов (chat_members -> chats -> last chat_messages)
+  // === список чатов
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -112,7 +116,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === Имена участников активного чата (и массив для кнопок вызова)
+  // === имена участников активного чата
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -135,9 +139,7 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  // ====================== КВИТАНЦИИ (галочки) =======================
-
-  // применить одну квитанцию к локальному state
+  // применить одну квитанцию в локальный state
   const applyReceipt = useCallback((row) => {
     if (!row) return;
     const uid = row[RECEIPTS_USER_COLUMN];
@@ -156,7 +158,15 @@ export default function ChatPage() {
     });
   }, []);
 
-  // загрузка сообщений активного чата + начальные квитанции
+  // helper: idempotent upsert (массивом или одной строкой)
+  const upsertReceipts = useCallback(async (rows) => {
+    if (!rows || (Array.isArray(rows) && rows.length === 0)) return;
+    await supabase
+      .from('message_receipts')
+      .upsert(rows, { onConflict: RECEIPTS_ON_CONFLICT });
+  }, []);
+
+  // загрузка сообщений активного чата + начальные квитанции + backfill delivered
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -170,7 +180,7 @@ export default function ChatPage() {
 
     setMessages(data || []);
 
-    // подтянуть начальные квитанции для всех сообщений этого чата
+    // подтянуть начальные квитанции из БД
     const ids = (data || []).map(m => m.id);
     if (ids.length) {
       const { data: recs } = await supabase
@@ -191,9 +201,29 @@ export default function ChatPage() {
     } else {
       setReceipts({});
     }
-  }, []);
 
-  // Подписки: chat_messages + message_receipts + typing + адресный call
+    // NEW: backfill «delivered» для всех ВХОДЯЩИХ сообщений (автор не мы),
+    // чтобы у отправителя сразу загорелись двойные галочки, как только мы открыли чат.
+    if (selfId && (data || []).length) {
+      const needDelivered = (data || [])
+        .filter(m => m.author_id !== selfId)           // входящие
+        .map(m => m.id);
+
+      if (needDelivered.length) {
+        const rows = needDelivered.map(message_id => ({
+          chat_id: chatId,
+          message_id,
+          status: 'delivered',
+          [RECEIPTS_USER_COLUMN]: selfId,
+        }));
+        await upsertReceipts(rows);
+        // применим локально, не дожидаясь realtime
+        rows.forEach(applyReceipt);
+      }
+    }
+  }, [selfId, upsertReceipts, applyReceipt]);
+
+  // Подписки: chat_messages + message_receipts + typing + звонки
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -208,7 +238,7 @@ export default function ChatPage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
-          // подхватим полную строку
+          // тянем полную строку
           const { data: full } = await supabase
             .from('chat_messages')
             .select('id, chat_id, author_id, body, attachment_url, created_at, file_url, file_name, file_type, file_size')
@@ -217,20 +247,18 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          // входящее -> квитанция "доставлено" (idempotent)
+          // входящее: ставим delivered (idempotent)
           if (selfId && m.author_id !== selfId) {
-            const base = { chat_id: m.chat_id, message_id: m.id, status: 'delivered', [RECEIPTS_USER_COLUMN]: selfId };
-            const { error } = await supabase
-              .from('message_receipts')
-              .upsert(base, { onConflict: 'message_id,member_id,status' }); // если у тебя уникальный индекс на 2 колонки — поменяй на 'message_id,member_id'
-            if (!error) applyReceipt(base);
+            const row = { chat_id: m.chat_id, message_id: m.id, status: 'delivered', [RECEIPTS_USER_COLUMN]: selfId };
+            await upsertReceipts(row);
+            applyReceipt(row);
           }
         }
       )
       .subscribe();
     messagesSubRef.current = msgCh;
 
-    // --- квитанции (слушаем INSERT и UPDATE)
+    // --- квитанции (INSERT/UPDATE)
     if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
     const rCh = supabase
       .channel(`receipts-${activeChatId}`)
@@ -242,7 +270,7 @@ export default function ChatPage() {
       .subscribe();
     receiptsSubRef.current = rCh;
 
-    // --- typing + адресные звонки
+    // --- typing + звонки
     if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } })
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -253,7 +281,7 @@ export default function ChatPage() {
       .on('broadcast', { event: 'call' }, (payload) => {
         const msg = payload.payload;
         if (!msg || (selfId && msg.from === selfId)) return;
-        if (msg.to && selfId && msg.to !== selfId) return; // адресовано не нам
+        if (msg.to && selfId && msg.to !== selfId) return;
         if (msg.type === 'offer') {
           setCallState({ chatId: activeChatId, role: 'callee', offer: msg.offer, from: msg.from });
         }
@@ -261,7 +289,6 @@ export default function ChatPage() {
       .subscribe();
     typingChannelRef.current = tCh;
 
-    // автоочистка "печатает…"
     const prune = setInterval(() => {
       const now = Date.now();
       setTyping((prev) => {
@@ -277,27 +304,28 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, selfId, fetchMessages, applyReceipt]);
+  }, [activeChatId, selfId, fetchMessages, upsertReceipts, applyReceipt]);
 
-  // Отметка read для видимых сообщений (idempotent upsert)
+  // Отметка read для видимых сообщений (idempotent)
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
 
-    for (const message_id of ids) {
-      const row = { chat_id: activeChatId, message_id, status: 'read', [RECEIPTS_USER_COLUMN]: selfId };
-      const { error } = await supabase
-        .from('message_receipts')
-        .upsert(row, { onConflict: 'message_id,member_id,status' }); // см. комментарий выше
-      if (!error) applyReceipt(row);
-    }
+    const rows = ids.map(message_id => ({
+      chat_id: activeChatId,
+      message_id,
+      status: 'read',
+      [RECEIPTS_USER_COLUMN]: selfId,
+    }));
+    await upsertReceipts(rows);
+    rows.forEach(applyReceipt);
 
     await supabase.from('chat_members')
       .update({ last_read_at: new Date().toISOString() })
       .eq('chat_id', activeChatId)
       .eq('member_id', selfId);
-  }, [activeChatId, selfId, applyReceipt]);
+  }, [activeChatId, selfId, upsertReceipts, applyReceipt]);
 
-  // «кто печатает»
+  // typing text
   const typingNames = useMemo(() => {
     const arr = Object.values(typing).map(t => t?.name).filter(Boolean);
     if (!arr.length) return '';
@@ -305,7 +333,6 @@ export default function ChatPage() {
     return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
-  // Быстрый вызов конкретному участнику
   const startCallTo = useCallback((targetId) => {
     if (!activeChatId || !selfId || !targetId || targetId === selfId) return;
     setCallState({ chatId: activeChatId, role: 'caller', to: targetId });
@@ -313,19 +340,13 @@ export default function ChatPage() {
 
   return (
     <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
-      {/* Левая колонка — список чатов */}
       <div style={{borderRight:'1px solid #eee'}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
           <h3 style={{margin:0}}>Чаты</h3>
         </div>
-        <ChatList
-          chats={chats}
-          activeChatId={activeChatId}
-          onSelect={setActiveChatId}
-        />
+        <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
       </div>
 
-      {/* Правая колонка — текущий диалог */}
       <div style={{display:'flex', flexDirection:'column'}}>
         <ChatHeader
           chat={chats.find(c => c.chat_id === activeChatId) || null}
@@ -349,7 +370,7 @@ export default function ChatPage() {
           <MessageInput
             chatId={activeChatId}
             currentUser={{ id: selfId }}
-            disabledSend={!canSend}   // печатать можно, отправка — только если есть selfId
+            disabledSend={!canSend}
             onTyping={(name) => {
               if (!typingChannelRef.current || !activeChatId || !selfId) return;
               typingChannelRef.current.send({
@@ -363,7 +384,6 @@ export default function ChatPage() {
                 alert('Нет прав или не определён участник чата');
                 return;
               }
-              // 1) создаём запись сообщения
               const { data: msg, error: msgErr } = await supabase
                 .from('chat_messages')
                 .insert({ chat_id: activeChatId, author_id: selfId, body: text?.trim() || null })
@@ -374,7 +394,6 @@ export default function ChatPage() {
                 return;
               }
 
-              // 2) если есть файлы — грузим и патчим первую запись
               if (files && files.length) {
                 let i = 0;
                 for (const f of files) {
@@ -408,10 +427,10 @@ export default function ChatPage() {
 
       {callState && (
         <CallModal
-          state={callState}              // { role, to?, offer? }
+          state={callState}
           user={{ id: selfId }}
           onClose={() => setCallState(null)}
-          channelName={`typing:${activeChatId}`} // тот же канал broadcast, что и typing
+          channelName={`typing:${activeChatId}`}
         />
       )}
     </div>
