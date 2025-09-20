@@ -1,7 +1,7 @@
 // client/src/pages/JobDetailsPage.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { supabase } from '../supabaseClient';
+import { supabase, supabaseUrl } from '../supabaseClient'; // ⬅️ добален supabaseUrl
 import { useAuth } from '../context/AuthContext';
 
 /* ---------- UI ---------- */
@@ -28,6 +28,29 @@ const PHOTOS_BUCKET = 'job-photos';
 const INVOICES_BUCKET = 'invoices';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
+
+/* ---------- Вспомогательные: вызов Edge-функций ---------- */
+async function callEdge(path, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || '';
+  const url = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/${path}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body ?? {})
+  });
+  const text = await res.text();
+  let json;
+  try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
+  if (!res.ok) {
+    const msg = json?.error || json?.message || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  return json;
+}
 
 /* ---------- Справочники ---------- */
 const STATUS_OPTIONS = [
@@ -288,12 +311,6 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- Комментарии ---------- */
-  const isRoleLike = (v) => {
-    if (!v) return false;
-    const s = String(v).trim().toLowerCase();
-    return /^(admin(istrator)?|manager|technician|админ|администратор|менеджер|техник)$/.test(s);
-  };
-
   const loadComments = async () => {
     setCommentsLoading(true);
 
@@ -607,16 +624,25 @@ export default function JobDetailsPage() {
     }
   };
 
-  // удалить файл из хранилища
+  // Удаление файла через Edge-функцию с правами сервера
   const delPhoto = async (name) => {
     if (!window.confirm('Удалить файл?')) return;
-    const { error } = await storage().remove([`${jobId}/${name}`]);
-    if (error) {
-      alert('Не удалось удалить файл');
-      console.error(error);
-      return;
+    try {
+      await callEdge('admin-delete-photo', {
+        bucket: PHOTOS_BUCKET,
+        path: `${jobId}/${name}`,
+      });
+      await loadPhotos();
+    } catch (e) {
+      console.error('admin-delete-photo failed, fallback to client delete', e);
+      // Фолбэк: попробуем обычное удаление (если у текущего юзера есть права владельца)
+      const { error } = await storage().remove([`${jobId}/${name}`]);
+      if (error) {
+        alert(`Не удалось удалить файл: ${e.message || error.message || 'ошибка'}`);
+        return;
+      }
+      await loadPhotos();
     }
-    await loadPhotos();
   };
 
   // выбрать/снять выбор со всех фото
@@ -738,7 +764,7 @@ export default function JobDetailsPage() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    URL.createObjectURL(url);
   };
 
   const deleteInvoice = async (item) => {
