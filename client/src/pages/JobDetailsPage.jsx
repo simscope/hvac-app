@@ -595,7 +595,7 @@ export default function JobDetailsPage() {
        contentType: file.type || 'application/octet-stream',
       });
         if (error) throw error;
-      } catch (upErr) {
+       catch (upErr) {
         console.error('upload error:', upErr, key);
         alert(`Не удалось загрузить файл: ${file.name}`);
       }
@@ -1213,6 +1213,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
