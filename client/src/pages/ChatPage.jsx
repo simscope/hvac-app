@@ -30,18 +30,16 @@ export default function ChatPage() {
   const [memberNames, setMemberNames] = useState({});
   const [members, setMembers] = useState([]);       // [{id,name}] для кнопок звонка
 
-  // === кто мы: auth.uid или technicians.id из localStorage / window ===
   const appMemberId = (typeof window !== 'undefined')
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
   const selfId = user?.id || appMemberId;
 
-  // В message_receipts у вас колонка user_id
+  // в message_receipts у вас колонка user_id
   const RECEIPTS_USER_COLUMN = 'user_id';
-
   const canSend = Boolean(selfId);
 
-  /* ======================== AUTH ======================== */
+  /* AUTH */
   useEffect(() => {
     let unsub;
     (async () => {
@@ -55,7 +53,7 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  /* ======================== СПИСОК ЧАТОВ ======================== */
+  /* СПИСОК ЧАТОВ */
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -106,7 +104,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  /* ============== Имена участников активного чата ============== */
+  /* ИМЕНА УЧАСТНИКОВ */
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -129,7 +127,7 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  /* ======================== СООБЩЕНИЯ ======================== */
+  /* СООБЩЕНИЯ */
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -144,10 +142,10 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // локальные set'ы для анти-спама read-апдейтов
-  const readSeenRef = useRef(new Set());     // какие message_id уже отмечены read
-  const readQueueRef = useRef(new Set());    // очередь на отправку
-  const readTimerRef = useRef(null);
+  // анти-дубль для read
+  const readSeenRef   = useRef(new Set());
+  const readQueueRef  = useRef(new Set());
+  const readTimerRef  = useRef(null);
 
   const flushReadQueue = useCallback(async () => {
     if (!activeChatId || !selfId) return;
@@ -165,10 +163,8 @@ export default function ChatPage() {
     try {
       await supabase
         .from('message_receipts')
-        .upsert(rows, { onConflict: 'chat_id,message_id,user_id' });
-    } catch (e) {
-      // проглатываем — повторная отправка нам не критична
-    }
+        .upsert(rows, { onConflict: 'message_id,user_id,status' }); // <— ВАЖНО!
+    } catch (e) {}
 
     try {
       await supabase
@@ -184,7 +180,6 @@ export default function ChatPage() {
     readTimerRef.current = setTimeout(flushReadQueue, 350);
   }, [flushReadQueue]);
 
-  // подписки по активному чату
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -211,12 +206,12 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          // помечаем "доставлено" для входящих (один upsert)
+          // доставлено: onConflict под существующий уникальный индекс
           if (selfId && m.author_id !== selfId) {
             try {
               await supabase.from('message_receipts').upsert(
                 [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' }],
-                { onConflict: 'chat_id,message_id,user_id' }
+                { onConflict: 'message_id,user_id,status' } // <— ВАЖНО!
               );
             } catch (e) {}
           }
@@ -258,7 +253,7 @@ export default function ChatPage() {
       .on('broadcast', { event: 'call' }, (payload) => {
         const msg = payload.payload;
         if (!msg || (selfId && msg.from === selfId)) return;
-        if (msg.to && selfId && msg.to !== selfId) return; // адресовано не нам
+        if (msg.to && selfId && msg.to !== selfId) return;
         if (msg.type === 'offer') {
           setCallState({ chatId: activeChatId, role: 'callee', offer: msg.offer, from: msg.from });
         }
@@ -266,7 +261,6 @@ export default function ChatPage() {
       .subscribe();
     typingChannelRef.current = tCh;
 
-    // автоочистка "печатает…"
     const prune = setInterval(() => {
       const now = Date.now();
       setTyping((prev) => {
@@ -285,11 +279,9 @@ export default function ChatPage() {
     };
   }, [activeChatId, selfId, fetchMessages]);
 
-  /* ======================== READ-маркировка ======================== */
+  /* READ-маркировка */
   const markReadForMessageIds = useCallback((ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
-
-    // отфильтровать уже отмеченные
     let added = false;
     for (const id of ids) {
       if (!readSeenRef.current.has(id)) {
@@ -301,7 +293,7 @@ export default function ChatPage() {
     if (added) scheduleFlush();
   }, [activeChatId, selfId, scheduleFlush]);
 
-  /* ======================== typing label ======================== */
+  /* typing label */
   const typingNames = useMemo(() => {
     const arr = Object.values(typing).map(t => t?.name).filter(Boolean);
     if (!arr.length) return '';
@@ -309,16 +301,13 @@ export default function ChatPage() {
     return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
-  /* ======================== звонки ======================== */
   const startCallTo = useCallback((targetId) => {
     if (!activeChatId || !selfId || !targetId || targetId === selfId) return;
     setCallState({ chatId: activeChatId, role: 'caller', to: targetId });
   }, [activeChatId, selfId]);
 
-  /* ======================== RENDER ======================== */
   return (
     <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
-      {/* Левая колонка — список чатов */}
       <div style={{borderRight:'1px solid #eee'}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
           <h3 style={{margin:0}}>Чаты</h3>
@@ -326,7 +315,6 @@ export default function ChatPage() {
         <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
       </div>
 
-      {/* Правая колонка — текущий диалог */}
       <div style={{display:'flex', flexDirection:'column'}}>
         <ChatHeader
           chat={chats.find(c => c.chat_id === activeChatId) || null}
