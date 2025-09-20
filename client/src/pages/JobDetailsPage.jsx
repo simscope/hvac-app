@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-//import heic2any from 'heic2any'; // ← добавлено для конвертации HEIC → JPEG
 
 /* ---------- UI ---------- */
 const PAGE = { padding: 16, display: 'grid', gap: 12 };
@@ -116,7 +115,7 @@ function makeSafeStorageKey(jobId, originalName) {
 
 /* ---------- HEIC → JPEG (Web) ---------- */
 const isHeicLike = (file) =>
-   file &&
+  file &&
   (
     file.type === 'image/heic' ||
     file.type === 'image/heif' ||
@@ -134,7 +133,6 @@ async function convertIfHeicWeb(file) {
     const mod = await import('heic2any');
     heic2any = mod.default || mod;
   } catch (e) {
-    // Пакет не установился/не найден — сообщаем ясно
     throw new Error('Пакет heic2any недоступен. Установите его в client/package.json');
   }
 
@@ -328,7 +326,7 @@ export default function JobDetailsPage() {
         if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
       });
 
-      // затем profiles.full_name, и только если не «похоже на роль» — profiles.name
+      // затем profiles.full_name
       const { data: profs } = await supabase
         .from('profiles')
         .select('id, full_name')
@@ -337,8 +335,8 @@ export default function JobDetailsPage() {
       (profs || []).forEach((p) => {
         if (!p?.id) return;
         if (!nameByUserId[p.id] && p.full_name && p.full_name.trim()) {
-            nameByUserId[p.id] = p.full_name.trim();
-         }
+          nameByUserId[p.id] = p.full_name.trim();
+        }
       });
     }
 
@@ -380,9 +378,9 @@ export default function JobDetailsPage() {
     }
 
     if (!authorName) {
-       if (profile?.full_name) authorName = profile.full_name;
-       else authorName = user?.email || null;
-     }
+      if (profile?.full_name) authorName = profile.full_name;
+      else authorName = user?.email || null;
+    }
 
     setComments((prev) => [...prev, { ...data, author_name: authorName }]);
     setCommentText('');
@@ -556,59 +554,81 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- файлы ---------- */
-// ПОЛНОСТЬЮ заменить существующую функцию
-const onPick = async (e) => {
-  const files = Array.from(e.target.files || []);
-  if (!files.length) return;
-  setUploadBusy(true);
+  const onPick = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setUploadBusy(true);
 
-  try {
-    for (const original of files) {
-      const allowed =
-        /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
-        /pdf$/i.test(original.type) ||
-        /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
+    try {
+      for (const original of files) {
+        const allowed =
+          /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
+          /pdf$/i.test(original.type) ||
+          /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
 
-      if (!allowed) {
-        alert(`Формат не поддерживается: ${original.name}`);
-        continue;
-      }
-
-      // HEIC/HEIF → JPEG (если нужно)
-      let file;
-      try {
-        file = await convertIfHeicWeb(original); // вернёт original, если это не HEIC
-      } catch (convErr) {
-        console.error('HEIC convert error:', convErr);
-        // ВАЖНО: не грузим сырые HEIC/HEIF
-        if (isHeicLike(original)) {
-          alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен. Проверьте, что heic2any установлен.');
+        if (!allowed) {
+          alert(`Формат не поддерживается: ${original.name}`);
           continue;
         }
-        // Если это не HEIC — грузим как есть
-        file = original;
-      }
 
-      const key = makeSafeStorageKey(jobId, file.name);
+        // HEIC/HEIF → JPEG (если нужно)
+        let file;
+        try {
+          file = await convertIfHeicWeb(original); // вернёт original, если это не HEIC
+        } catch (convErr) {
+          console.error('HEIC convert error:', convErr);
+          // не грузим сырые HEIC/HEIF
+          if (isHeicLike(original)) {
+            alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен. Проверьте, что heic2any установлен.');
+            continue;
+          }
+          // если не HEIC — грузим как есть
+          file = original;
+        }
 
-      try {
-        const { error } = await storage().upload(key, file, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: file.type || 'application/octet-stream',
-        });
-        if (error) throw error;
-      } catch (upErr) {
-        console.error('upload error:', upErr, key);
-        alert(`Не удалось загрузить файл: ${file.name}`);
+        const key = makeSafeStorageKey(jobId, file.name);
+
+        try {
+          const { error } = await storage().upload(key, file, {
+            cacheControl: '3600',
+            upsert: false,
+            contentType: file.type || 'application/octet-stream',
+          });
+          if (error) throw error;
+        } catch (upErr) {
+          console.error('upload error:', upErr, key);
+          alert(`Не удалось загрузить файл: ${file.name}`);
+        }
       }
+    } finally {
+      await loadPhotos();
+      setUploadBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
     }
-  } finally {
+  };
+
+  // удалить файл из хранилища
+  const delPhoto = async (name) => {
+    if (!window.confirm('Удалить файл?')) return;
+    const { error } = await storage().remove([`${jobId}/${name}`]);
+    if (error) {
+      alert('Не удалось удалить файл');
+      console.error(error);
+      return;
+    }
     await loadPhotos();
-    setUploadBusy(false);
-    if (fileRef.current) fileRef.current.value = '';
-  }
-};
+  };
+
+  // выбрать/снять выбор со всех фото
+  const toggleAllPhotos = (checkedAll) => {
+    if (checkedAll) {
+      const next = {};
+      photos.forEach((p) => { next[p.name] = true; });
+      setChecked(next);
+    } else {
+      setChecked({});
+    }
+  };
 
   const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
 
@@ -1109,8 +1129,7 @@ const onPick = async (e) => {
           <div style={H2}>Фото / файлы</div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <label style={{ userSelect: 'none', cursor: 'pointer' }}>
-              <input type="checkbox" checked={allChecked} onChange={(e) => toggleAllPhotos(e.target.checked)} /> Выбрать
-              всё
+              <input type="checkbox" checked={allChecked} onChange={(e) => toggleAllPhotos(e.target.checked)} /> Выбрать всё
             </label>
             <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>
               Скачать выбранные
@@ -1195,10 +1214,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
-
-
-
-
-
