@@ -42,7 +42,7 @@ export default function ChatPage() {
   useEffect(() => {
     let unsub;
     (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session) } = await supabase.auth.getSession();
       setUser(session?.user ?? null);
       const { data } = supabase.auth.onAuthStateChange((_evt, sess) => {
         setUser(sess?.user ?? null);
@@ -165,9 +165,14 @@ export default function ChatPage() {
           setMessages((prev) => [...prev, m]);
 
           if (selfId && m.author_id !== selfId) {
-            await supabase.from('message_receipts')
-              .insert({ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' })
-              .catch(() => {});
+            try {
+              const { error } = await supabase
+                .from('message_receipts')
+                .insert({ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' });
+              if (error) console.warn('[message_receipts.insert delivered]', error);
+            } catch (e) {
+              console.warn('[message_receipts.insert delivered] thrown', e);
+            }
           }
         }
       )
@@ -237,14 +242,25 @@ export default function ChatPage() {
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
     for (const message_id of ids) {
-      await supabase.from('message_receipts')
-        .insert({ chat_id: activeChatId, message_id, [RECEIPTS_USER_COLUMN]: selfId, status: 'read' })
-        .catch(() => {});
+      try {
+        const { error } = await supabase
+          .from('message_receipts')
+          .insert({ chat_id: activeChatId, message_id, [RECEIPTS_USER_COLUMN]: selfId, status: 'read' });
+        if (error) console.warn('[message_receipts.insert read]', error);
+      } catch (e) {
+        console.warn('[message_receipts.insert read] thrown', e);
+      }
     }
-    await supabase.from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('chat_id', activeChatId)
-      .eq('member_id', selfId);
+    try {
+      const { error } = await supabase
+        .from('chat_members')
+        .update({ last_read_at: new Date().toISOString() })
+        .eq('chat_id', activeChatId)
+        .eq('member_id', selfId);
+      if (error) console.warn('[chat_members.update last_read_at]', error);
+    } catch (e) {
+      console.warn('[chat_members.update last_read_at] thrown', e);
+    }
   }, [activeChatId, selfId]);
 
   // «кто печатает»
@@ -306,26 +322,39 @@ export default function ChatPage() {
             }}
             onSend={async ({ text, files }) => {
               if (!activeChatId || !selfId) return;
-              const { data: msg, error: msgErr } = await supabase
-                .from('chat_messages')
-                .insert({ chat_id: activeChatId, author_id: selfId, body: text?.trim() || null })
-                .select().single();
-              if (msgErr) return;
+              try {
+                // создаём сообщение
+                const { data: msg, error: msgErr } = await supabase
+                  .from('chat_messages')
+                  .insert({ chat_id: activeChatId, author_id: selfId, body: (text?.trim() || null) })
+                  .select()
+                  .single();
+                if (msgErr) { console.error('[chat_messages.insert]', msgErr); return; }
 
-              if (files && files.length) {
-                let i = 0;
-                for (const f of files) {
-                  const cleanName = f.name.replace(/[^0-9A-Za-z._-]+/g, '_');
-                  const path = `${activeChatId}/${msg.id}/${Date.now()}_${cleanName}`;
-                  const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type });
-                  if (!up.error && i === 0) {
-                    await supabase
-                      .from('chat_messages')
-                      .update({ file_url: path, file_name: cleanName, file_type: f.type, file_size: f.size })
-                      .eq('id', msg.id);
+                // вложения (если есть)
+                if (files && files.length) {
+                  let i = 0;
+                  for (const f of files) {
+                    try {
+                      const cleanName = f.name.replace(/[^0-9A-Za-z._-]+/g, '_');
+                      const path = `${activeChatId}/${msg.id}/${Date.now()}_${cleanName}`;
+                      const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type });
+                      if (!up.error && i === 0) {
+                        const { error: updErr } = await supabase
+                          .from('chat_messages')
+                          .update({ file_url: path, file_name: cleanName, file_type: f.type, file_size: f.size })
+                          .eq('id', msg.id);
+                        if (updErr) console.warn('[chat_messages.update attachment]', updErr);
+                      }
+                      if (up.error) console.warn('[storage.upload]', up.error);
+                    } catch (e) {
+                      console.warn('[attachment upload thrown]', e);
+                    }
+                    i++;
                   }
-                  i++;
                 }
+              } catch (e) {
+                console.error('[onSend thrown]', e);
               }
             }}
           />
