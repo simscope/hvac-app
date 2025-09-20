@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import ChatList from '../components/chat/ChatList.jsx';
 import MessageList from '../components/chat/MessageList.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
-import ChatInput from '../components/chat/ChatInput.jsx';
+import ChatInput from '../components/chat/MessageInput.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
 
 export default function ChatPage() {
@@ -297,7 +297,7 @@ export default function ChatPage() {
           />
         </div>
         <div style={{borderTop:'1px solid #eee', padding:'8px 12px'}}>
-          <ChatInput
+         <MessageInput
             disabledSend={!canSend}
             onSend={async ({ text, files }) => {
               if (!activeChatId || !selfId) return;
@@ -336,3 +336,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
