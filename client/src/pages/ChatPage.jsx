@@ -8,21 +8,8 @@ import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
 
-/** ====== НАСТРОЙКИ ДЛЯ КВИТАНЦИЙ ======
- * Поставь имя колонки пользователя в message_receipts:
- *  - если у тебя колонка member_id (рекомендовано) — оставь как есть;
- *  - если user_id — замени на 'user_id'.
- */
-const RECEIPTS_USER_COLUMN = 'member_id';
-
-/** Если уникальный индекс в message_receipts:
- *  - (message_id, member_id, status)  => оставь как есть;
- *  - (message_id, member_id)          => замени на 'message_id,member_id'
- */
-const RECEIPTS_ON_CONFLICT = 'message_id,member_id,status';
-
 export default function ChatPage() {
-  const [authUser, setAuthUser] = useState(null);
+  const [user, setUser] = useState(null);
 
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
@@ -30,42 +17,44 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // receipts: { [messageId]: { delivered:Set<id>, read:Set<id> } }
+  // receipts: { [messageId]: { delivered:Set<uuid>, read:Set<uuid> } }
   const [receipts, setReceipts] = useState({});
 
-  // typing
+  // typing users: { [id]: { name, untilTs } }
   const [typing, setTyping] = useState({});
   const typingChannelRef = useRef(null);
   const receiptsSubRef = useRef(null);
   const messagesSubRef = useRef(null);
 
-  // звонок
-  const [callState, setCallState] = useState(null);
+  const [callState, setCallState] = useState(null); // {chatId, role:'caller'|'callee', to?, offer?, from?}
   const [memberNames, setMemberNames] = useState({});
-  const [members, setMembers] = useState([]);
+  const [members, setMembers] = useState([]);       // [{id,name}] для кнопок звонка
 
-  // кто мы (для отправки/квитанций нужен technicians.id, если используешь его)
+  // === кто мы ===
   const appMemberId = (typeof window !== 'undefined')
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
-  const selfId = appMemberId || authUser?.id || null;
+  const selfId = user?.id || appMemberId;
+
+  // В message_receipts у тебя колонка user_id
+  const RECEIPTS_USER_COLUMN = 'user_id';
   const canSend = Boolean(selfId);
 
-  // --- auth
+  // --- AUTH session
   useEffect(() => {
     let unsub;
     (async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      setAuthUser(session?.user ?? null);
+      setUser(session?.user ?? null);
       const { data } = supabase.auth.onAuthStateChange((_evt, sess) => {
-        setAuthUser(sess?.user ?? null);
+        setUser(sess?.user ?? null);
       });
       unsub = data?.subscription?.unsubscribe || data?.unsubscribe;
     })();
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // === список чатов
+  // === Загрузка СПИСКА чатов
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -116,7 +105,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === имена участников активного чата
+  // === Имена участников активного чата
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -139,34 +128,20 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  // применить одну квитанцию в локальный state
-  const applyReceipt = useCallback((row) => {
-    if (!row) return;
-    const uid = row[RECEIPTS_USER_COLUMN];
-    const mid = row.message_id;
-    const st  = row.status;
+  // helper: построить map из строк квитанций
+  const buildReceiptsMap = useCallback((rows) => {
+    const map = {};
+    for (const r of (rows || [])) {
+      const mid = r.message_id;
+      if (!mid) continue;
+      if (!map[mid]) map[mid] = { delivered: new Set(), read: new Set() };
+      if (r.status === 'delivered') map[mid].delivered.add(r[RECEIPTS_USER_COLUMN]);
+      if (r.status === 'read')      map[mid].read.add(r[RECEIPTS_USER_COLUMN]);
+    }
+    return map;
+  }, [RECEIPTS_USER_COLUMN]);
 
-    setReceipts(prev => {
-      const cur = prev[mid] || { delivered: new Set(), read: new Set() };
-      const delivered = new Set(cur.delivered);
-      const read      = new Set(cur.read);
-
-      if (st === 'delivered') delivered.add(uid);
-      if (st === 'read') { delivered.add(uid); read.add(uid); }
-
-      return { ...prev, [mid]: { delivered, read } };
-    });
-  }, []);
-
-  // helper: idempotent upsert (массивом или одной строкой)
-  const upsertReceipts = useCallback(async (rows) => {
-    if (!rows || (Array.isArray(rows) && rows.length === 0)) return;
-    await supabase
-      .from('message_receipts')
-      .upsert(rows, { onConflict: RECEIPTS_ON_CONFLICT });
-  }, []);
-
-  // загрузка сообщений активного чата + начальные квитанции + backfill delivered
+  // загрузка сообщений
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -176,61 +151,34 @@ export default function ChatPage() {
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
     setLoadingMessages(false);
-    if (error) { console.error('chat_messages', error); setMessages([]); setReceipts({}); return; }
-
+    if (error) console.error('chat_messages', error);
     setMessages(data || []);
+  }, []);
 
-    // подтянуть начальные квитанции из БД
-    const ids = (data || []).map(m => m.id);
-    if (ids.length) {
-      const { data: recs } = await supabase
-        .from('message_receipts')
-        .select(`message_id,status,${RECEIPTS_USER_COLUMN}`)
-        .in('message_id', ids);
-
-      const map = {};
-      (recs || []).forEach(r => {
-        const uid = r[RECEIPTS_USER_COLUMN];
-        const mid = r.message_id;
-        const st  = r.status;
-        if (!map[mid]) map[mid] = { delivered: new Set(), read: new Set() };
-        if (st === 'delivered') map[mid].delivered.add(uid);
-        if (st === 'read') { map[mid].delivered.add(uid); map[mid].read.add(uid); }
-      });
-      setReceipts(map);
-    } else {
+  // первичная загрузка ВСЕХ квитанций по чату
+  const loadReceipts = useCallback(async (chatId) => {
+    if (!chatId) return;
+    const { data, error } = await supabase
+      .from('message_receipts')
+      .select(`message_id, ${RECEIPTS_USER_COLUMN}, status`)
+      .eq('chat_id', chatId);
+    if (error) {
+      console.error('message_receipts load', error);
       setReceipts({});
+      return;
     }
+    const map = buildReceiptsMap(data);
+    setReceipts(map);
+  }, [RECEIPTS_USER_COLUMN, buildReceiptsMap]);
 
-    // NEW: backfill «delivered» для всех ВХОДЯЩИХ сообщений (автор не мы),
-    // чтобы у отправителя сразу загорелись двойные галочки, как только мы открыли чат.
-    if (selfId && (data || []).length) {
-      const needDelivered = (data || [])
-        .filter(m => m.author_id !== selfId)           // входящие
-        .map(m => m.id);
-
-      if (needDelivered.length) {
-        const rows = needDelivered.map(message_id => ({
-          chat_id: chatId,
-          message_id,
-          status: 'delivered',
-          [RECEIPTS_USER_COLUMN]: selfId,
-        }));
-        await upsertReceipts(rows);
-        // применим локально, не дожидаясь realtime
-        rows.forEach(applyReceipt);
-      }
-    }
-  }, [selfId, upsertReceipts, applyReceipt]);
-
-  // Подписки: chat_messages + message_receipts + typing + звонки
+  // Подписки: chat_messages + message_receipts + typing
   useEffect(() => {
     if (!activeChatId) return;
 
-    fetchMessages(activeChatId);
+    fetchMessages(activeChatId).then(() => loadReceipts(activeChatId));
     setTyping({});
 
-    // --- сообщения
+    // сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
     const msgCh = supabase
       .channel(`chat-${activeChatId}`)
@@ -238,7 +186,7 @@ export default function ChatPage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
-          // тянем полную строку
+          // подтянем полную строку (на случай минимального payload)
           const { data: full } = await supabase
             .from('chat_messages')
             .select('id, chat_id, author_id, body, attachment_url, created_at, file_url, file_name, file_type, file_size')
@@ -247,30 +195,41 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          // входящее: ставим delivered (idempotent)
+          // проставим delivered для себя, если сообщение не наше
           if (selfId && m.author_id !== selfId) {
-            const row = { chat_id: m.chat_id, message_id: m.id, status: 'delivered', [RECEIPTS_USER_COLUMN]: selfId };
-            await upsertReceipts(row);
-            applyReceipt(row);
+            const row = { chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' };
+            await supabase.from('message_receipts')
+              .upsert([row], { onConflict: 'message_id,' + RECEIPTS_USER_COLUMN + ',status', ignoreDuplicates: true });
           }
         }
       )
       .subscribe();
     messagesSubRef.current = msgCh;
 
-    // --- квитанции (INSERT/UPDATE)
+    // realtime по квитанциям
     if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
     const rCh = supabase
       .channel(`receipts-${activeChatId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
-        (payload) => applyReceipt(payload.new)
+        { event: 'INSERT', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
+        (payload) => {
+          const { message_id, status } = payload.new;
+          const uid = payload.new[RECEIPTS_USER_COLUMN];
+          setReceipts((prev) => {
+            const cur = prev[message_id] || { delivered: new Set(), read: new Set() };
+            const delivered = new Set(cur.delivered);
+            const read = new Set(cur.read);
+            if (status === 'delivered') delivered.add(uid);
+            if (status === 'read') { delivered.add(uid); read.add(uid); }
+            return { ...prev, [message_id]: { delivered, read } };
+          });
+        }
       )
       .subscribe();
     receiptsSubRef.current = rCh;
 
-    // --- typing + звонки
+    // typing канал
     if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } })
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -282,13 +241,12 @@ export default function ChatPage() {
         const msg = payload.payload;
         if (!msg || (selfId && msg.from === selfId)) return;
         if (msg.to && selfId && msg.to !== selfId) return;
-        if (msg.type === 'offer') {
-          setCallState({ chatId: activeChatId, role: 'callee', offer: msg.offer, from: msg.from });
-        }
+        if (msg.type === 'offer') setCallState({ chatId: activeChatId, role: 'callee', offer: msg.offer, from: msg.from });
       })
       .subscribe();
     typingChannelRef.current = tCh;
 
+    // автоочистка «печатает…»
     const prune = setInterval(() => {
       const now = Date.now();
       setTyping((prev) => {
@@ -304,28 +262,37 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, selfId, fetchMessages, upsertReceipts, applyReceipt]);
+  }, [activeChatId, selfId, fetchMessages, loadReceipts, RECEIPTS_USER_COLUMN]);
 
-  // Отметка read для видимых сообщений (idempotent)
+  // Отметка read (батчем + upsert, чтобы не падать на повторе)
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
-
-    const rows = ids.map(message_id => ({
+    const rows = ids.map((message_id) => ({
       chat_id: activeChatId,
       message_id,
-      status: 'read',
       [RECEIPTS_USER_COLUMN]: selfId,
+      status: 'read',
     }));
-    await upsertReceipts(rows);
-    rows.forEach(applyReceipt);
+    await supabase
+      .from('message_receipts')
+      .upsert(rows, { onConflict: 'message_id,' + RECEIPTS_USER_COLUMN + ',status', ignoreDuplicates: true });
 
-    await supabase.from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('chat_id', activeChatId)
-      .eq('member_id', selfId);
-  }, [activeChatId, selfId, upsertReceipts, applyReceipt]);
+    // локально тоже обновим, чтобы сразу сменились «птички»
+    setReceipts((prev) => {
+      const next = { ...prev };
+      for (const mid of ids) {
+        const cur = next[mid] || { delivered: new Set(), read: new Set() };
+        const delivered = new Set(cur.delivered);
+        const read = new Set(cur.read);
+        delivered.add(selfId);
+        read.add(selfId);
+        next[mid] = { delivered, read };
+      }
+      return next;
+    });
+  }, [activeChatId, selfId, RECEIPTS_USER_COLUMN]);
 
-  // typing text
+  // «кто печатает»
   const typingNames = useMemo(() => {
     const arr = Object.values(typing).map(t => t?.name).filter(Boolean);
     if (!arr.length) return '';
@@ -333,6 +300,7 @@ export default function ChatPage() {
     return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
+  // Быстрый вызов конкретному участнику
   const startCallTo = useCallback((targetId) => {
     if (!activeChatId || !selfId || !targetId || targetId === selfId) return;
     setCallState({ chatId: activeChatId, role: 'caller', to: targetId });
@@ -340,6 +308,7 @@ export default function ChatPage() {
 
   return (
     <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
+      {/* Левая колонка — список чатов */}
       <div style={{borderRight:'1px solid #eee'}}>
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
           <h3 style={{margin:0}}>Чаты</h3>
@@ -347,6 +316,7 @@ export default function ChatPage() {
         <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
       </div>
 
+      {/* Правая колонка — текущий диалог */}
       <div style={{display:'flex', flexDirection:'column'}}>
         <ChatHeader
           chat={chats.find(c => c.chat_id === activeChatId) || null}
@@ -380,37 +350,24 @@ export default function ChatPage() {
               });
             }}
             onSend={async ({ text, files }) => {
-              if (!activeChatId || !selfId) {
-                alert('Нет прав или не определён участник чата');
-                return;
-              }
+              if (!activeChatId || !selfId) return;
               const { data: msg, error: msgErr } = await supabase
                 .from('chat_messages')
                 .insert({ chat_id: activeChatId, author_id: selfId, body: text?.trim() || null })
                 .select().single();
-              if (msgErr) {
-                console.error('chat_messages.insert', msgErr);
-                alert(`Ошибка отправки: ${msgErr.message || 'insert chat_messages'}`);
-                return;
-              }
+              if (msgErr) return;
 
               if (files && files.length) {
                 let i = 0;
                 for (const f of files) {
                   const cleanName = f.name.replace(/[^0-9A-Za-z._-]+/g, '_');
                   const path = `${activeChatId}/${msg.id}/${Date.now()}_${cleanName}`;
-                  const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type || undefined });
-                  if (up.error) {
-                    console.error('upload error', up.error);
-                    alert(`Не удалось загрузить файл: ${cleanName}`);
-                    continue;
-                  }
-                  if (i === 0) {
-                    const { error: updErr } = await supabase
+                  const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type });
+                  if (!up.error && i === 0) {
+                    await supabase
                       .from('chat_messages')
-                      .update({ file_url: path, file_name: cleanName, file_type: f.type || null, file_size: f.size || null })
+                      .update({ file_url: path, file_name: cleanName, file_type: f.type, file_size: f.size })
                       .eq('id', msg.id);
-                    if (updErr) console.error('update msg file_*', updErr);
                   }
                   i++;
                 }
