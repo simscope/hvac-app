@@ -327,11 +327,9 @@ export default function JobDetailsPage() {
 
       (profs || []).forEach((p) => {
         if (!p?.id) return;
-        if (!nameByUserId[p.id]) {
-          const candidate = (p.full_name && p.full_name.trim())
-            || (p.name && !isRoleLike(p.name) ? p.name.trim() : null);
-          if (candidate) nameByUserId[p.id] = candidate;
-        }
+        if (!nameByUserId[p.id] && p.full_name && p.full_name.trim()) {
+            nameByUserId[p.id] = p.full_name.trim();
+         }
       });
     }
 
@@ -1205,4 +1203,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
