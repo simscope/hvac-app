@@ -11,7 +11,7 @@ import CallModal from '../components/chat/CallModal.jsx';
 export default function ChatPage() {
   const [user, setUser] = useState(null);
 
-  const [chats, setChats] = useState([]);
+  const [chats, setChats] = useState([]);           // [{chat_id,title,is_group,last_body,last_at,unread_count}]
   const [activeChatId, setActiveChatId] = useState(null);
 
   const [messages, setMessages] = useState([]);
@@ -28,77 +28,16 @@ export default function ChatPage() {
 
   const [callState, setCallState] = useState(null); // {chatId, role:'caller'|'callee', to?, offer?, from?}
   const [memberNames, setMemberNames] = useState({});
-  const [members, setMembers] = useState([]);       // [{id,name}] для кнопок звонка
+  const [members, setMembers] = useState([]);       // [{id,name}]
 
-  // ===== уведомления =====
-  const canNotify = typeof window !== 'undefined' && 'Notification' in window;
-  const [notifPerm, setNotifPerm] = useState(canNotify ? Notification.permission : 'denied');
   const [tabFocused, setTabFocused] = useState(typeof document !== 'undefined' ? document.hasFocus() : true);
-
   useEffect(() => {
     const onFocus = () => setTabFocused(true);
-    const onBlur = () => setTabFocused(false);
+    const onBlur  = () => setTabFocused(false);
     window.addEventListener('focus', onFocus);
     window.addEventListener('blur', onBlur);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('blur', onBlur);
-    };
+    return () => { window.removeEventListener('focus', onFocus); window.removeEventListener('blur', onBlur); };
   }, []);
-
-  const askNotif = useCallback(async () => {
-    if (!canNotify) return;
-    try {
-      const p = await Notification.requestPermission();
-      setNotifPerm(p);
-    } catch {}
-  }, [canNotify]);
-
-  // короткий «пик» (если уведомления запрещены)
-  const beep = useCallback((duration = 120, freq = 880, volume = 0.08) => {
-    try {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      const ctx = new Ctx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.value = volume;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      setTimeout(() => { osc.stop(); ctx.close(); }, duration);
-    } catch {}
-  }, []);
-
-  const showNotification = useCallback((title, body, onClick) => {
-    if (canNotify && notifPerm === 'granted') {
-      try {
-        const n = new Notification(title, { body });
-        n.onclick = () => {
-          try { window.focus(); } catch {}
-          onClick?.();
-          n.close();
-        };
-      } catch {
-        beep();
-      }
-    } else {
-      // нет разрешения — хотя бы звук
-      beep();
-    }
-  }, [canNotify, notifPerm, beep]);
-
-  // в тайтле вкладки показываем суммарное непрочитанное
-  const totalUnread = useMemo(
-    () => (chats || []).reduce((s, c) => s + (c.unread_count || 0), 0),
-    [chats]
-  );
-  useEffect(() => {
-    const base = document.title.replace(/^\(\d+\)\s*/, '');
-    if (totalUnread > 0) document.title = `(${totalUnread}) ${base}`;
-    else document.title = base;
-  }, [totalUnread]);
 
   // === кто мы: auth.uid или technicians.id из localStorage / window ===
   const appMemberId = (typeof window !== 'undefined')
@@ -133,11 +72,64 @@ export default function ChatPage() {
         p_status: status,
       });
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.warn('[add_message_receipt RPC]', e);
     }
   }, [authUid]);
 
-  // === Загрузка СПИСКА чатов ===
+  /* ================= UNREAD helpers ================= */
+
+  // отправляем суммарный счётчик наружу (для бейджа «Чат» в основном меню)
+  const pushUnreadTotal = useCallback((total) => {
+    try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(total)); } catch {}
+    try { window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } })); } catch {}
+  }, []);
+
+  // пересчёт суммарного при любом изменении списка чатов
+  useEffect(() => {
+    const total = (chats || []).reduce((s, c) => s + (c.unread_count || 0), 0);
+    pushUnreadTotal(total);
+  }, [chats, pushUnreadTotal]);
+
+  // начальная инициализация unread по last_read_at
+  const initUnreadCounts = useCallback(async (chatIds) => {
+    if (!selfId || !chatIds?.length) return;
+
+    // мои отметки прочитанного по чатам
+    const { data: myMarks } = await supabase
+      .from('chat_members')
+      .select('chat_id,last_read_at')
+      .in('chat_id', chatIds)
+      .eq('member_id', selfId);
+
+    const lastByChat = {};
+    (myMarks || []).forEach(r => { lastByChat[r.chat_id] = r.last_read_at; });
+
+    // для каждого чата считаем количество сообщений после last_read_at (автор != selfId)
+    const results = {};
+    for (const cid of chatIds) {
+      const last = lastByChat[cid] || '1970-01-01';
+      const { count } = await supabase
+        .from('chat_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('chat_id', cid)
+        .neq('author_id', selfId)
+        .gt('created_at', last);
+      results[cid] = count || 0;
+    }
+
+    setChats((prev) => prev.map(c => ({ ...c, unread_count: results[c.chat_id] ?? 0 })));
+  }, [selfId]);
+
+  // удобный setter: инкремент/сброс счётчика у конкретного чата
+  const incUnread = useCallback((chatId, delta = 1) => {
+    setChats((prev) => prev.map(c => c.chat_id === chatId ? { ...c, unread_count: (c.unread_count || 0) + delta } : c));
+  }, []);
+  const resetUnread = useCallback((chatId) => {
+    setChats((prev) => prev.map(c => c.chat_id === chatId ? { ...c, unread_count: 0 } : c));
+  }, []);
+
+  /* =============== Загрузка списка чатов =============== */
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -176,6 +168,9 @@ export default function ChatPage() {
 
       setChats(mapped);
       if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
+
+      // посчитали стартовые непрочитанные
+      await initUnreadCounts(chatIds);
     };
 
     loadChats();
@@ -186,9 +181,9 @@ export default function ChatPage() {
       .subscribe();
 
     return () => supabase.removeChannel(ch);
-  }, [activeChatId]);
+  }, [activeChatId, initUnreadCounts]);
 
-  // === Имена участников активного чата ===
+  /* =============== Имена участников текущего чата =============== */
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -211,7 +206,7 @@ export default function ChatPage() {
     })();
   }, [activeChatId]);
 
-  // === Сообщения активного чата ===
+  /* =============== Сообщения активного чата =============== */
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -232,6 +227,8 @@ export default function ChatPage() {
     fetchMessages(activeChatId);
     setReceipts({});
     setTyping({});
+    // при входе в чат сразу сбрасываем его локальный счётчик
+    resetUnread(activeChatId);
 
     // сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
@@ -254,26 +251,11 @@ export default function ChatPage() {
             await addReceipt({ chatId: m.chat_id, messageId: m.id, status: 'delivered' });
           }
 
-          // уведомление + непрочитанное, если сообщение не от нас
-          if (m.author_id !== selfId) {
-            const isActiveChat = m.chat_id === activeChatId;
-            if (!tabFocused || !isActiveChat) {
-              // имя автора (если знаем)
-              const authorName =
-                memberNames[m.author_id] ||
-                Object.values(memberNames)[0] ||
-                'Новый mesaj';
-              const chatTitle = (chats.find(c => c.chat_id === m.chat_id)?.title) || 'Чат';
-              showNotification(`${authorName} • ${chatTitle}`, (m.body || 'Вложение'), () => {
-                setActiveChatId(m.chat_id);
-              });
-
-              // увеличиваем счётчик непрочитанного
-              setChats((prev) => prev.map(c => c.chat_id === m.chat_id
-                ? { ...c, unread_count: (isActiveChat && tabFocused) ? 0 : (c.unread_count || 0) + 1 }
-                : c
-              ));
-            }
+          // если это НЕ наш чат/нет фокуса — инкрементируем счётчик у соответствующего чата
+          const isThisChat = (m.chat_id === activeChatId);
+          const focused = tabFocused;
+          if (!(isThisChat && focused) && m.author_id !== selfId) {
+            incUnread(m.chat_id, 1);
           }
         }
       )
@@ -337,15 +319,12 @@ export default function ChatPage() {
       if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
       if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     };
-  }, [activeChatId, authUid, selfId, fetchMessages, addReceipt, memberNames, showNotification, chats, tabFocused]);
+  }, [activeChatId, authUid, selfId, tabFocused, fetchMessages, addReceipt, incUnread, resetUnread]);
 
-  // Сброс непрочитанного при открытии чата/фокусе
+  // Сброс непрочитанного при фокусе окна на уже открытом чате
   useEffect(() => {
-    if (!activeChatId) return;
-    if (tabFocused) {
-      setChats((prev) => prev.map(c => c.chat_id === activeChatId ? { ...c, unread_count: 0 } : c));
-    }
-  }, [activeChatId, tabFocused]);
+    if (tabFocused && activeChatId) resetUnread(activeChatId);
+  }, [tabFocused, activeChatId, resetUnread]);
 
   // Отметка read — через RPC
   const markReadForMessageIds = useCallback(async (ids) => {
@@ -379,19 +358,55 @@ export default function ChatPage() {
     setCallState({ chatId: activeChatId, role: 'caller', to: targetId });
   }, [activeChatId, selfId]);
 
+  // Отрисовка маленьких бейджей в списке чатов (если ваш ChatList их не показывает)
+  const renderChatList = () => {
+    // Если ваш компонент ChatList уже отображает unread_count — просто верните его как раньше:
+    // return <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />;
+    // Минимальная собственная реализация с бейджами:
+    return (
+      <div style={{display:'grid'}}>
+        {chats.map(c => (
+          <button
+            key={c.chat_id}
+            onClick={() => setActiveChatId(c.chat_id)}
+            style={{
+              textAlign:'left',
+              padding:'10px 12px',
+              border:'none',
+              borderBottom:'1px solid #f1f5f9',
+              background: c.chat_id === activeChatId ? '#f8fafc' : '#fff',
+              cursor:'pointer',
+              display:'flex',
+              justifyContent:'space-between',
+              alignItems:'center'
+            }}
+          >
+            <span style={{whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{c.title || 'Чат'}</span>
+            {!!c.unread_count && (
+              <span style={{
+                background:'#ef4444', color:'#fff', borderRadius: 9999, padding:'2px 8px',
+                fontSize:12, fontWeight:700, marginLeft:8, minWidth:20, textAlign:'center'
+              }}>
+                {c.unread_count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
-      {/* Левая колонка — список чатов */}
+      {/* Левая колонка — список чатов + бейджи */}
       <div style={{borderRight:'1px solid #eee'}}>
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px', gap:8}}>
-          <h3 style={{margin:0}}>Чаты {totalUnread > 0 && <span style={{fontSize:12, color:'#2563eb'}}>• {totalUnread}</span>}</h3>
-          {canNotify && notifPerm !== 'granted' && (
-            <button onClick={askNotif} style={{padding:'6px 10px', border:'1px solid #d1d5db', borderRadius:8, background:'#fff', cursor:'pointer'}}>
-              🔔 Уведомления
-            </button>
-          )}
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
+          <h3 style={{margin:0}}>Чаты</h3>
         </div>
-        <ChatList chats={chats} activeChatId={activeChatId} onSelect={(id) => { setActiveChatId(id); }} />
+        {renderChatList()}
+        {/* Если хотите использовать ваш компонент: 
+          <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
+        */}
       </div>
 
       {/* Правая колонка — текущий диалог */}
@@ -437,6 +452,7 @@ export default function ChatPage() {
                   .single();
                 if (msgErr) { console.error('[chat_messages.insert]', msgErr); return; }
 
+                // прикрепления
                 if (files && files.length) {
                   let i = 0;
                   for (const f of files) {
@@ -458,6 +474,12 @@ export default function ChatPage() {
                     i++;
                   }
                 }
+
+                // (опционально) дернуть вашу функцию пуш-рассылки, если она нужна
+                // try {
+                //   await supabase.functions.invoke('push-broadcast', { body: { chat_id: activeChatId, message_id: msg.id } });
+                // } catch {}
+
               } catch (e) {
                 console.error('[onSend thrown]', e);
               }
