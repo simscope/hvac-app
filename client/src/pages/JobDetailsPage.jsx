@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
-import heic2any from 'heic2any'; // ← добавлено для конвертации HEIC → JPEG
+//import heic2any from 'heic2any'; // ← добавлено для конвертации HEIC → JPEG
 
 /* ---------- UI ---------- */
 const PAGE = { padding: 16, display: 'grid', gap: 12 };
@@ -116,7 +116,7 @@ function makeSafeStorageKey(jobId, originalName) {
 
 /* ---------- HEIC → JPEG (Web) ---------- */
 const isHeicLike = (file) =>
-  file &&
+   file &&
   (
     file.type === 'image/heic' ||
     file.type === 'image/heif' ||
@@ -127,6 +127,16 @@ const isHeicLike = (file) =>
 // Возвращает исходный File, если не HEIC, или новый File(JPEG), если HEIC/HEIF
 async function convertIfHeicWeb(file) {
   if (!isHeicLike(file)) return file;
+
+  // Динамический импорт — подтягиваем пакет только когда нужен
+  let heic2any;
+  try {
+    const mod = await import('heic2any');
+    heic2any = mod.default || mod;
+  } catch (e) {
+    // Пакет не установился/не найден — сообщаем ясно
+    throw new Error('Пакет heic2any недоступен. Установите его в client/package.json');
+  }
 
   const jpegBlob = await heic2any({
     blob: file,
@@ -140,7 +150,6 @@ async function convertIfHeicWeb(file) {
     lastModified: Date.now(),
   });
 }
-
 /* ====================================================================== */
 
 export default function JobDetailsPage() {
@@ -566,23 +575,25 @@ export default function JobDetailsPage() {
 
       // Конвертируем HEIC/HEIF → JPEG, иначе возвращаем исходный файл
       let file;
-      try {
-        file = await convertIfHeicWeb(original);
-      } catch (convErr) {
+       try {
+           file = await convertIfHeicWeb(original); // конвертируем HEIC → JPEG, иначе вернёт original
+       } catch (convErr) {
         console.error('HEIC convert error:', convErr);
-        alert(`Не удалось конвертировать файл: ${original.name}`);
-        continue;
-      }
+       // Если это HEIC/HEIF — не даём загрузить сырой файл
+       if (isHeicLike(original)) {
+        alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен. Проверьте, что heic2any установлен.');
+         continue; // пропускаем этот файл
+        }
+       // Если это не HEIC — грузим как есть
+       file = original;
+       }
 
-      // Генерируем ключ уже от конечного имени (если был HEIC — теперь .jpg)
-      const key = makeSafeStorageKey(jobId, file.name);
-
-      try {
-        const { error } = await storage().upload(key, file, {
-          cacheControl: '3600',
-          upsert: false,
-          contentType: file.type || 'application/octet-stream',
-        });
+       const key = makeSafeStorageKey(jobId, file.name);
+       const { error } = await storage().upload(key, file, {
+       cacheControl: '3600',
+       upsert: false,
+       contentType: file.type || 'application/octet-stream',
+      });
         if (error) throw error;
       } catch (upErr) {
         console.error('upload error:', upErr, key);
@@ -1202,6 +1213,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
