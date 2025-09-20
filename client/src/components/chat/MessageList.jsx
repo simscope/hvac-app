@@ -1,6 +1,7 @@
 // client/src/components/chat/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
+import MessageInput from '../components/chat/MessageInput.jsx';
 
 /* ====== Галочки доставлено/прочитано ====== */
 function Ticks({ mine, stats, memberNames }) {
@@ -174,3 +175,4 @@ export default function MessageList({
     </div>
   );
 }
+
