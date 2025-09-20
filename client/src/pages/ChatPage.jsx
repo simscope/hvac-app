@@ -37,10 +37,9 @@ export default function ChatPage() {
 
   const authUid = user?.id || null;        // строгое auth.uid() — используем ДЛЯ КВИТАНЦИЙ
   const selfId  = authUid || appMemberId;  // автор сообщений/идентификатор участника
-  const RECEIPTS_USER_COLUMN = 'user_id';  // в вашей схеме — user_id
   const canSend = Boolean(selfId);
 
-  // --- AUTH session
+  // --- AUTH session (если войдёшь — включатся отправка/✓✓ и т.п.)
   useEffect(() => {
     let unsub;
     (async () => {
@@ -54,7 +53,7 @@ export default function ChatPage() {
     return () => { try { unsub?.(); } catch {} };
   }, []);
 
-  // === Загрузка СПИСКА чатов ===
+  // === Загрузка СПИСКА чатов (chat_members -> chats -> last chat_messages) ===
   useEffect(() => {
     const loadChats = async () => {
       const { data: mems, error: memErr } = await supabase
@@ -105,7 +104,7 @@ export default function ChatPage() {
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
 
-  // === Имена участников активного чата ===
+  // === Имена участников активного чата (и массив для кнопок вызова) ===
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -142,7 +141,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // Подписки
+  // Подписки: chat_messages + message_receipts + typing + адресный call
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -166,12 +165,12 @@ export default function ChatPage() {
           const m = full || payload.new;
           setMessages((prev) => [...prev, m]);
 
-          // доставлено — ТОЛЬКО если знаем auth.uid()
+          // «доставлено»: шлём ТОЛЬКО если есть auth.uid(); user_id проставит триггер в БД
           if (authUid && m.author_id !== authUid) {
             try {
               const { error } = await supabase
                 .from('message_receipts')
-                .insert({ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: authUid, status: 'delivered' });
+                .insert({ chat_id: m.chat_id, message_id: m.id, status: 'delivered' });
               if (error) console.warn('[message_receipts.insert delivered]', error);
             } catch (e) {
               console.warn('[message_receipts.insert delivered] thrown', e);
@@ -191,7 +190,7 @@ export default function ChatPage() {
         { event: 'INSERT', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
         (payload) => {
           setReceipts((prev) => {
-            const { message_id, [RECEIPTS_USER_COLUMN]: uid, status } = payload.new;
+            const { message_id, user_id: uid, status } = payload.new;
             const cur = prev[message_id] || { delivered: new Set(), read: new Set() };
             const delivered = new Set(cur.delivered);
             const read = new Set(cur.read);
@@ -241,14 +240,14 @@ export default function ChatPage() {
     };
   }, [activeChatId, authUid, selfId, fetchMessages]);
 
-  // Отметка read — тоже строго от имени auth.uid()
+  // Отметка read — тоже строго при наличии auth.uid(); user_id выставит триггер
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !authUid || !activeChatId) return; // без auth нельзя писать квитанции
     for (const message_id of ids) {
       try {
         const { error } = await supabase
           .from('message_receipts')
-          .insert({ chat_id: activeChatId, message_id, [RECEIPTS_USER_COLUMN]: authUid, status: 'read' });
+          .insert({ chat_id: activeChatId, message_id, status: 'read' });
         if (error) console.warn('[message_receipts.insert read]', error);
       } catch (e) {
         console.warn('[message_receipts.insert read] thrown', e);
@@ -371,10 +370,10 @@ export default function ChatPage() {
 
       {callState && (
         <CallModal
-          state={callState}
+          state={callState}              // { role, to?, offer? }
           user={{ id: selfId }}
           onClose={() => setCallState(null)}
-          channelName={`typing:${activeChatId}`}
+          channelName={`typing:${activeChatId}`} // тот же канал broadcast, что и typing
         />
       )}
     </div>
