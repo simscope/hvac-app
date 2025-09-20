@@ -8,14 +8,14 @@ import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
 
-/**
- * Колонка пользователя в таблице message_receipts.
- * Важно: под это заточены RLS-политики (user_id = auth.uid()).
- */
+/** ВАЖНО: колонка пользователя в message_receipts */
 const RECEIPTS_USER_COLUMN = 'user_id';
 
+/** Вспомогалка: вкладка активна/видима? */
+const isVisible = () => typeof document !== 'undefined' && document.visibilityState === 'visible';
+
 export default function ChatPage() {
-  // === Кто мы ===
+  // ===== AUTH =====
   const [sessionUser, setSessionUser] = useState(null);
   useEffect(() => {
     let unsub;
@@ -32,78 +32,55 @@ export default function ChatPage() {
   const selfId = sessionUser?.id ?? null;
   const canSend = Boolean(selfId);
 
-  // === Список чатов, текущий чат ===
-  const [chats, setChats] = useState([]);            // [{ chat_id, title, is_group, last_at, unread_count }]
+  // ===== ЛЕВАЯ КОЛОНКА (чаты) =====
+  const [chats, setChats] = useState([]); // [{chat_id,title,is_group,last_at,unread_count}]
   const [activeChatId, setActiveChatId] = useState(null);
-  const unreadTotal = useMemo(
-    () => chats.reduce((s, c) => s + (c.unread_count || 0), 0),
-    [chats]
-  );
 
-  // === Сообщения активного чата ===
+  // ===== ПРАВАЯ КОЛОНКА (сообщения) =====
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
-  // === Квитанции (delivered/read) по message_id ===
-  // { [mid]: { delivered:Set<uid>, read:Set<uid> } }
+  // Квитанции по message_id: { delivered:Set<uid>, read:Set<uid> }
   const [receipts, setReceipts] = useState({});
 
-  // === Подписки/каналы ===
+  // typing/rtc
   const receiptsSubRef = useRef(null);
   const messagesSubRef = useRef(null);
   const typingChannelRef = useRef(null);
 
-  // === Участники активного чата (для отображения имён и адресного звонка) ===
+  // участники для имён/звонков
   const [memberNames, setMemberNames] = useState({});
-  const [members, setMembers] = useState([]); // [{ id, name }]
+  const [members, setMembers] = useState([]);
+  const [callState, setCallState] = useState(null);
 
-  // === Состояние звонка ===
-  const [callState, setCallState] = useState(null); // {chatId, role:'caller'|'callee', to?, offer?, from?}
-
-  // --- Широковещательный икон-бейдж в TopNav (слушает customEvent)
+  // глобальный бейдж «Чат»
+  const unreadTotal = useMemo(() => chats.reduce((s, c) => s + (c.unread_count || 0), 0), [chats]);
   useEffect(() => {
-    const ev = new CustomEvent('chat-unread-changed', { detail: { total: unreadTotal } });
-    window.dispatchEvent(ev);
+    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: unreadTotal } }));
   }, [unreadTotal]);
 
-  // ------------------------------------------------------------
-  // 1) Загрузка списка чатов + первичная оценка unread_count
-  // ------------------------------------------------------------
-  const computeUnreadForChat = useCallback(async (chatId, myId) => {
-    if (!chatId || !myId) return 0;
-    // находим last_read_at из chat_members
-    const { data: cm } = await supabase
-      .from('chat_members')
-      .select('last_read_at')
-      .eq('chat_id', chatId)
-      .eq('member_id', myId)
-      .maybeSingle();
-
-    const lastRead = cm?.last_read_at ?? null;
-
-    // считаем входящие после last_read_at
-    const q = supabase
-      .from('chat_messages')
-      .select('id', { count: 'exact', head: true })
-      .eq('chat_id', chatId);
-
-    if (lastRead) q.gt('created_at', lastRead);
-    // не считаем собственные сообщения непрочитанными
-    if (myId) q.neq('author_id', myId);
-
-    const { count } = await q;
-    return count || 0;
+  // ====== УТИЛИТЫ ДЛЯ UNREAD ======
+  const bumpUnread = useCallback((chatId, delta) => {
+    setChats(prev => prev.map(c => c.chat_id === chatId
+      ? { ...c, unread_count: Math.max(0, (c.unread_count || 0) + delta) }
+      : c
+    ));
+  }, []);
+  const zeroUnread = useCallback((chatId) => {
+    setChats(prev => prev.map(c => c.chat_id === chatId ? { ...c, unread_count: 0 } : c));
+  }, []);
+  const touchLastAt = useCallback((chatId, ts) => {
+    setChats(prev => prev.map(c => c.chat_id === chatId ? { ...c, last_at: ts || c.last_at } : c));
   }, []);
 
+  // ====== ЗАГРУЗКА ЧАТОВ ======
   const loadChats = useCallback(async () => {
-    // все чаты, где мы участник
-    const { data: memberships, error: memErr } = await supabase
+    const { data: mems, error: memErr } = await supabase
       .from('chat_members')
-      .select('chat_id')
-      .order('chat_id');
+      .select('chat_id');
     if (memErr) { console.error('chat_members', memErr); setChats([]); return; }
 
-    const chatIds = [...new Set((memberships || []).map(m => m.chat_id))];
+    const chatIds = [...new Set((mems || []).map(m => m.chat_id))];
     if (!chatIds.length) { setChats([]); return; }
 
     const { data: chatsData, error: chatsErr } = await supabase
@@ -112,7 +89,6 @@ export default function ChatPage() {
       .in('id', chatIds);
     if (chatsErr) { console.error('chats', chatsErr); setChats([]); return; }
 
-    // найдём последние сообщения для сортировки
     const { data: lastMsgs } = await supabase
       .from('chat_messages')
       .select('id, chat_id, created_at')
@@ -120,57 +96,45 @@ export default function ChatPage() {
       .order('created_at', { ascending: false });
 
     const lastByChat = {};
-    (lastMsgs || []).forEach((m) => { if (!lastByChat[m.chat_id]) lastByChat[m.chat_id] = m.created_at; });
+    (lastMsgs || []).forEach(m => { if (!lastByChat[m.chat_id]) lastByChat[m.chat_id] = m.created_at; });
 
-    // посчитаем непрочитанные параллельно
-    const unread = await Promise.all(
-      chatIds.map((cid) => computeUnreadForChat(cid, selfId))
-    );
-    const unreadByChat = {};
-    chatIds.forEach((cid, i) => { unreadByChat[cid] = unread[i] || 0; });
-
+    // Начально ставим unread = 0, дальше управляем локально
     const mapped = (chatsData || [])
       .map(c => ({
         chat_id: c.id,
         title: c.title,
         is_group: c.is_group,
         last_at: lastByChat[c.id] || c.updated_at || c.created_at || null,
-        unread_count: unreadByChat[c.id] || 0,
+        unread_count: 0,
       }))
-      .sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
+      .sort((a,b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
 
     setChats(mapped);
     if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
-  }, [activeChatId, computeUnreadForChat, selfId]);
+  }, [activeChatId]);
 
   useEffect(() => {
     loadChats();
 
-    // Подписка для пересчёта левой колонки при новых сообщениях
+    // Подписка: новые сообщения (для обновления левой колонки)
     const ch = supabase
       .channel('overview-messages')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, async (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
         const m = payload.new;
-        // если сообщение не в активном чате — поднимем unread на 1, если это не наше
-        if (m.chat_id !== activeChatId && m.author_id !== selfId) {
-          setChats((prev) => prev.map((c) =>
-            c.chat_id === m.chat_id ? { ...c, unread_count: (c.unread_count || 0) + 1, last_at: m.created_at } : c
-          ));
-        } else {
-          // просто двигаем сортировку по времени
-          setChats((prev) => prev.map((c) =>
-            c.chat_id === m.chat_id ? { ...c, last_at: m.created_at } : c
-          ));
+        touchLastAt(m.chat_id, m.created_at);
+
+        // Если это НЕ наш чат или вкладка не видима — увеличиваем unread для чужих сообщений
+        if (m.author_id !== selfId) {
+          const sameChatOpen = m.chat_id === activeChatId;
+          if (!sameChatOpen || !isVisible()) bumpUnread(m.chat_id, 1);
         }
       })
       .subscribe();
 
     return () => { try { supabase.removeChannel(ch); } catch {} };
-  }, [activeChatId, loadChats, selfId]);
+  }, [loadChats, selfId, activeChatId, bumpUnread, touchLastAt]);
 
-  // ------------------------------------------------------------
-  // 2) Загрузка участников активного чата (для имён)
-  // ------------------------------------------------------------
+  // ====== УЧАСТНИКИ АКТИВНОГО ЧАТА ======
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
     (async () => {
@@ -179,7 +143,6 @@ export default function ChatPage() {
         .select('member_id')
         .eq('chat_id', activeChatId);
       const ids = (mems || []).map(m => m.member_id).filter(Boolean);
-
       if (!ids.length) { setMemberNames({}); setMembers([]); return; }
 
       const { data: techs } = await supabase
@@ -188,15 +151,13 @@ export default function ChatPage() {
         .in('id', ids);
 
       const map = {};
-      (techs || []).forEach((t) => { map[t.id] = t.name || t.id; });
+      (techs || []).forEach(t => { map[t.id] = t.name || t.id; });
       setMemberNames(map);
-      setMembers(ids.map((id) => ({ id, name: map[id] || (id ?? '').slice(0, 8) })));
+      setMembers(ids.map(id => ({ id, name: map[id] || (id ?? '').slice(0,8) })));
     })();
   }, [activeChatId]);
 
-  // ------------------------------------------------------------
-  // 3) Сообщения активного чата
-  // ------------------------------------------------------------
+  // ====== ЗАГРУЗКА СООБЩЕНИЙ ЧАТА ======
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -210,9 +171,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // ------------------------------------------------------------
-  // 4) Квитанции: начальная загрузка + realtime + резервный поллинг
-  // ------------------------------------------------------------
+  // ====== КВИТАНЦИИ (начальная загрузка/обновление/поллинг) ======
   const loadReceipts = useCallback(async (chatId) => {
     if (!chatId) { setReceipts({}); return; }
     const { data } = await supabase
@@ -230,14 +189,67 @@ export default function ChatPage() {
     setReceipts(map);
   }, []);
 
-  // Подписки + поллинг
+  // ====== ПОМЕТИТЬ ВЕСЬ ЧАТ КАК ПРОЧИТАННЫЙ ПРИ ОТКРЫТИИ ======
+  const markChatOpened = useCallback(async (chatId) => {
+    if (!chatId || !selfId) return;
+
+    // Берём все входящие из уже загруженных messages
+    const idsToRead = (messages || [])
+      .filter(m => m.author_id !== selfId)
+      .map(m => m.id);
+
+    if (idsToRead.length) {
+      const rows = idsToRead.map(message_id => ({
+        chat_id: chatId,
+        message_id,
+        [RECEIPTS_USER_COLUMN]: selfId,
+        status: 'read',
+      }));
+
+      await supabase
+        .from('message_receipts')
+        .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true })
+        .catch(() => {});
+
+      // локально сразу «синие ✓✓»
+      setReceipts(prev => {
+        const next = { ...prev };
+        for (const mid of idsToRead) {
+          const cur = next[mid] || { delivered: new Set(), read: new Set() };
+          cur.delivered.add(selfId);
+          cur.read.add(selfId);
+          next[mid] = cur;
+        }
+        return next;
+      });
+    }
+
+    // last_read_at = now (или время последнего сообщения)
+    const latest = (messages || []).length ? messages[messages.length - 1].created_at : new Date().toISOString();
+    await supabase
+      .from('chat_members')
+      .update({ last_read_at: latest })
+      .eq('chat_id', chatId)
+      .eq('member_id', selfId)
+      .catch(() => {});
+
+    // локально сбросим счетчик у этого чата
+    zeroUnread(chatId);
+  }, [messages, selfId, zeroUnread]);
+
+  // ====== ПОДПИСКИ НА АКТИВНЫЙ ЧАТ ======
   useEffect(() => {
     if (!activeChatId) return;
 
-    fetchMessages(activeChatId);
-    loadReceipts(activeChatId);
+    // загрузка истории + квитанций
+    (async () => {
+      await fetchMessages(activeChatId);
+      await loadReceipts(activeChatId);
+      // мгновенно считаем чат прочитанным при входе
+      await markChatOpened(activeChatId);
+    })();
 
-    // сообщения в активном чате
+    // realtime по сообщениям этого чата
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
     const msgCh = supabase
       .channel(`chat-${activeChatId}`)
@@ -246,23 +258,49 @@ export default function ChatPage() {
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
           const m = payload.new;
-          setMessages((prev) => [...prev, m]);
+          setMessages(prev => [...prev, m]);
+          touchLastAt(m.chat_id, m.created_at);
 
-          // Если это не наше сообщение — сразу поставим delivered
-          if (selfId && m.author_id !== selfId) {
-            await supabase
-              .from('message_receipts')
-              .upsert(
-                [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' }],
+          if (!selfId) return;
+
+          // для чужого сообщения — ставим delivered
+          if (m.author_id !== selfId) {
+            await supabase.from('message_receipts').upsert(
+              [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' }],
+              { onConflict: 'message_id,user_id,status', ignoreDuplicates: true }
+            ).catch(() => {});
+
+            // если чат открыт и вкладка видима — сразу read
+            if (isVisible()) {
+              await supabase.from('message_receipts').upsert(
+                [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'read' }],
                 { onConflict: 'message_id,user_id,status', ignoreDuplicates: true }
-              );
+              ).catch(() => {});
+              await supabase.from('chat_members')
+                .update({ last_read_at: m.created_at })
+                .eq('chat_id', m.chat_id)
+                .eq('member_id', selfId)
+                .catch(() => {});
+
+              setReceipts(prev => {
+                const cur = prev[m.id] || { delivered: new Set(), read: new Set() };
+                const delivered = new Set(cur.delivered); delivered.add(selfId);
+                const read = new Set(cur.read); read.add(selfId);
+                return { ...prev, [m.id]: { delivered, read } };
+              });
+
+              zeroUnread(m.chat_id);
+            } else {
+              // вкладка не видима — считаем как непрочитанное
+              bumpUnread(m.chat_id, 1);
+            }
           }
         }
       )
       .subscribe();
     messagesSubRef.current = msgCh;
 
-    // квитанции в активном чате
+    // realtime по квитанциям
     if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
     const rCh = supabase
       .channel(`receipts-${activeChatId}`)
@@ -271,12 +309,12 @@ export default function ChatPage() {
         { event: 'INSERT', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
         (payload) => {
           const r = payload.new;
-          setReceipts((prev) => {
+          setReceipts(prev => {
             const cur = prev[r.message_id] || { delivered: new Set(), read: new Set() };
             const delivered = new Set(cur.delivered);
             const read = new Set(cur.read);
-            if (r.status === 'delivered') delivered.add(r.user_id);
-            if (r.status === 'read') { delivered.add(r.user_id); read.add(r.user_id); }
+            if (r.status === 'delivered') delivered.add(r[RECEIPTS_USER_COLUMN]);
+            if (r.status === 'read') { delivered.add(r[RECEIPTS_USER_COLUMN]); read.add(r[RECEIPTS_USER_COLUMN]); }
             return { ...prev, [r.message_id]: { delivered, read } };
           });
         }
@@ -284,12 +322,12 @@ export default function ChatPage() {
       .subscribe();
     receiptsSubRef.current = rCh;
 
-    // простой канал для typing/вызовов (как и раньше, если используешь)
+    // typing канал (опционально)
     if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
-    const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } });
-    typingChannelRef.current = tCh.subscribe();
+    const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } }).subscribe();
+    typingChannelRef.current = tCh;
 
-    // резервный поллинг квитанций (если Realtime отключат)
+    // резервный поллинг квитанций (на всякий)
     const poll = setInterval(() => loadReceipts(activeChatId), 4000);
 
     return () => {
@@ -298,101 +336,75 @@ export default function ChatPage() {
       try { if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current); } catch {}
       try { if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current); } catch {}
     };
-  }, [activeChatId, fetchMessages, loadReceipts, selfId]);
+  }, [activeChatId, selfId, fetchMessages, loadReceipts, markChatOpened, bumpUnread, zeroUnread, touchLastAt]);
 
-  // ------------------------------------------------------------
-  // 5) Пометить как ПРОЧИТАНО (вызывается из MessageList при видимости)
-  // ------------------------------------------------------------
+  // ====== ПОМЕТИТЬ КОНКРЕТНЫЕ СООБЩЕНИЯ ПРОЧИТАННЫМИ (вызывается из MessageList) ======
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
 
-    // upsert read
-    const rows = ids.map((message_id) => ({
+    const rows = ids.map(message_id => ({
       chat_id: activeChatId,
       message_id,
       [RECEIPTS_USER_COLUMN]: selfId,
       status: 'read',
     }));
 
-    await supabase
-      .from('message_receipts')
-      .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
+    await supabase.from('message_receipts')
+      .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true })
+      .catch(() => {});
 
-    // поднимем свой last_read_at, чтобы корректно считался unread_count
-    await supabase
-      .from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
+    // last_read_at — временем последнего в пачке или now
+    const lastMessage = messages.find(m => m.id === ids[ids.length - 1]);
+    const ts = lastMessage?.created_at || new Date().toISOString();
+    await supabase.from('chat_members')
+      .update({ last_read_at: ts })
       .eq('chat_id', activeChatId)
-      .eq('member_id', selfId);
+      .eq('member_id', selfId)
+      .catch(() => {});
 
-    // обнулим счётчик именно у активного чата, общее — пересчитается
-    setChats((prev) => prev.map((c) => (c.chat_id === activeChatId ? { ...c, unread_count: 0 } : c)));
-  }, [activeChatId, selfId]);
+    // локально сразу ✓✓ + сброс счётчика
+    setReceipts(prev => {
+      const next = { ...prev };
+      for (const mid of ids) {
+        const cur = next[mid] || { delivered: new Set(), read: new Set() };
+        cur.delivered.add(selfId);
+        cur.read.add(selfId);
+        next[mid] = cur;
+      }
+      return next;
+    });
+    zeroUnread(activeChatId);
+  }, [activeChatId, selfId, messages, zeroUnread]);
 
-  // ------------------------------------------------------------
-  // 6) Текст «печатает…»
-  // ------------------------------------------------------------
+  // ====== typing text (из CallHeader) — при желании можно расширить ======
   const [typing, setTyping] = useState({});
   const typingNames = useMemo(() => {
-    const arr = Object.values(typing).map((t) => t?.name).filter(Boolean);
+    const arr = Object.values(typing).map(t => t?.name).filter(Boolean);
     if (!arr.length) return '';
     if (arr.length === 1) return `${arr[0]} печатает…`;
-    return `${arr.slice(0, 2).join(', ')}${arr.length > 2 ? ` и ещё ${arr.length - 2}` : ''} печатают…`;
+    return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
-  // живой приём typing
-  useEffect(() => {
-    if (!typingChannelRef.current) return;
-    const ch = typingChannelRef.current;
-    const handler = (payload) => {
-      const msg = payload.payload || {};
-      const { userId, name, untilTs } = msg;
-      if (!userId || userId === selfId) return;
-      setTyping((prev) => ({ ...prev, [userId]: { name, untilTs } }));
-    };
-    ch.on('broadcast', { event: 'typing' }, handler);
+  // ====== UI ======
+  const activeChat = useMemo(() => chats.find(c => c.chat_id === activeChatId) || null, [chats, activeChatId]);
 
-    const prune = setInterval(() => {
-      const now = Date.now();
-      setTyping((prev) => {
-        const next = { ...prev };
-        Object.keys(next).forEach((uid) => { if (!next[uid] || next[uid].untilTs < now) delete next[uid]; });
-        return next;
-      });
-    }, 1500);
-
-    return () => { try { ch.off('broadcast', { event: 'typing' }, handler); } catch {}; clearInterval(prune); };
-  }, [selfId, typingChannelRef.current]);
-
-  // ------------------------------------------------------------
-  // 7) Старт адресного звонка (если используешь CallModal)
-  // ------------------------------------------------------------
   const startCallTo = useCallback((targetId) => {
     if (!activeChatId || !selfId || !targetId || targetId === selfId) return;
     setCallState({ chatId: activeChatId, role: 'caller', to: targetId });
   }, [activeChatId, selfId]);
 
-  // ------------------------------------------------------------
-  // 8) Рендер
-  // ------------------------------------------------------------
-  const activeChat = useMemo(() => chats.find((c) => c.chat_id === activeChatId) || null, [chats, activeChatId]);
-
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', height: 'calc(100vh - 64px)' }}>
+    <div style={{display:'grid', gridTemplateColumns:'320px 1fr', height:'calc(100vh - 64px)'}}>
       {/* Левая колонка — список чатов */}
-      <div style={{ borderRight: '1px solid #eee' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px' }}>
-          <h3 style={{ margin: 0 }}>Чаты</h3>
+      <div style={{borderRight:'1px solid #eee'}}>
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px'}}>
+          <h3 style={{margin:0}}>Чаты</h3>
         </div>
-        <ChatList
-          chats={chats}
-          activeChatId={activeChatId}
-          onSelect={(cid) => setActiveChatId(cid)}
-        />
+        <ChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
       </div>
 
       {/* Правая колонка — текущий диалог */}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{display:'flex', flexDirection:'column'}}>
         <ChatHeader
           chat={activeChat}
           typingText={typingNames}
@@ -401,8 +413,7 @@ export default function ChatPage() {
           onCallTo={startCallTo}
           canCall={Boolean(selfId)}
         />
-
-        <div style={{ flex: '1 1 auto', overflow: 'auto', padding: '12px' }}>
+        <div style={{flex:'1 1 auto', overflow:'auto', padding:'12px'}}>
           <MessageList
             messages={messages}
             loading={loadingMessages}
@@ -412,8 +423,7 @@ export default function ChatPage() {
             memberNames={memberNames}
           />
         </div>
-
-        <div style={{ borderTop: '1px solid #eee', padding: '8px 12px' }}>
+        <div style={{borderTop:'1px solid #eee', padding:'8px 12px'}}>
           <MessageInput
             chatId={activeChatId}
             currentUser={{ id: selfId }}
@@ -421,9 +431,9 @@ export default function ChatPage() {
             onTyping={(name) => {
               if (!typingChannelRef.current || !activeChatId || !selfId) return;
               typingChannelRef.current.send({
-                type: 'broadcast',
-                event: 'typing',
-                payload: { userId: selfId, name, untilTs: Date.now() + 4000 },
+                type:'broadcast',
+                event:'typing',
+                payload:{ userId: selfId, name, untilTs: Date.now()+4000 }
               });
             }}
             onSend={async ({ text, files }) => {
@@ -431,11 +441,9 @@ export default function ChatPage() {
               const { data: msg, error: msgErr } = await supabase
                 .from('chat_messages')
                 .insert({ chat_id: activeChatId, author_id: selfId, body: text?.trim() || null })
-                .select()
-                .single();
+                .select().single();
               if (msgErr) return;
 
-              // первый файл подвязываем к сообщению; остальные просто грузим в стор (по желанию)
               if (files && files.length) {
                 let i = 0;
                 for (const f of files) {
@@ -452,13 +460,19 @@ export default function ChatPage() {
                 }
               }
 
-              // после отправки — чат точно «прочитан»
-              await markReadForMessageIds([msg.id]);
+              // своё сообщение считаем прочитанным мгновенно (для счётчика это неважно,
+              // но держим одинаковую логику last_read_at)
+              await supabase.from('chat_members')
+                .update({ last_read_at: msg.created_at })
+                .eq('chat_id', activeChatId)
+                .eq('member_id', selfId)
+                .catch(() => {});
+              zeroUnread(activeChatId);
             }}
           />
           {!canSend && (
-            <div style={{ fontSize: 12, color: '#888', marginTop: 6 }}>
-              Для отправки задайте текущего участника (auth): войдите в систему.
+            <div style={{fontSize:12, color:'#888', marginTop:6}}>
+              Войдите, чтобы отправлять сообщения.
             </div>
           )}
         </div>
