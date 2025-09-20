@@ -1,24 +1,28 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 
-// Галочки как в Телеграме: ✓ отправлено, ✓✓ (синие) прочитано кем-то
+/** Галочки для моих сообщений */
 function Ticks({ mine, stats, memberNames }) {
   if (!mine) return null;
-  const read = stats?.read && stats.read.size > 0;
+  const delivered = stats?.delivered?.size > 0;
+  const read = stats?.read?.size > 0;
   const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
-  const title = read ? `Прочитали: ${readers.join(', ')}` : 'Отправлено';
+  const title = read
+    ? `Прочитали: ${readers.join(', ')}`
+    : delivered ? 'Доставлено' : 'Отправлено';
   return (
     <span title={title} style={{ marginLeft: 6, fontSize: 12, userSelect: 'none' }}>
-      {!read && '✓'}
-      {read && <span style={{ color: '#1a73e8' }}>✓✓</span>}
+      {!delivered && '✓'}
+      {delivered && !read && '✓✓'}
+      {delivered && read && <span style={{ color: '#1a73e8' }}>✓✓</span>}
     </span>
   );
 }
 
+/** ссылка/миниатюра для вложений */
 function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-attachments' }) {
   const [url, setUrl] = useState(null);
   const isHttp = /^https?:\/\//i.test(pathOrUrl || '');
-
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -54,16 +58,18 @@ export default function MessageList({
   messages,
   loading,
   currentUserId,
-  receipts = {},
-  onMarkVisibleRead,
+  receiptsMap,          // { [messageId]: { delivered:Set, read:Set } }
+  onMarkVisibleRead,    // (ids:number[]) => void
   memberNames = {}
 }) {
   const bottomRef = useRef(null);
   const observerRef = useRef(null);
   const pendingToReadRef = useRef(new Set());
 
+  // автоскролл вниз
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages?.length]);
 
+  // наблюдаем за видимостью сообщений и сдаём «read» пачками
   useEffect(() => {
     if (!messages?.length || !onMarkVisibleRead) return;
 
@@ -78,10 +84,7 @@ export default function MessageList({
       if (ids.length) onMarkVisibleRead(ids);
     };
     let t = null;
-    const flushDebounced = () => {
-      clearTimeout(t);
-      t = setTimeout(flush, 250);
-    };
+    const debounced = () => { clearTimeout(t); t = setTimeout(flush, 200); };
 
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
@@ -90,20 +93,18 @@ export default function MessageList({
         const mine = e.target.getAttribute('data-mine') === '1';
         if (id && !mine) {
           pendingToReadRef.current.add(id);
-          flushDebounced();
+          debounced();
         }
       }
     }, { root: null, rootMargin: '0px 0px -20% 0px', threshold: 0.5 });
 
+    // подвесим после рендера
     setTimeout(() => {
       document.querySelectorAll('[data-mid]').forEach((el) => io.observe(el));
     }, 0);
 
     observerRef.current = io;
-    return () => {
-      try { io.disconnect(); } catch {}
-      clearTimeout(t);
-    };
+    return () => { try { io.disconnect(); } catch {}; };
   }, [messages, onMarkVisibleRead, currentUserId]);
 
   if (loading) return <div>Загрузка…</div>;
@@ -113,8 +114,7 @@ export default function MessageList({
     <div>
       {messages.map((m) => {
         const mine = (m.author_id || m.sender_id) === currentUserId;
-        const stats = receipts[m.id];
-
+        const stats = receiptsMap[m.id] || { delivered:new Set(), read:new Set() };
         return (
           <div
             key={m.id}
@@ -139,12 +139,9 @@ export default function MessageList({
                       fileName={m.file_name}
                       fileType={m.file_type}
                       fileSize={m.file_size}
-                      bucket="chat-attachments"
                     />
                   ) : (
-                    <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                      {m.attachment_url}
-                    </a>
+                    <a href={m.attachment_url} target="_blank" rel="noreferrer">{m.attachment_url}</a>
                   )}
                 </div>
               )}
