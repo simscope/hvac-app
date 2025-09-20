@@ -556,13 +556,14 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- файлы ---------- */
-  const onPick = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    setUploadBusy(true);
+// ПОЛНОСТЬЮ заменить существующую функцию
+const onPick = async (e) => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  setUploadBusy(true);
 
+  try {
     for (const original of files) {
-      // проверка допустимых расширений/типов
       const allowed =
         /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
         /pdf$/i.test(original.type) ||
@@ -573,61 +574,42 @@ export default function JobDetailsPage() {
         continue;
       }
 
-      // Конвертируем HEIC/HEIF → JPEG, иначе возвращаем исходный файл
+      // HEIC/HEIF → JPEG (если нужно)
       let file;
-       try {
-           file = await convertIfHeicWeb(original); // конвертируем HEIC → JPEG, иначе вернёт original
-       } catch (convErr) {
+      try {
+        file = await convertIfHeicWeb(original); // вернёт original, если это не HEIC
+      } catch (convErr) {
         console.error('HEIC convert error:', convErr);
-       // Если это HEIC/HEIF — не даём загрузить сырой файл
-       if (isHeicLike(original)) {
-        alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен. Проверьте, что heic2any установлен.');
-         continue; // пропускаем этот файл
+        // ВАЖНО: не грузим сырые HEIC/HEIF
+        if (isHeicLike(original)) {
+          alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен. Проверьте, что heic2any установлен.');
+          continue;
         }
-       // Если это не HEIC — грузим как есть
-       file = original;
-       }
+        // Если это не HEIC — грузим как есть
+        file = original;
+      }
 
-       const key = makeSafeStorageKey(jobId, file.name);
-       const { error } = await storage().upload(key, file, {
-       cacheControl: '3600',
-       upsert: false,
-       contentType: file.type || 'application/octet-stream',
-      });
+      const key = makeSafeStorageKey(jobId, file.name);
+
+      try {
+        const { error } = await storage().upload(key, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || 'application/octet-stream',
+        });
         if (error) throw error;
-      } catch (upErr) 
+      } catch (upErr) {
         console.error('upload error:', upErr, key);
         alert(`Не удалось загрузить файл: ${file.name}`);
       }
     }
-
+  } finally {
     await loadPhotos();
     setUploadBusy(false);
     if (fileRef.current) fileRef.current.value = '';
-  };
+  }
+};
 
-  const delPhoto = async (name) => {
-    if (!window.confirm('Удалить файл?')) return;
-    const { error } = await storage().remove([`${jobId}/${name}`]);
-    if (error) {
-      alert('Не удалось удалить файл');
-      console.error(error);
-      return;
-    }
-    await loadPhotos();
-  };
-
-  const toggleAllPhotos = (v) => {
-    if (v) {
-      const next = {};
-      photos.forEach((p) => {
-        next[p.name] = true;
-      });
-      setChecked(next);
-    } else {
-      setChecked({});
-    }
-  };
   const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
 
   const downloadOne = async (name) => {
@@ -1213,6 +1195,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
