@@ -35,7 +35,8 @@ export default function ChatPage() {
     ? (window.APP_MEMBER_ID || localStorage.getItem('member_id') || null)
     : null;
   const selfId = user?.id || appMemberId;
-  // ВАЖНО: у вас в message_receipts колонка называется user_id
+
+  // В message_receipts у вас колонка user_id
   const RECEIPTS_USER_COLUMN = 'user_id';
 
   const canSend = Boolean(selfId);
@@ -137,7 +138,7 @@ export default function ChatPage() {
       .select('id, chat_id, author_id, body, attachment_url, created_at, file_url, file_name, file_type, file_size')
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true })
-      .limit(300); // чтобы не грузить тысячи и не дергать DOM
+      .limit(300);
     setLoadingMessages(false);
     if (error) console.error('chat_messages', error);
     setMessages(data || []);
@@ -154,7 +155,6 @@ export default function ChatPage() {
     readQueueRef.current.clear();
     if (!ids.length) return;
 
-    // готовим пачку строк на upsert
     const rows = ids.map((message_id) => ({
       chat_id: activeChatId,
       message_id,
@@ -162,19 +162,21 @@ export default function ChatPage() {
       status: 'read',
     }));
 
-    // один запрос вместо N
-    await supabase
-      .from('message_receipts')
-      .upsert(rows, { onConflict: 'chat_id,message_id,user_id' })
-      .catch(() => {});
+    try {
+      await supabase
+        .from('message_receipts')
+        .upsert(rows, { onConflict: 'chat_id,message_id,user_id' });
+    } catch (e) {
+      // проглатываем — повторная отправка нам не критична
+    }
 
-    // разово обновляем last_read_at
-    await supabase
-      .from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('chat_id', activeChatId)
-      .eq('member_id', selfId)
-      .catch(() => {});
+    try {
+      await supabase
+        .from('chat_members')
+        .update({ last_read_at: new Date().toISOString() })
+        .eq('chat_id', activeChatId)
+        .eq('member_id', selfId);
+    } catch (e) {}
   }, [activeChatId, selfId]);
 
   const scheduleFlush = useCallback(() => {
@@ -211,10 +213,12 @@ export default function ChatPage() {
 
           // помечаем "доставлено" для входящих (один upsert)
           if (selfId && m.author_id !== selfId) {
-            await supabase.from('message_receipts')
-              .upsert([{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' }],
-                      { onConflict: 'chat_id,message_id,user_id' })
-              .catch(() => {});
+            try {
+              await supabase.from('message_receipts').upsert(
+                [{ chat_id: m.chat_id, message_id: m.id, [RECEIPTS_USER_COLUMN]: selfId, status: 'delivered' }],
+                { onConflict: 'chat_id,message_id,user_id' }
+              );
+            } catch (e) {}
           }
         }
       )
@@ -390,10 +394,10 @@ export default function ChatPage() {
 
       {callState && (
         <CallModal
-          state={callState}              // { role, to?, offer? }
+          state={callState}
           user={{ id: selfId }}
           onClose={() => setCallState(null)}
-          channelName={`typing:${activeChatId}`} // тот же канал broadcast, что и typing
+          channelName={`typing:${activeChatId}`}
         />
       )}
     </div>
