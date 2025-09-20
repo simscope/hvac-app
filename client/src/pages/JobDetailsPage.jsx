@@ -322,7 +322,7 @@ export default function JobDetailsPage() {
       // затем profiles.full_name, и только если не «похоже на роль» — profiles.name
       const { data: profs } = await supabase
         .from('profiles')
-        .select('id, full_name, name')
+        .select('id, full_name')
         .in('id', ids);
 
       (profs || []).forEach((p) => {
@@ -1205,3 +1205,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
