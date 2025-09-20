@@ -1,20 +1,37 @@
 // client/src/components/chat/MessageList.jsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 
-/* =========================
-   Галочки (отправлено / доставлено / прочитано)
-   ========================= */
+/* ========================= helpers ========================= */
+
+const fmtTime = (ts) => {
+  try {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+};
+
+const isHttpUrl = (v) => /^https?:\/\//i.test(String(v || ''));
+
+/* ========================= ticks ========================= */
+/** Галочки статуса (без хуков внутри). Показываются только для своих сообщений. */
 function Ticks({ mine, stats, memberNames }) {
   if (!mine) return null;
 
   const delivered = stats?.delivered && stats.delivered.size > 0;
   const read = stats?.read && stats.read.size > 0;
 
-  const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
+  const readers = useMemo(
+    () => (read ? Array.from(stats.read).map((id) => memberNames?.[id] || id) : []),
+    [read, stats, memberNames]
+  );
+
   const title = readers.length
     ? `Прочитали: ${readers.join(', ')}`
-    : delivered ? 'Доставлено' : 'Отправлено';
+    : delivered
+    ? 'Доставлено'
+    : 'Отправлено';
 
   return (
     <span title={title} style={{ marginLeft: 6, fontSize: 12, userSelect: 'none' }}>
@@ -25,43 +42,43 @@ function Ticks({ mine, stats, memberNames }) {
   );
 }
 
-/* =========================
-   Один вложенный файл (подписанная ссылка из Storage)
-   ========================= */
+/* ========================= inline file ========================= */
+/** Один файл внутри сообщения (поддержка путей в бакете и внешних URL). */
 function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-attachments' }) {
   const [url, setUrl] = useState(null);
-  const isHttp = /^https?:\/\//i.test(pathOrUrl || '');
 
   useEffect(() => {
-    let alive = true;
+    let mounted = true;
     (async () => {
       if (!pathOrUrl) return;
-      if (isHttp) { setUrl(pathOrUrl); return; }
-      try {
-        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
-        if (!error && alive) setUrl(data?.signedUrl || null);
-      } catch { /* no-op */ }
+      if (isHttpUrl(pathOrUrl)) {
+        if (mounted) setUrl(pathOrUrl);
+        return;
+      }
+      // pathOrUrl ожидается как ПУТЬ внутри бакета (без имени бакета)
+      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
+      if (!error && mounted) setUrl(data?.signedUrl || null);
     })();
-    return () => { alive = false; };
-  }, [pathOrUrl, bucket, isHttp]);
+    return () => {
+      mounted = false;
+    };
+  }, [pathOrUrl, bucket]);
 
   const isImage = (fileType || '').startsWith('image/');
-  if (!url) {
-    return (
-      <div style={{ color: '#94a3b8', fontSize: 12 }}>
-        Загрузка файла…
-      </div>
-    );
-  }
 
   return (
-    <div>
+    <div style={{ marginTop: 6 }}>
       {isImage ? (
-        <a href={url} target="_blank" rel="noreferrer">
-          <img src={url} alt={fileName || 'image'} style={{ maxWidth: '50%', borderRadius: 6 }} />
+        <a href={url || '#'} target="_blank" rel="noreferrer">
+          {/* фиксируем размеры, чтобы не прыгал список */}
+          <img
+            src={url || ''}
+            alt={fileName || 'image'}
+            style={{ maxWidth: '60%', borderRadius: 6, display: 'block' }}
+          />
         </a>
       ) : (
-        <a href={url} target="_blank" rel="noreferrer">
+        <a href={url || '#'} target="_blank" rel="noreferrer">
           {fileName || 'file'} {fileSize ? `(${Math.round(fileSize / 1024)} KB)` : ''}
         </a>
       )}
@@ -69,86 +86,89 @@ function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-at
   );
 }
 
-const fmtTime = (ts) => {
-  try {
-    const d = new Date(ts);
-    return d.toLocaleString();
-  } catch { return ''; }
-};
+/* ========================= main list ========================= */
 
 export default function MessageList({
   messages,
   loading,
   currentUserId,
   receipts = {},
-  onMarkVisibleRead,
+  onMarkVisibleRead, // (ids: string[])
   memberNames = {},
 }) {
-  const listRef = useRef(null);
   const bottomRef = useRef(null);
-  const observerRef = useRef(null);
-  const pendingToReadRef = useRef(new Set());
+  const ioRef = useRef(null);
+  const queuedToReadRef = useRef(new Set());
 
-  /* автоскролл к низу при появлении новых сообщений */
+  // аккуратный автоскролл: если мы и так внизу — скроллим "smooth", иначе без анимации
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const el = bottomRef.current;
+    if (!el) return;
+
+    const nearBottom =
+      Math.abs(window.scrollY + window.innerHeight - document.body.scrollHeight) < 120;
+
+    el.scrollIntoView({ behavior: nearBottom ? 'smooth' : 'auto' });
   }, [messages?.length]);
 
-  /* помечаем как read чужие сообщения, когда они видимы */
+  // пометка "прочитано" только для ЧУЖИХ сообщений, попавших в viewport
   useEffect(() => {
     if (!messages?.length || !onMarkVisibleRead) return;
 
-    // гасим старый наблюдатель
-    if (observerRef.current) {
-      try { observerRef.current.disconnect(); } catch {}
-      observerRef.current = null;
-    }
+    // снять старый observer
+    try {
+      ioRef.current?.disconnect();
+    } catch {}
+    ioRef.current = null;
 
-    // батч для ids
     const flush = () => {
-      const ids = Array.from(pendingToReadRef.current);
-      pendingToReadRef.current.clear();
+      const ids = Array.from(queuedToReadRef.current);
+      queuedToReadRef.current.clear();
       if (ids.length) onMarkVisibleRead(ids);
     };
-    let flushTimer = null;
-    const scheduleFlush = () => {
-      clearTimeout(flushTimer);
-      flushTimer = setTimeout(flush, 250);
-    };
+    const debouncedFlush = (() => {
+      let t = null;
+      return () => {
+        clearTimeout(t);
+        t = setTimeout(flush, 250);
+      };
+    })();
 
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue;
-        const id = e.target.getAttribute('data-mid');
-        const mine = e.target.getAttribute('data-mine') === '1';
-        if (id && !mine) {
-          pendingToReadRef.current.add(id);
-          scheduleFlush();
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          const id = e.target.getAttribute('data-mid');
+          const mine = e.target.getAttribute('data-mine') === '1';
+          if (id && !mine) {
+            queuedToReadRef.current.add(id);
+            debouncedFlush();
+          }
         }
-      }
-    }, {
-      root: listRef.current,
-      rootMargin: '0px 0px -20% 0px',
-      threshold: 0.5,
+      },
+      // небольшой отрицательный bottom-margin, чтобы считать "прочитанным"
+      // когда карточка реально видна, а не на границе
+      { root: null, rootMargin: '0px 0px -20% 0px', threshold: 0.6 }
+    );
+
+    // Подвешиваем после вставки DOM-узлов
+    requestAnimationFrame(() => {
+      document.querySelectorAll('[data-mid]').forEach((el) => io.observe(el));
     });
 
-    // навешиваем только на элементы внутри списка
-    queueMicrotask(() => {
-      listRef.current?.querySelectorAll('[data-mid]').forEach(el => io.observe(el));
-    });
-
-    observerRef.current = io;
+    ioRef.current = io;
     return () => {
-      clearTimeout(flushTimer);
-      try { io.disconnect(); } catch {}
+      try {
+        io.disconnect();
+      } catch {}
     };
-  }, [messages, onMarkVisibleRead, currentUserId]);
+  }, [messages, onMarkVisibleRead]);
 
-  if (loading) return <div>Загрузка…</div>;
-  if (!messages?.length) return <div>Сообщений пока нет</div>;
+  if (loading) return <div style={{ color: '#64748b' }}>Загрузка…</div>;
+  if (!messages?.length) return <div style={{ color: '#94a3b8' }}>Сообщений пока нет</div>;
 
   return (
-    <div ref={listRef}>
+    <div>
       {messages.map((m) => {
         const mine = (m.author_id || m.sender_id) === currentUserId;
         const stats = receipts[m.id];
@@ -158,7 +178,11 @@ export default function MessageList({
             key={m.id}
             data-mid={m.id}
             data-mine={mine ? '1' : '0'}
-            style={{ margin: '8px 0', display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}
+            style={{
+              margin: '8px 0',
+              display: 'flex',
+              justifyContent: mine ? 'flex-end' : 'flex-start',
+            }}
           >
             <div
               style={{
@@ -171,8 +195,9 @@ export default function MessageList({
             >
               {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
 
+              {/* вложение: приоритет file_*; fallback на legacy attachment_url */}
               {(m.file_url || m.attachment_url) && (
-                <div style={{ marginTop: 6 }}>
+                <div>
                   {m.file_url ? (
                     <InlineFile
                       pathOrUrl={m.file_url}
