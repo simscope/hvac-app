@@ -1,7 +1,7 @@
 // client/src/components/chat/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import { ... } from '../../api/chat';
+import { sendMessage } from '../../api/chat';
 
 
 
@@ -161,6 +161,7 @@ export default function MessageList({
     </div>
   );
 }
+
 
 
 
