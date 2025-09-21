@@ -1,7 +1,6 @@
 // client/api/chat.js
 import { supabase } from '../supabaseClient';
 
-/** Отправка сообщения через RPC, автоматически создаёт квитанции */
 export async function sendMessage(chatId, text, fileUrl = null) {
   const { data, error } = await supabase.rpc('send_message', {
     p_chat_id: chatId,
@@ -12,7 +11,6 @@ export async function sendMessage(chatId, text, fileUrl = null) {
   return data;
 }
 
-/** Загрузка истории сообщений */
 export async function listMessages(chatId, limit = 200) {
   const { data, error } = await supabase
     .from('chat_messages')
@@ -24,7 +22,6 @@ export async function listMessages(chatId, limit = 200) {
   return data;
 }
 
-/** Подписка на новые сообщения (Realtime) */
 export function subscribeToChat(chatId, onInsert) {
   const ch = supabase
     .channel(`chat_${chatId}`)
@@ -35,21 +32,4 @@ export function subscribeToChat(chatId, onInsert) {
     )
     .subscribe();
   return () => supabase.removeChannel(ch);
-}
-
-/** Отметить сообщения прочитанными текущим пользователем */
-export async function markRead(chatId, messageIds) {
-  if (!messageIds?.length) return;
-  const { data: { user } } = await supabase.auth.getUser();
-  const rows = messageIds.map(id => ({
-    chat_id: chatId,
-    message_id: id,
-    user_id: user.id,
-    status: 'read',
-    read_at: new Date().toISOString(),
-  }));
-  const { error } = await supabase
-    .from('message_receipts')
-    .upsert(rows, { onConflict: 'chat_id,message_id,user_id' });
-  if (error) throw error;
 }
