@@ -6,7 +6,6 @@ import ChatList from '../components/chat/ChatList.jsx';
 import MessageList from '../components/chat/MessageList.jsx';
 import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
-import CallModal from '../components/chat/CallModal.jsx';
 
 import { markChatRead } from '../api/notifications';
 
@@ -25,7 +24,7 @@ export default function ChatPage() {
   // receipts
   const [receipts, setReceipts] = useState({});
 
-  // typing/calls
+  // typing (без звонков)
   const [typing, setTyping] = useState({});
   const typingChannelRef = useRef(null);
   const receiptsSubRef = useRef(null);
@@ -45,7 +44,7 @@ export default function ChatPage() {
       : null;
   const selfId = user?.id || appMemberId;
   const RECEIPTS_USER_COLUMN = 'user_id';
-  const canSend = Boolean(selfId);
+  const canSend = Boolean(selfId); // eslint-disable-line no-unused-vars
 
   // ==== auth
   useEffect(() => {
@@ -138,7 +137,7 @@ export default function ChatPage() {
     setMessages(data || []);
   }, []);
 
-  // ==== subscriptions for active chat
+  // ==== subscriptions for active chat (без звонков)
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -146,7 +145,6 @@ export default function ChatPage() {
     setReceipts({});
     setTyping({});
     setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 }));
-    // Сбросим уведомления по открытому чату
     markChatRead(activeChatId).catch(() => {});
 
     // messages
@@ -192,7 +190,7 @@ export default function ChatPage() {
       .subscribe();
     receiptsSubRef.current = rCh;
 
-    // typing (broadcast)
+    // typing (только печатает…, без любых call-событий)
     if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } })
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -239,7 +237,6 @@ export default function ChatPage() {
       .eq('chat_id', activeChatId)
       .eq('member_id', selfId)
       .catch(() => {});
-    // и обновим уведомления по открытому чату (на случай фоновых)
     markChatRead(activeChatId).catch(() => {});
   }, [activeChatId, selfId]);
 
@@ -250,11 +247,6 @@ export default function ChatPage() {
     return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
-  const startCallTo = useCallback((targetId) => {
-    // упрощено; логика звонков у тебя уже есть
-    console.log('call to', targetId);
-  }, []);
-
   // суммарный бейдж для верхнего меню (локальные непрочитанные)
   useEffect(() => {
     const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
@@ -263,17 +255,15 @@ export default function ChatPage() {
     }
   }, [unreadByChat]);
 
-  // ====== Лэйаут: фиксируем верх, скроллим только колонки
+  // ====== Лэйаут: фикс наверху, скроллятся только колонки
   return (
     <div
       style={{
-        // эта обёртка должна сидеть ПОД твоим TopNav, у которого position:sticky
-        // высота: всё окно минус высота топ-навигации (у тебя ~64px)
         height: 'calc(100vh - 64px)',
         display: 'grid',
         gridTemplateColumns: '320px 1fr',
         gap: 0,
-        overflow: 'hidden', // важно — чтобы скролл был только внутри колонок
+        overflow: 'hidden',
       }}
     >
       {/* Левая колонка */}
@@ -296,7 +286,8 @@ export default function ChatPage() {
             chat={chats.find(c => c.chat_id === activeChatId) || null}
             typingText={typingText}
             members={members}
-            onCall={(id) => startCallTo(id)}
+            // ВАЖНО: не передаём onCall — кнопка звонка должна скрыться,
+            // а если в ChatHeader не предусмотрено — добавь там условие!
           />
         </div>
 
@@ -320,9 +311,6 @@ export default function ChatPage() {
           />
         </div>
       </div>
-
-      {/* модал звонков по твоей логике — оставил заглушкой */}
-      <CallModal open={false} onClose={() => {}} />
     </div>
   );
 }
