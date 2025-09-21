@@ -1,6 +1,6 @@
-// client/components/chat/MessageInput.jsx
+// client/src/components/chat/MessageInput.jsx
 import React, { useState } from 'react';
-import { sendMessage } from '../../api/chat';
+import { sendMessage } from '../../api/chat'; // ВАЖНО: две точки вверх!
 
 export default function MessageInput({ chatId, onSent }) {
   const [text, setText] = useState('');
