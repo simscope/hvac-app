@@ -1,97 +1,65 @@
-// client/src/api/notifications.js
+// клиентские помощники для уведомлений
 import { supabase } from '../supabaseClient';
 
 /**
- * Возвращает список уведомлений текущего пользователя.
- * Важно: chat_id берём из payload->>chat_id (псевдополем chat_id).
+ * Вернёт непрочитанные уведомления текущего пользователя.
+ * Можно ограничить по типу/чату.
  */
-export async function listMyNotifications({ onlyUnread = false, limit = 50 } = {}) {
-  const { data: auth } = await supabase.auth.getUser();
-  const userId = auth?.user?.id;
-  if (!userId) return [];
+export async function listMyNotifications({ type, chatId } = {}) {
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
+  if (authErr) throw authErr;
+  if (!user) return [];
 
-  let q = supabase
-    .from('notifications')
-    .select('id, type, payload, read_at, created_at, chat_id:payload->>chat_id')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  let q = supabase.from('notifications').select('*')
+    .eq('user_id', user.id)
+    .is('read_at', null)
+    .order('created_at', { ascending: false });
 
-  if (onlyUnread) q = q.is('read_at', null);
+  if (type)   q = q.eq('type', type);
+  if (chatId) q = q.eq('chat_id', chatId);
 
   const { data, error } = await q;
   if (error) throw error;
   return data || [];
 }
 
-/**
- * Пометить одно уведомление прочитанным.
- */
-export async function markNotificationRead(id) {
-  const { error } = await supabase
-    .from('notifications')
+/** Пометить набор уведомлений прочитанными. */
+export async function markRead(ids = []) {
+  if (!ids.length) return;
+  const { error } = await supabase.from('notifications')
     .update({ read_at: new Date().toISOString() })
-    .eq('id', id)
-    .is('read_at', null);
+    .in('id', ids);
   if (error) throw error;
 }
 
-/**
- * Пометить прочитанными ВСЕ уведомления по данному чату текущего пользователя.
- * Тут ключевое — фильтрация по payload->>chat_id.
- */
+/** Пометить ВСЕ уведомления по чату прочитанными. */
 export async function markChatRead(chatId) {
-  const { data: auth } = await supabase.auth.getUser();
-  const userId = auth?.user?.id;
-  if (!userId || !chatId) return;
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user || !chatId) return;
 
-  const { error } = await supabase
-    .from('notifications')
+  const { error } = await supabase.from('notifications')
     .update({ read_at: new Date().toISOString() })
-    .eq('user_id', userId)
-    .is('read_at', null)
-    .filter('payload->>chat_id', 'eq', chatId);
-
-  if (error) throw error;
+    .eq('user_id', user.id)
+    .eq('chat_id', chatId)
+    .eq('type', 'chat:new_message')
+    .is('read_at', null);
+  if (error) console.warn('notif markChatRead error', error);
 }
 
-/**
- * Количество непрочитанных уведомлений.
- */
-export async function unreadCount() {
-  const { data: auth } = await supabase.auth.getUser();
-  const userId = auth?.user?.id;
-  if (!userId) return 0;
+/** Пересчитать общий счётчик и распространить событие наверх (для TopNav). */
+export async function recalcAndDispatchUnreadTotal() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return 0;
 
   const { count, error } = await supabase
     .from('notifications')
     .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
+    .eq('user_id', user.id)
     .is('read_at', null);
 
-  if (error) throw error;
-  return count || 0;
-}
-
-/**
- * Realtime подписка на новые уведомления.
- * В колбэке фильтруем по user_id (PostgREST-фильтр на канал не повесить).
- */
-export function subscribeMyNotifications(onInsert) {
-  const ch = supabase
-    .channel('notif-feed')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'notifications' },
-      async (payload) => {
-        const row = payload.new;
-        try {
-          const { data: auth } = await supabase.auth.getUser();
-          const userId = auth?.user?.id;
-          if (row?.user_id && row.user_id === userId) onInsert?.(row);
-        } catch {}
-      }
-    )
-    .subscribe();
-  return () => supabase.removeChannel(ch);
+  const total = error ? 0 : (count ?? 0);
+  try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(total)); } catch {}
+  const ev = new CustomEvent('chat-unread-changed', { detail: { total } });
+  window.dispatchEvent(ev);
+  return total;
 }
