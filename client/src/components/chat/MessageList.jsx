@@ -1,13 +1,22 @@
 // client/src/components/chat/MessageList.jsx
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
+
+/**
+ * Вспомогательные компоненты:
+ *  - галочки (✓/✓✓) с подсказкой кто прочитал
+ *  - предпросмотр файла (автогенерация signed URL для storage пути)
+ */
 
 function Ticks({ mine, stats, memberNames }) {
   if (!mine) return null;
   const delivered = stats?.delivered && stats.delivered.size > 0;
   const read = stats?.read && stats.read.size > 0;
+
   const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
-  const title = readers.length ? `Прочитали: ${readers.join(', ')}` : (delivered ? 'Доставлено' : 'Отправлено');
+  const title = readers.length
+    ? `Прочитали: ${readers.join(', ')}`
+    : (delivered ? 'Доставлено' : 'Отправлено');
 
   return (
     <span title={title} style={{ marginLeft: 6, fontSize: 12, userSelect: 'none' }}>
@@ -27,8 +36,12 @@ function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-at
     (async () => {
       if (!pathOrUrl) return;
       if (isHttp) { setUrl(pathOrUrl); return; }
-      const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
-      if (!error && mounted) setUrl(data?.signedUrl || null);
+      try {
+        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
+        if (!error && mounted) setUrl(data?.signedUrl || null);
+      } catch {
+        /* noop */
+      }
     })();
     return () => { mounted = false; };
   }, [pathOrUrl, bucket, isHttp]);
@@ -38,7 +51,8 @@ function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-at
     <div>
       {isImage ? (
         <a href={url || '#'} target="_blank" rel="noreferrer">
-          <img src={url || ''} alt={fileName || 'image'} style={{ maxWidth: '50%', borderRadius: 6 }} />
+          {/* eslint-disable-next-line jsx-a11y/alt-text */}
+          <img src={url || ''} style={{ maxWidth: '50%', borderRadius: 6 }} />
         </a>
       ) : (
         <a href={url || '#'} target="_blank" rel="noreferrer">
@@ -49,36 +63,53 @@ function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-at
   );
 }
 
-const fmtTime = ts => { try { return new Date(ts).toLocaleString(); } catch { return ''; } };
+const fmtTime = (ts) => {
+  try { return new Date(ts).toLocaleString(); } catch { return ''; }
+};
 
+/**
+ * MessageList
+ *
+ * Props:
+ * - messages: массив сообщений (id, chat_id, author_id, body, file_* ...)
+ * - loading: флаг загрузки
+ * - currentUserId: id текущего пользователя (тот же тип, что и author_id)
+ * - receipts: { [messageId]: { delivered:Set, read:Set } }
+ * - onMarkVisibleRead?: (ids: string[]) => void
+ * - memberNames?: { [userId]: string }
+ */
 export default function MessageList({
-  chatId,
   messages,
   loading,
   currentUserId,
   receipts = {},
   onMarkVisibleRead,
-  memberNames = {},
-  focusMessageId,           // <- НОВОЕ: сообщение, к которому нужно проскроллить/подсветить
+  memberNames = {}
 }) {
   const bottomRef = useRef(null);
   const observerRef = useRef(null);
   const pendingToReadRef = useRef(new Set());
-  const [highlightId, setHighlightId] = useState(null);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages?.length]);
+  // автоскролл вниз при появлении новых
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages?.length]);
 
-  // авто-маркировка "прочитано"
+  // наблюдаем появление НЕ своих сообщений в вьюпорте и помечаем read
   useEffect(() => {
     if (!messages?.length || !onMarkVisibleRead) return;
 
     try { observerRef.current?.disconnect(); } catch {}
+
     const flush = () => {
       const ids = Array.from(pendingToReadRef.current);
       pendingToReadRef.current.clear();
       if (ids.length) onMarkVisibleRead(ids);
     };
-    const flushDebounced = (() => { let t = null; return () => { clearTimeout(t); t = setTimeout(flush, 300); }; })();
+    const flushDebounced = (() => {
+      let t = null;
+      return () => { clearTimeout(t); t = setTimeout(flush, 300); };
+    })();
 
     const io = new IntersectionObserver((entries) => {
       for (const e of entries) {
@@ -100,27 +131,14 @@ export default function MessageList({
     return () => { try { io.disconnect(); } catch {} };
   }, [messages, onMarkVisibleRead, currentUserId]);
 
-  // фокус на конкретное сообщение по mid
-  useEffect(() => {
-    if (!focusMessageId) return;
-    const el = document.querySelector(`[data-mid="${focusMessageId}"]`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setHighlightId(focusMessageId);
-      const t = setTimeout(() => setHighlightId(null), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [focusMessageId, messages]);
-
-  if (loading) return <div>Загрузка…</div>;
-  if (!messages?.length) return <div>Сообщений пока нет</div>;
+  if (loading) return <div style={{ padding: 12 }}>Загрузка…</div>;
+  if (!messages?.length) return <div style={{ padding: 12, color:'#6b7280' }}>Сообщений пока нет</div>;
 
   return (
     <div>
       {messages.map((m) => {
         const mine = (m.author_id || m.sender_id) === currentUserId;
         const stats = receipts[m.id];
-        const isHL = highlightId === m.id;
 
         return (
           <div
@@ -131,11 +149,10 @@ export default function MessageList({
           >
             <div style={{
               maxWidth: '72%',
-              background: isHL ? '#fff7d6' : (mine ? '#e8f0fe' : '#f5f5f5'),
+              background: mine ? '#e8f0fe' : '#f5f5f5',
               borderRadius: 10,
               padding: '8px 10px',
-              wordBreak: 'break-word',
-              transition: 'background-color .3s ease',
+              wordBreak: 'break-word'
             }}>
               {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
 
