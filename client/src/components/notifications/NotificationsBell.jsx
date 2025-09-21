@@ -2,122 +2,175 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   listMyNotifications,
-  countMyUnread,
-  markAllRead,
+  markNotificationRead,
+  markChatRead,
   subscribeMyNotifications,
+  unreadCount,
 } from '../../api/notifications';
+import { useNavigate } from 'react-router-dom';
 
-export default function NotificationsBell({ onOpenNotification }) {
+export default function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
-  const [unread, setUnread] = useState(0);
+  const [counter, setCounter] = useState(0);
+  const navigate = useNavigate();
 
-  // загрузка списка + счётчика
+  // начальная загрузка
   useEffect(() => {
     (async () => {
       try {
-        const [list, total] = await Promise.all([
-          listMyNotifications(50),
-          countMyUnread(),
+        const [list, cnt] = await Promise.all([
+          listMyNotifications({ onlyUnread: false, limit: 50 }),
+          unreadCount(),
         ]);
         setItems(list);
-        setUnread(total);
-        // поднимем глобальное событие, чтобы и меню показало бейдж
-        window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
-      } catch {}
+        setCounter(cnt);
+        // сразу эмитим бейдж наверх (если у тебя топ-меню слушает это событие)
+        window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: cnt } }));
+      } catch (e) {
+        console.warn('notif init error', e);
+      }
     })();
   }, []);
 
-  // realtime
+  // подписка на realtime
   useEffect(() => {
-    let unsub = null;
-    (async () => {
-      unsub = await subscribeMyNotifications(async (n) => {
-        setItems((prev) => [n, ...prev].slice(0, 50));
-        setUnread((u) => {
-          const nu = u + 1;
-          window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: nu } }));
-          return nu;
+    const unsub = subscribeMyNotifications(async (row) => {
+      try {
+        // вытянем chat_id из payload
+        const chatId = row?.payload?.chat_id ?? null;
+        const enriched = { ...row, chat_id: chatId };
+
+        setItems((prev) => [enriched, ...prev].slice(0, 50));
+        setCounter((n) => {
+          const next = n + 1;
+          window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: next } }));
+          return next;
         });
-      });
-    })();
-    return () => { try { unsub?.(); } catch {} };
+      } catch {}
+    });
+    return () => unsub?.();
   }, []);
 
-  const toggle = async () => {
-    const next = !open;
-    setOpen(next);
-    if (next && unread > 0) {
-      try {
-        await markAllRead();
-        setUnread(0);
-        window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: 0 } }));
-      } catch {}
+  // красивый заголовок и текст
+  const pretty = (n) => {
+    const t = n?.type || '';
+    if (t.startsWith('chat:')) {
+      return {
+        title: 'Новое сообщение',
+        text: n?.payload?.text || '',
+      };
+    }
+    return { title: t, text: JSON.stringify(n?.payload ?? {}) };
+  };
+
+  // открыть конкретное уведомление
+  const openNotification = async (n) => {
+    try {
+      // помечаем прочитанным конкретное
+      await markNotificationRead(n.id);
+      setItems((prev) => prev.map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x));
+      setCounter((c) => {
+        const next = Math.max(0, c - 1);
+        window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: next } }));
+        return next;
+      });
+
+      // если это чат — пометить все по чату и перейти в него на конкретное сообщение
+      const chatId = n.chat_id || n?.payload?.chat_id;
+      const messageId = n?.payload?.message_id;
+      if (chatId) {
+        await markChatRead(chatId);
+        navigate(`/chat/${chatId}${messageId ? `?mid=${messageId}` : ''}`);
+        setOpen(false);
+      }
+    } catch (e) {
+      console.warn('openNotification error', e);
     }
   };
 
-  const rendered = useMemo(() => {
-    if (!items.length) {
-      return <div style={{ padding: 12, color: '#6b7280' }}>Пока нет уведомлений</div>;
-    }
-    return items.map((n) => {
-      const title = n.type === 'chat:new_message' ? 'Новое сообщение' : n.type;
-      const text = n?.payload?.text ?? n?.payload?.body ?? '';
-      const ts = new Date(n.created_at).toLocaleString();
-      const isUnread = !n.read_at;
-      return (
-        <div
-          key={n.id}
-          onClick={() => onOpenNotification?.(n)}
-          style={{
-            padding:'10px 12px',
-            cursor:'pointer',
-            borderBottom:'1px solid #eee',
-            background: isUnread ? '#eef2ff' : '#fff'
-          }}
-        >
-          <div style={{ fontWeight: 700 }}>{title}</div>
-          {text && <div style={{ marginTop: 2 }}>{text}</div>}
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{ts}</div>
-        </div>
-      );
-    });
-  }, [items, onOpenNotification]);
+  const unread = useMemo(() => items.filter(i => !i.read_at).length, [items]);
 
   return (
-    <div style={{ position:'relative' }}>
+    <div style={{ position: 'relative' }}>
       <button
-        onClick={toggle}
+        onClick={() => setOpen(o => !o)}
         title="Уведомления"
         style={{
-          position:'relative',
-          width:40, height:40, borderRadius:10,
-          border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer'
+          border: '1px solid #e5e7eb',
+          background: '#fff',
+          borderRadius: 10,
+          padding: '8px 12px',
+          position: 'relative',
+          cursor: 'pointer'
         }}
       >
         🔔
-        {unread > 0 && (
-          <span style={{
-            position:'absolute', top:-5, right:-5,
-            background:'#ef4444', color:'#fff', borderRadius:9999,
-            padding:'2px 6px', fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
-          }}>{unread}</span>
+        {(counter || unread) > 0 && (
+          <span
+            style={{
+              position: 'absolute',
+              top: -6,
+              right: -6,
+              background: '#ef4444',
+              color: '#fff',
+              borderRadius: 9999,
+              padding: '2px 6px',
+              fontSize: 12,
+              fontWeight: 700,
+              minWidth: 18,
+              textAlign: 'center',
+            }}
+          >
+            {counter || unread}
+          </span>
         )}
       </button>
 
       {open && (
         <div
           style={{
-            position:'absolute', right:0, top:'calc(100% + 8px)',
-            width:320, maxHeight:420, overflowY:'auto',
-            background:'#fff', border:'1px solid #e5e7eb', borderRadius:10,
-            boxShadow:'0 8px 24px rgba(0,0,0,.08)', zIndex:50
+            position: 'absolute',
+            right: 0,
+            top: 'calc(100% + 8px)',
+            width: 360,
+            maxHeight: 420,
+            overflowY: 'auto',
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: 12,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.08)',
+            zIndex: 50,
           }}
         >
-          <div style={{ padding:'10px 12px', borderBottom:'1px solid #eee', fontWeight:800 }}>
-            Уведомления
-          </div>
-          {rendered}
+          <div style={{ padding: 12, borderBottom: '1px solid #eee', fontWeight: 700 }}>Уведомления</div>
+          {items.length === 0 && (
+            <div style={{ padding: 16, color: '#6b7280' }}>Пока пусто</div>
+          )}
+          {items.map((n) => {
+            const { title, text } = pretty(n);
+            return (
+              <button
+                key={n.id}
+                onClick={() => openNotification(n)}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: 12,
+                  border: 'none',
+                  borderBottom: '1px solid #f0f0f0',
+                  background: n.read_at ? '#fff' : '#f8fafc',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>{title}</div>
+                <div style={{ color: '#374151', marginBottom: 6, whiteSpace: 'pre-wrap' }}>{text}</div>
+                <div style={{ color: '#9ca3af', fontSize: 12 }}>
+                  {new Date(n.created_at).toLocaleString()}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
