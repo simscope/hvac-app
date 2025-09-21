@@ -1,5 +1,5 @@
 // client/src/pages/ChatPage.jsx
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 
 import ChatList from '../components/chat/ChatList.jsx';
@@ -8,139 +8,129 @@ import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 import CallModal from '../components/chat/CallModal.jsx';
 
-/**
- * ВАЖНО по БД:
- * 1) В таблице message_receipts ключ уникальности должен быть (message_id, user_id, status)
- *    и RLS разрешает текущему пользователю upsert своих строк.
- * 2) Создана функция SECURITY DEFINER:
- *      push_chat_notifications(p_chat_id uuid, p_message_id uuid, p_text text)
- *    и выдан grant execute authenticated.
- * 3) NotificationsBell/список уведомлений читают из public.notifications только свои записи.
- */
-
 export default function ChatPage() {
-  // ---------------------------- auth / текущий участник ----------------------------
   const [user, setUser] = useState(null);
+  const [chats, setChats] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(null);
+
+  const [messages, setMessages] = useState([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [receipts, setReceipts] = useState({});
+  const [typing, setTyping] = useState({});
+  const [callState, setCallState] = useState(null);
+  const [memberNames, setMemberNames] = useState({});
+  const [members, setMembers] = useState([]);
+  const [unreadByChat, setUnreadByChat] = useState({});
+
+  const typingChannelRef = useRef(null);
+  const receiptsSubRef = useRef(null);
+  const messagesSubRef = useRef(null);
+
   const appMemberId =
     typeof window !== 'undefined'
       ? window.APP_MEMBER_ID || localStorage.getItem('member_id') || null
       : null;
-  const selfId = user?.id || appMemberId; // здесь именно auth.user.id или member_id, у вас так используется
-  const RECEIPTS_USER_COLUMN = 'user_id'; // имя колонки пользователя в message_receipts
+  const selfId = user?.id || appMemberId;
+
+  const RECEIPTS_USER_COLUMN = 'user_id';
   const canSend = Boolean(selfId);
 
+  // ================= AUTH =================
   useEffect(() => {
-    let unsub;
-    (async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data?.user ?? null);
-      unsub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null)).data?.subscription;
-    })();
-    return () => { try { unsub?.unsubscribe(); } catch {} };
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user || null);
+    };
+    init();
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+    return () => sub?.subscription.unsubscribe();
   }, []);
 
-  // ---------------------------- список чатов ----------------------------
-  const [chats, setChats] = useState([]);
-  const [activeChatId, setActiveChatId] = useState(null);
-  const [unreadByChat, setUnreadByChat] = useState({});
-
+  // ================= CHATS =================
   useEffect(() => {
-    const load = async () => {
+    const loadChats = async () => {
       const { data, error } = await supabase
         .from('chats')
-        .select('id, title, created_at')
-        .order('created_at', { ascending: false });
-      if (error) { console.error('chats load', error); setChats([]); return; }
-      const mapped = (data || []).map(r => ({ chat_id: r.id, title: r.title, last_at: r.created_at }));
-      setChats(mapped);
-      if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
-    };
-    load();
+        .select('chat_id, title, updated_at')
+        .order('updated_at', { ascending: false });
 
-    // поднимаем в списке чат, где пришло новое сообщение
+      if (error) {
+        console.error('loadChats', error);
+        return;
+      }
+
+      setChats(data || []);
+      if (!activeChatId && data?.length) {
+        setActiveChatId(data[0].chat_id);
+      }
+    };
+
+    loadChats();
+
     const ch = supabase
       .channel('overview-messages')
-      .on('postgres_changes',
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         (payload) => {
           const cid = payload.new.chat_id;
-          setChats(prev => {
+
+          setChats((prev) => {
             const arr = [...prev];
-            const i = arr.findIndex(c => c.chat_id === cid);
-            if (i >= 0) {
-              arr[i] = { ...arr[i], last_at: payload.new.created_at };
-              arr.sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
+            const idx = arr.findIndex(c => c.chat_id === cid);
+            if (idx >= 0) {
+              arr[idx] = { ...arr[idx], updated_at: payload.new.created_at };
+              arr.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
             }
             return arr;
           });
+
           if (cid !== activeChatId && selfId && payload.new.author_id !== selfId) {
             setUnreadByChat(prev => ({ ...prev, [cid]: (prev[cid] || 0) + 1 }));
           }
-        })
+        }
+      )
       .subscribe();
+
     return () => supabase.removeChannel(ch);
   }, [activeChatId, selfId]);
 
-  // суммарный badge для верхнего меню
-  useEffect(() => {
-    const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-      window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
-    }
-  }, [unreadByChat]);
-
-  // ---------------------------- участники активного чата ----------------------------
-  const [memberNames, setMemberNames] = useState({});
-  const [members, setMembers] = useState([]);
-
+  // ================= MEMBERS =================
   useEffect(() => {
     if (!activeChatId) { setMemberNames({}); setMembers([]); return; }
+
     (async () => {
-      const { data: mems, error } = await supabase
+      const { data: mems } = await supabase
         .from('chat_members')
-        .select('member_id')
+        .select('member_id, profiles(full_name)')
         .eq('chat_id', activeChatId);
-      if (error) { setMemberNames({}); setMembers([]); return; }
-      const ids = (mems || []).map(m => m.member_id).filter(Boolean);
-      if (!ids.length) { setMemberNames({}); setMembers([]); return; }
-      const { data: techs } = await supabase
-        .from('technicians')
-        .select('id, name, auth_user_id')
-        .in('id', ids);
+
+      if (!mems) return;
       const names = {};
-      (techs || []).forEach(t => { names[t.auth_user_id || t.id] = t.name; });
+      mems.forEach(m => { names[m.member_id] = m.profiles?.full_name || m.member_id; });
+
+      setMembers(mems.map(m => m.member_id));
       setMemberNames(names);
-      setMembers(techs || []);
     })();
   }, [activeChatId]);
 
-  // ---------------------------- сообщения и квитанции ----------------------------
-  const [messages, setMessages] = useState([]);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-  const [receipts, setReceipts] = useState({}); // { [messageId]: { delivered:Set, read:Set } }
-
-  const messagesSubRef = useRef(null);
-  const receiptsSubRef = useRef(null);
-
+  // ================= MESSAGES =================
   const fetchMessages = useCallback(async (chatId) => {
+    if (!chatId) return;
     setLoadingMessages(true);
     const { data, error } = await supabase
       .from('chat_messages')
       .select('id, chat_id, author_id, body, attachment_url, created_at, file_url, file_name, file_type, file_size')
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
+
     setLoadingMessages(false);
-    if (error) { console.error('chat_messages', error); setMessages([]); return; }
+    if (error) { console.error('fetchMessages', error); setMessages([]); return; }
     setMessages(data || []);
   }, []);
 
-  // typing / calls (заглушка)
-  const [typing, setTyping] = useState({});
-  const typingChannelRef = useRef(null);
-  const [callState, setCallState] = useState(null);
-
-  // подписки по активному чату
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -149,85 +139,59 @@ export default function ChatPage() {
     setTyping({});
     setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 }));
 
-    // Сообщения realtime
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
     const msgCh = supabase
       .channel(`chat-${activeChatId}`)
-      .on('postgres_changes',
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
           const m = payload.new;
-          setMessages(prev => [...prev, m]);
+          setMessages((prev) => [...prev, m]);
 
-          // Квитанция delivered на входящие (не наши)
           if (selfId && m.author_id !== selfId) {
             try {
               await supabase.from('message_receipts').upsert([{
-                chat_id: m.chat_id, // можно хранить, но НЕ в onConflict
+                chat_id: m.chat_id,
                 message_id: m.id,
                 [RECEIPTS_USER_COLUMN]: selfId,
                 status: 'delivered'
-              }], { onConflict: 'message_id,user_id,status' });
-            } catch (e) {
-              console.warn('delivered upsert failed', e);
+              }], { onConflict: 'chat_id,message_id,user_id' });
+            } catch (err) {
+              console.error('receipt insert error', err);
             }
           }
-        })
+        }
+      )
       .subscribe();
     messagesSubRef.current = msgCh;
 
-    // Квитанции realtime
-    if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
-    const rCh = supabase
-      .channel(`receipts-${activeChatId}`)
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
-        (payload) => {
-          const r = payload.new || payload.old;
-          if (!r) return;
-          setReceipts(prev => {
-            const forMsg = prev[r.message_id] || { delivered: new Set(), read: new Set() };
-            const next = { delivered: new Set(forMsg.delivered), read: new Set(forMsg.read) };
-            if (payload.eventType === 'DELETE') {
-              next[r.status]?.delete(r[RECEIPTS_USER_COLUMN]);
-            } else {
-              next[r.status]?.add(r[RECEIPTS_USER_COLUMN]);
-            }
-            return { ...prev, [r.message_id]: next };
-          });
-        })
-      .subscribe();
-    receiptsSubRef.current = rCh;
-
-    // typing канал
-    if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
-    const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } })
-      .on('broadcast', { event: 'typing' }, (payload) => {
-        const { user_id, name } = payload?.payload || {};
-        if (!user_id || user_id === selfId) return;
-        setTyping(prev => ({ ...prev, [user_id]: { name, at: Date.now() } }));
-      })
-      .subscribe();
-    typingChannelRef.current = tCh;
-
-    const prune = setInterval(() => {
-      const now = Date.now();
-      setTyping(prev => {
-        const copy = { ...prev };
-        Object.keys(copy).forEach(k => { if ((now - (copy[k]?.at || 0)) > 4000) delete copy[k]; });
-        return copy;
-      });
-    }, 1500);
-
-    return () => {
-      clearInterval(prune);
-      try { supabase.removeChannel(msgCh); } catch {}
-      try { supabase.removeChannel(rCh); } catch {}
-      try { supabase.removeChannel(tCh); } catch {}
-    };
+    return () => supabase.removeChannel(msgCh);
   }, [activeChatId, selfId, fetchMessages]);
 
-  // вычисление строки "печатает…"
+  // ================= MARK READ =================
+  const markReadForMessageIds = useCallback(async (ids) => {
+    if (!ids?.length || !selfId || !activeChatId) return;
+    const rows = ids.map(message_id => ({
+      chat_id: activeChatId,
+      message_id,
+      [RECEIPTS_USER_COLUMN]: selfId,
+      status: 'read',
+    }));
+    try {
+      await supabase.from('message_receipts').upsert(rows, {
+        onConflict: 'chat_id,message_id,user_id',
+      });
+      await supabase.from('chat_members')
+        .update({ last_read_at: new Date().toISOString() })
+        .eq('chat_id', activeChatId)
+        .eq('member_id', selfId);
+    } catch (err) {
+      console.error('markRead error', err);
+    }
+  }, [activeChatId, selfId]);
+
+  // ================= TYPING =================
   const typingNames = useMemo(() => {
     const arr = Object.values(typing).map(t => t?.name).filter(Boolean);
     if (!arr.length) return '';
@@ -235,131 +199,87 @@ export default function ChatPage() {
     return `${arr.slice(0, 2).join(', ')}${arr.length > 2 ? ` и ещё ${arr.length - 2}` : ''} печатают…`;
   }, [typing]);
 
-  // пометить видимые сообщения как прочитанные
-  const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !selfId || !activeChatId) return;
-    const rows = ids.map(message_id => ({
-      chat_id: activeChatId,
-      message_id,
-      [RECEIPTS_USER_COLUMN]: selfId,
-      status: 'read'
-    }));
-    try {
-      await supabase.from('message_receipts').upsert(rows, {
-        onConflict: 'message_id,user_id,status'
-      });
-      await supabase
-        .from('chat_members')
-        .update({ last_read_at: new Date().toISOString() })
-        .eq('chat_id', activeChatId)
-        .eq('member_id', selfId);
-    } catch (e) {
-      console.warn('mark read failed', e);
-    }
-  }, [activeChatId, selfId]);
-
-  // быстрый звонок
   const startCallTo = useCallback((targetId) => {
     if (!activeChatId || !selfId || !targetId || targetId === selfId) return;
     setCallState({ chatId: activeChatId, role: 'caller', to: targetId });
   }, [activeChatId, selfId]);
 
-  // ---------------------------- UI ----------------------------
+  // ================= UNREAD COUNTER =================
+  useEffect(() => {
+    const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
+      localStorage.setItem('CHAT_UNREAD_TOTAL', total);
+    }
+  }, [unreadByChat]);
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', height: 'calc(100vh - 64px)' }}>
-      {/* левая колонка — список чатов */}
       <div style={{ borderRight: '1px solid #eee' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px' }}>
           <h3 style={{ margin: 0 }}>Чаты</h3>
         </div>
-
         <ChatList
           chats={chats}
-          activeId={activeChatId}
-          onPick={setActiveChatId}
+          activeChatId={activeChatId}
+          onSelect={setActiveChatId}
           unreadByChat={unreadByChat}
         />
       </div>
 
-      {/* правая колонка — текущий диалог */}
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         <ChatHeader
           chat={chats.find(c => c.chat_id === activeChatId) || null}
-          typingText={typingNames}
           members={members}
-          onCall={startCallTo}
+          memberNames={memberNames}
+          typingNames={typingNames}
         />
 
-        <div style={{ flex: 1, overflow: 'auto', padding: '8px 12px' }}>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
           <MessageList
             messages={messages}
             loading={loadingMessages}
             currentUserId={selfId}
             receipts={receipts}
-            onMarkVisibleRead={markReadForMessageIds}
             memberNames={memberNames}
+            onMarkVisibleRead={markReadForMessageIds}
           />
         </div>
 
-        <div style={{ padding: 12, borderTop: '1px solid #eee' }}>
-          <MessageInput
-            chatId={activeChatId}
-            disabled={!canSend}
-            onSent={() => {}}
-            onSend={async ({ text, files }) => {
-              if (!activeChatId || !selfId) return;
+        <MessageInput
+          canSend={canSend}
+          onSend={async ({ text, files }) => {
+            if (!activeChatId || !selfId) return;
+            const { data: msg, error: msgErr } = await supabase
+              .from('chat_messages')
+              .insert({ chat_id: activeChatId, author_id: selfId, body: text?.trim() || null })
+              .select()
+              .single();
+            if (msgErr || !msg) {
+              console.error('send error', msgErr);
+              return;
+            }
 
-              // 1) создаём сообщение
-              const { data: msg, error: msgErr } = await supabase
-                .from('chat_messages')
-                .insert({ chat_id: activeChatId, author_id: selfId, body: text?.trim() || null })
-                .select()
-                .single();
-              if (msgErr || !msg) { console.error('send message error:', msgErr); return; }
-
-              // 2) загрузка первого файла как вложения (опционально)
-              if (files && files.length) {
-                try {
-                  const f = files[0];
-                  const cleanName = f.name.replace(/[^0-9A-Za-z._-]+/g, '_');
-                  const path = `${activeChatId}/${msg.id}/${Date.now()}_${cleanName}`;
-                  const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type });
-                  if (!up.error) {
-                    await supabase
-                      .from('chat_messages')
-                      .update({ file_url: path, file_name: cleanName, file_type: f.type, file_size: f.size })
-                      .eq('id', msg.id);
-                  }
-                } catch (e) {
-                  console.warn('file upload failed', e);
+            if (files && files.length) {
+              let i = 0;
+              for (const f of files) {
+                const cleanName = f.name.replace(/[^0-9A-Za-z._-]+/g, '_');
+                const path = `${activeChatId}/${msg.id}/${Date.now()}_${cleanName}`;
+                const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type });
+                if (!up.error && i === 0) {
+                  await supabase
+                    .from('chat_messages')
+                    .update({ file_url: path, file_name: cleanName, file_type: f.type, file_size: f.size })
+                    .eq('id', msg.id);
                 }
+                i++;
               }
-
-              // 3) создаём уведомления участникам (кроме отправителя)
-              try {
-                await supabase.rpc('push_chat_notifications', {
-                  p_chat_id: activeChatId,
-                  p_message_id: msg.id,
-                  p_text: text?.trim() || null
-                });
-              } catch (e) {
-                console.warn('push_chat_notifications failed', e);
-              }
-            }}
-          />
-        </div>
+            }
+          }}
+        />
       </div>
 
-      {/* модалка звонка (по желанию можно убрать) */}
-      {callState && (
-        <CallModal
-          open={!!callState}
-          chatId={callState.chatId}
-          role={callState.role}
-          to={callState.to}
-          onClose={() => setCallState(null)}
-        />
-      )}
+      {callState && <CallModal callState={callState} onClose={() => setCallState(null)} />}
     </div>
   );
 }
