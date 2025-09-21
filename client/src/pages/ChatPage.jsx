@@ -12,21 +12,21 @@ import {
   recalcAndDispatchUnreadTotal,
 } from '../api/notifications';
 
-// ЕДИНЫЕ константы, чтобы не ловить 409 от REST
+// единые константы для receipts
 const RECEIPTS_TABLE = 'message_receipts';
-const RECEIPTS_ON_CONFLICT = 'message_id,user_id,status'; // соответствует UNIQUE(message_id,user_id,status)
+const RECEIPTS_ON_CONFLICT = 'message_id,user_id,status';
 
 export default function ChatPage() {
   // ===== auth =====
   const [user, setUser] = useState(null);
   useEffect(() => {
-    let unsub;
+    let sub;
     (async () => {
       const { data: { user } } = await supabase.auth.getUser();
       setUser(user || null);
-      unsub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user || null)).data?.subscription;
+      sub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user || null)).data?.subscription;
     })();
-    return () => unsub?.unsubscribe?.();
+    return () => sub?.unsubscribe?.();
   }, []);
   const selfId = user?.id || null;
 
@@ -43,7 +43,7 @@ export default function ChatPage() {
   const messagesSubRef = useRef(null);
   const receiptsSubRef = useRef(null);
 
-  // участники активного чата (имена)
+  // участники активного чата
   const [memberNames, setMemberNames] = useState({});
   const [members, setMembers] = useState([]);
 
@@ -66,9 +66,9 @@ export default function ChatPage() {
     };
     loadChats();
 
-    // новая запись в chat_messages → обновить сортировку
     const ch = supabase.channel('overview-messages')
-      .on('postgres_changes',
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         (payload) => {
           const cid = payload.new.chat_id;
@@ -81,7 +81,8 @@ export default function ChatPage() {
             }
             return arr;
           });
-        })
+        }
+      )
       .subscribe();
     return () => supabase.removeChannel(ch);
   }, [activeChatId]);
@@ -135,48 +136,59 @@ export default function ChatPage() {
     fetchMessages(activeChatId);
     setReceipts({});
 
-    // при входе в чат: очистить уведомления и пересчитать бейдж
-    markChatRead(activeChatId).finally(recalcAndDispatchUnreadTotal);
+    // очистить уведомления по чату и пересчитать бейдж
+    (async () => {
+      try { await markChatRead(activeChatId); } finally { recalcAndDispatchUnreadTotal(); }
+    })();
 
     // сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
-    const msgCh = supabase.channel(`chat-${activeChatId}`)
-      .on('postgres_changes',
+    const msgCh = supabase
+      .channel(`chat-${activeChatId}`)
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
           const m = payload.new;
           setMessages(prev => [...prev, m]);
 
-          // входящее → delivered (upsert с правильным onConflict)
           if (selfId && m.author_id !== selfId) {
-            await supabase.from(RECEIPTS_TABLE).upsert([{
-              message_id: m.id,
-              user_id: selfId,
-              status: 'delivered',
-            }], {
-              onConflict: RECEIPTS_ON_CONFLICT,
-              ignoreDuplicates: true,
-            });
+            try {
+              await supabase.from(RECEIPTS_TABLE).upsert([{
+                chat_id: m.chat_id,           // важно: у вас NOT NULL
+                message_id: m.id,
+                user_id: selfId,
+                status: 'delivered',
+              }], {
+                onConflict: RECEIPTS_ON_CONFLICT,
+                ignoreDuplicates: true,
+              });
+            } catch (e) {
+              console.warn('delivered upsert error', e);
+            }
           }
-        })
+        }
+      )
       .subscribe();
     messagesSubRef.current = msgCh;
 
     // квитанции
     if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
-    const rCh = supabase.channel(`receipts-${activeChatId}`)
-      .on('postgres_changes',
+    const rCh = supabase
+      .channel(`receipts-${activeChatId}`)
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'message_receipts' },
         (p) => {
           const r = p.new;
           setReceipts(prev => {
-            const byMsg = { ...(prev[r.message_id] || { delivered: new Set(), read: new Set() }) };
-            (byMsg[r.status] || new Set()).add(r.user_id);
-            if (r.status === 'delivered') byMsg.delivered.add(r.user_id);
-            if (r.status === 'read') byMsg.read.add(r.user_id);
-            return { ...prev, [r.message_id]: byMsg };
+            const cur = prev[r.message_id] || { delivered: new Set(), read: new Set() };
+            if (r.status === 'delivered') cur.delivered.add(r.user_id);
+            if (r.status === 'read') cur.read.add(r.user_id);
+            return { ...prev, [r.message_id]: cur };
           });
-        })
+        }
+      )
       .subscribe();
     receiptsSubRef.current = rCh;
 
@@ -186,36 +198,41 @@ export default function ChatPage() {
     };
   }, [activeChatId, selfId, fetchMessages]);
 
-  // ================== отметить прочитанными видимые сообщения ==================
+  // ================== прочитал видимые ==================
   const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !selfId) return;
+    if (!ids?.length || !selfId || !activeChatId) return;
 
-    const rows = ids.map(message_id => ({ message_id, user_id: selfId, status: 'read' }));
-    // ключевое: один и тот же onConflict везде
-    await supabase.from(RECEIPTS_TABLE).upsert(rows, {
-      onConflict: RECEIPTS_ON_CONFLICT,
-      ignoreDuplicates: true,
-    });
+    try {
+      const rows = ids.map(message_id => ({
+        chat_id: activeChatId,   // важно: NOT NULL
+        message_id,
+        user_id: selfId,
+        status: 'read',
+      }));
+      await supabase.from(RECEIPTS_TABLE).upsert(rows, {
+        onConflict: RECEIPTS_ON_CONFLICT,
+        ignoreDuplicates: true,
+      });
+    } catch (e) {
+      console.warn('read upsert error', e);
+    }
 
-    // обновим last_read_at в membership
-    await supabase
-      .from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('chat_id', activeChatId)
-      .eq('member_id', selfId)
-      .catch(() => {});
+    try {
+      await supabase
+        .from('chat_members')
+        .update({ last_read_at: new Date().toISOString() })
+        .eq('chat_id', activeChatId)
+        .eq('member_id', selfId);
+    } catch {}
   }, [activeChatId, selfId]);
 
-  // ================== типинг-текст (упрощённая версия, без звонков) ==================
-  const typing = {};
-  const typingNames = useMemo(() => '', [typing]); // визуально не показываем сейчас
+  // «печатает…» сейчас не показываем
+  const typingNames = useMemo(() => '', []);
 
-  // ================== разметка ==================
-  useEffect(() => {
-    // при входе/выходе с чата пересчёт бейджа
-    recalcAndDispatchUnreadTotal();
-  }, [activeChatId]);
+  // ресчёт бейджа при смене чата/входе
+  useEffect(() => { recalcAndDispatchUnreadTotal(); }, [activeChatId]);
 
+  // ================== UI ==================
   return (
     <div style={{ height: 'calc(100vh - 64px)', display: 'grid', gridTemplateColumns: '320px 1fr' }}>
       {/* левая колонка */}
@@ -239,7 +256,7 @@ export default function ChatPage() {
           memberNames={memberNames}
         />
 
-        {/* список сообщений со своей прокруткой */}
+        {/* список сообщений прокручивается, шапка фиксирована самой страницей */}
         <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
           <MessageList
             messages={messages}
@@ -251,13 +268,13 @@ export default function ChatPage() {
           />
         </div>
 
-        {/* ввод */}
         <div style={{ borderTop: '1px solid #eee', padding: 12 }}>
           <MessageInput
             chatId={activeChatId}
             onSent={() => {
-              // как только отправили что-то — уведомления по чату очищаем
-              markChatRead(activeChatId).finally(recalcAndDispatchUnreadTotal);
+              (async () => {
+                try { await markChatRead(activeChatId); } finally { recalcAndDispatchUnreadTotal(); }
+              })();
             }}
           />
         </div>
