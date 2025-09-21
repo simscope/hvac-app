@@ -4,11 +4,12 @@ import { useNavigate } from 'react-router-dom';
 
 export default function NotificationsBell() {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState([]); // {id, user_id, chat_id, message_id, title, created_at, seen}
+  const [items, setItems] = useState([]); // rows из public.notifications
   const [userId, setUserId] = useState(null);
-  const nav = useNavigate();
   const subRef = useRef(null);
+  const nav = useNavigate();
 
+  // кто я
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
@@ -16,7 +17,7 @@ export default function NotificationsBell() {
     })();
   }, []);
 
-  // загрузка и подписка
+  // загрузка + realtime подписка
   useEffect(() => {
     if (!userId) return;
 
@@ -50,41 +51,42 @@ export default function NotificationsBell() {
     };
   }, [userId]);
 
-  const unread = useMemo(() => (items || []).filter(i => !i.seen).length, [items]);
+  const unread = useMemo(() => (items || []).filter(i => !i.read_at).length, [items]);
 
-  // открыть конкретное уведомление
   const openNotification = async (n) => {
     if (!n) return;
 
-    // отмечаем прочитанным сразу — чтобы колокол погас без перезагрузки
-    await supabase.from('notifications')
-      .update({ seen: true, seen_at: new Date().toISOString() })
-      .eq('id', n.id);
-
-    setItems(prev => prev.map(x => x.id === n.id ? { ...x, seen:true } : x));
+    // ставим read_at мгновенно (и локально тоже) — без перезагрузки
+    const now = new Date().toISOString();
+    await supabase.from('notifications').update({ read_at: now }).eq('id', n.id);
+    setItems(prev => prev.map(x => x.id === n.id ? { ...x, read_at: now } : x));
     window.dispatchEvent(new CustomEvent('notifications-changed'));
 
-    // открываем чат и подсветим сообщение (через location.state)
-    nav('/chat', { state: { chatId: n.chat_id, highlightMessageId: n.message_id } });
+    const chatId = n.payload?.chat_id || n.chat_id; // на случай старых записей
+    const messageId = n.payload?.message_id || null;
+
+    // переходим в чат и (опционально) подсвечиваем сообщение
+    nav('/chat', { state: { chatId, highlightMessageId: messageId } });
     setOpen(false);
   };
 
-  // по клику на колокол — можно погасить всё разом (опционально)
-  const markAllSeen = async () => {
+  // по открытию колокола — можно прочитать ВСЁ (опционально)
+  const markAllRead = async () => {
     if (!userId) return;
+    const now = new Date().toISOString();
     await supabase
       .from('notifications')
-      .update({ seen: true, seen_at: new Date().toISOString() })
+      .update({ read_at: now })
       .eq('user_id', userId)
-      .eq('seen', false);
-    setItems(prev => prev.map(x => ({ ...x, seen: true })));
+      .is('read_at', null);
+    setItems(prev => prev.map(x => x.read_at ? x : { ...x, read_at: now }));
     window.dispatchEvent(new CustomEvent('notifications-changed'));
   };
 
   return (
     <div style={{ position: 'relative' }}>
       <button
-        onClick={() => { setOpen(v => !v); if (!open) markAllSeen(); }}
+        onClick={() => { const next = !open; setOpen(next); if (next) markAllRead(); }}
         title="Уведомления"
         style={{
           position:'relative',
@@ -116,12 +118,12 @@ export default function NotificationsBell() {
               onClick={() => openNotification(n)}
               style={{
                 padding:'10px 12px', cursor:'pointer',
-                background: n.seen ? '#fff' : '#eef2ff',
+                background: n.read_at ? '#fff' : '#eef2ff',
                 borderTop:'1px solid #f3f4f6'
               }}
             >
               <div style={{ fontWeight:700 }}>Новое сообщение</div>
-              <div style={{ color:'#374151' }}>{n.title || 'Сообщение в чате'}</div>
+              <div style={{ color:'#374151' }}>{n.payload?.text || 'Сообщение в чате'}</div>
               <div style={{ fontSize:12, color:'#9ca3af' }}>
                 {new Date(n.created_at).toLocaleString()}
               </div>
