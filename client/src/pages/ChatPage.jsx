@@ -250,15 +250,14 @@ export default function ChatPage() {
              console.warn('receipts upsert throw', e);
          }
       // (опционально) отметим last_read_at, если у вас member_id=technician.id — тогда уберите это
-      await supabase
-        .from('chat_members')
-        .update({ last_read_at: new Date().toISOString() })
-        .eq('chat_id', activeChatId)
-        .catch(() => {});
-    },
-    [activeChatId, selfId]
-  );
-
+      try {
+        const { error: upErr } = await supabase
+        .from('message_receipts')
+       .upsert(rows, { onConflict: 'message_id,user_id,status' });
+        if (upErr) console.warn('receipts upsert error', upErr);
+        } catch (e) {
+        console.warn('receipts upsert throw', e);
+       }
   // текст "печатает…"
   const typingNames = useMemo(() => {
     const arr = Object.values(typing).map((t) => t?.name).filter(Boolean);
@@ -372,4 +371,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
 
