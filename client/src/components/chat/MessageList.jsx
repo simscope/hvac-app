@@ -1,7 +1,7 @@
 // client/src/components/chat/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import { sendMessage, listMessages, subscribeToChat } from '../../api/chat';
+import { sendMessage, listMessages, subscribeToChat } from '../api/chat';
 
 
 function Ticks({ mine, stats, memberNames }) {
@@ -160,4 +160,5 @@ export default function MessageList({
     </div>
   );
 }
+
 
