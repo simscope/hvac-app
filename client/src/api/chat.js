@@ -1,24 +1,29 @@
-// client/api/chat.js
+// client/src/api/chat.js
 import { supabase } from '../supabaseClient';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/** Отправка сообщения: сначала добавляем себя в чат через RPC, затем send_message */
+/**
+ * Отправка сообщения:
+ * 1) гарантируем членство (через RPC add_self_to_chat → technicians.auth_user_id)
+ * 2) шлём сообщение через RPC send_message
+ */
 export async function sendMessage(chatId, text, fileUrl = null) {
   if (!UUID_RE.test(String(chatId))) throw new Error(`Invalid chatId: ${chatId}`);
-  const body = String(text || '').trim();
+  const body = String(text ?? '').trim();
   if (!body) throw new Error('Пустое сообщение');
 
-  // проверим авторизацию
+  // Проверим авторизацию
   const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   if (!user) throw new Error('Not authenticated');
 
-  // 1) гарантируем членство корректно (через technicians → chat_members)
+  // 1) Корректное «вступление» в чат (членство через technicians → chat_members)
   const { error: addErr } = await supabase.rpc('add_self_to_chat', { p_chat_id: chatId });
   if (addErr) throw addErr;
 
-  // 2) шлём сообщение
+  // 2) Отправка
   const { data, error } = await supabase.rpc('send_message', {
     p_chat_id: chatId,
     p_body: body,
