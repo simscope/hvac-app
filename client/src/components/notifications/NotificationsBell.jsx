@@ -1,151 +1,123 @@
 // client/src/components/notifications/NotificationsBell.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../../supabaseClient';
-import * as notif from '../../api/notifications'; // ← namespace-импорт
+import {
+  listMyNotifications,
+  countMyUnread,
+  markAllRead,
+  subscribeMyNotifications,
+} from '../../api/notifications';
 
-export default function NotificationsBell() {
-  const [user, setUser] = useState(null);
+export default function NotificationsBell({ onOpenNotification }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [unread, setUnread] = useState(0);
 
-  const unreadCount = useMemo(
-    () => items.filter(n => !n.read_at).length,
-    [items]
-  );
-
-  // auth
+  // загрузка списка + счётчика
   useEffect(() => {
-    let sub;
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data?.user ?? null);
-      sub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null));
+      try {
+        const [list, total] = await Promise.all([
+          listMyNotifications(50),
+          countMyUnread(),
+        ]);
+        setItems(list);
+        setUnread(total);
+        // поднимем глобальное событие, чтобы и меню показало бейдж
+        window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
+      } catch {}
     })();
-    return () => { try { sub?.data?.subscription?.unsubscribe(); } catch {} };
   }, []);
 
-  // начальная загрузка + RT
+  // realtime
   useEffect(() => {
-    if (!user?.id) { setItems([]); return; }
-
-    let mounted = true;
+    let unsub = null;
     (async () => {
-      setLoading(true);
-      const { data } = await notif.listMyNotifications(50);
-      if (mounted) setItems(data || []);
-      setLoading(false);
+      unsub = await subscribeMyNotifications(async (n) => {
+        setItems((prev) => [n, ...prev].slice(0, 50));
+        setUnread((u) => {
+          const nu = u + 1;
+          window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: nu } }));
+          return nu;
+        });
+      });
     })();
+    return () => { try { unsub?.(); } catch {} };
+  }, []);
 
-    const ch = supabase
-      .channel('notif-rt')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        (payload) => setItems(prev => [payload.new, ...prev].slice(0, 200))
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        (payload) => setItems(prev => prev.map(i => i.id === payload.new.id ? payload.new : i))
-      )
-      .subscribe();
-
-    return () => supabase.removeChannel(ch);
-  }, [user?.id]);
-
-  // синхронизация бейджа в шапке
-  useEffect(() => {
-    const total = unreadCount;
-    localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail:{ total } }));
-  }, [unreadCount]);
-
-  const markAllVisibleAsRead = async () => {
-    const unreadIds = items.filter(n => !n.read_at).map(n => n.id);
-    if (!unreadIds.length) return;
-    const { error } = await notif.markManyAsReadByIds(unreadIds);
-    if (!error) {
-      const now = new Date().toISOString();
-      setItems(prev => prev.map(n => unreadIds.includes(n.id) ? { ...n, read_at: now } : n));
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && unread > 0) {
+      try {
+        await markAllRead();
+        setUnread(0);
+        window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total: 0 } }));
+      } catch {}
     }
   };
 
-  const onClickItem = async (n) => {
-    if (!n) return;
-
-    if (!n.read_at) {
-      const { error } = await notif.markManyAsReadByIds([n.id]);
-      if (!error) {
-        setItems(prev => prev.map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x));
-      }
+  const rendered = useMemo(() => {
+    if (!items.length) {
+      return <div style={{ padding: 12, color: '#6b7280' }}>Пока нет уведомлений</div>;
     }
-
-    const chatId = n.payload?.chat_id;
-    const messageId = n.payload?.message_id;
-    window.dispatchEvent(new CustomEvent('open-chat-message', { detail: { chatId, messageId } }));
-    setOpen(false);
-  };
+    return items.map((n) => {
+      const title = n.type === 'chat:new_message' ? 'Новое сообщение' : n.type;
+      const text = n?.payload?.text ?? n?.payload?.body ?? '';
+      const ts = new Date(n.created_at).toLocaleString();
+      const isUnread = !n.read_at;
+      return (
+        <div
+          key={n.id}
+          onClick={() => onOpenNotification?.(n)}
+          style={{
+            padding:'10px 12px',
+            cursor:'pointer',
+            borderBottom:'1px solid #eee',
+            background: isUnread ? '#eef2ff' : '#fff'
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>{title}</div>
+          {text && <div style={{ marginTop: 2 }}>{text}</div>}
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{ts}</div>
+        </div>
+      );
+    });
+  }, [items, onOpenNotification]);
 
   return (
     <div style={{ position:'relative' }}>
       <button
-        onClick={() => setOpen(v => !v)}
+        onClick={toggle}
         title="Уведомления"
-        style={{ width:36,height:36,borderRadius:9999,border:'1px solid #e5e7eb', background:'#fff',position:'relative',cursor:'pointer' }}
+        style={{
+          position:'relative',
+          width:40, height:40, borderRadius:10,
+          border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer'
+        }}
       >
         🔔
-        {!!unreadCount && (
+        {unread > 0 && (
           <span style={{
-            position:'absolute', top:-4, right:-4,
+            position:'absolute', top:-5, right:-5,
             background:'#ef4444', color:'#fff', borderRadius:9999,
-            padding:'1px 6px', fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
-          }}>
-            {unreadCount}
-          </span>
+            padding:'2px 6px', fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
+          }}>{unread}</span>
         )}
       </button>
 
       {open && (
         <div
           style={{
-            position:'absolute', right:0, top:44, width:360, maxHeight:480,
-            background:'#fff', border:'1px solid #e5e7eb', borderRadius:12,
-            boxShadow:'0 10px 20px rgba(0,0,0,.08)', overflow:'auto', zIndex:100
+            position:'absolute', right:0, top:'calc(100% + 8px)',
+            width:320, maxHeight:420, overflowY:'auto',
+            background:'#fff', border:'1px solid #e5e7eb', borderRadius:10,
+            boxShadow:'0 8px 24px rgba(0,0,0,.08)', zIndex:50
           }}
         >
-          <div style={{ padding:'10px 14px', fontWeight:800, display:'flex', justifyContent:'space-between' }}>
-            <span>Уведомления</span>
-            <button
-              onClick={markAllVisibleAsRead}
-              style={{ fontSize:12, border:'none', background:'transparent', color:'#2563eb', cursor:'pointer' }}
-              disabled={!unreadCount || loading}
-            >
-              Пометить всё прочитанным
-            </button>
+          <div style={{ padding:'10px 12px', borderBottom:'1px solid #eee', fontWeight:800 }}>
+            Уведомления
           </div>
-
-          {loading && <div style={{ padding:14, color:'#6b7280' }}>Загрузка…</div>}
-          {!loading && !items.length && <div style={{ padding:14, color:'#6b7280' }}>Нет уведомлений</div>}
-
-          {items.map(n => (
-            <div
-              key={n.id}
-              onClick={() => onClickItem(n)}
-              style={{
-                padding:'10px 14px', borderTop:'1px solid #f3f4f6', cursor:'pointer',
-                background: n.read_at ? '#fff' : '#eef2ff'
-              }}
-            >
-              <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>Новое сообщение</div>
-              <div style={{ color:'#374151', fontSize:14, marginBottom:6 }}>
-                {n.payload?.text || 'Сообщение'}
-              </div>
-              <div style={{ color:'#6b7280', fontSize:12 }}>
-                {new Date(n.created_at).toLocaleString()}
-              </div>
-            </div>
-          ))}
+          {rendered}
         </div>
       )}
     </div>
