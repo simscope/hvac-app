@@ -241,10 +241,14 @@ export default function ChatPage() {
         user_id: selfId,
         status: 'read',
       }));
-      await supabase
-        .from('message_receipts')
-        .upsert(rows, { onConflict: 'chat_id,message_id,user_id' }) // DO UPDATE -> read
-        .catch(() => {});
+         try {
+              const { error: upErr } = await supabase
+              .from('message_receipts')
+              .upsert(rows, { onConflict: 'chat_id,message_id,user_id' });
+              if (upErr) console.warn('receipts upsert error', upErr);
+              } catch (e) {
+             console.warn('receipts upsert throw', e);
+         }
       // (опционально) отметим last_read_at, если у вас member_id=technician.id — тогда уберите это
       await supabase
         .from('chat_members')
@@ -368,3 +372,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
