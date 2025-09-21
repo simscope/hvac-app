@@ -43,8 +43,8 @@ export default function ChatPage() {
       ? window.APP_MEMBER_ID || localStorage.getItem('member_id') || null
       : null;
   const selfId = user?.id || appMemberId;
+
   const RECEIPTS_USER_COLUMN = 'user_id';
-  const canSend = Boolean(selfId); // eslint-disable-line no-unused-vars
 
   // ==== auth
   useEffect(() => {
@@ -63,7 +63,7 @@ export default function ChatPage() {
     const loadChats = async () => {
       const { data, error } = await supabase
         .from('chats')
-        .select('id, title, created_at, updated_at')
+        .select('id, title, created_at, updated_at, deleted')
         .eq('deleted', false)
         .order('updated_at', { ascending: false });
       if (error) return;
@@ -157,12 +157,16 @@ export default function ChatPage() {
           const m = payload.new;
           setMessages((prev) => [...prev, m]);
           if (selfId && m.author_id !== selfId) {
-            await supabase.from('message_receipts').upsert([{
-              chat_id: m.chat_id,
-              message_id: m.id,
-              [RECEIPTS_USER_COLUMN]: selfId,
-              status: 'delivered',
-            }], { onConflict: 'message_id,user_id,status' }).catch(() => {});
+            try {
+              await supabase
+                .from('message_receipts')
+                .upsert([{
+                  chat_id: m.chat_id,
+                  message_id: m.id,
+                  [RECEIPTS_USER_COLUMN]: selfId,
+                  status: 'delivered',
+                }], { onConflict: 'message_id,user_id,status' });
+            } catch {}
           }
         })
       .subscribe();
@@ -190,7 +194,7 @@ export default function ChatPage() {
       .subscribe();
     receiptsSubRef.current = rCh;
 
-    // typing (только печатает…, без любых call-событий)
+    // typing (только печатает…)
     if (typingChannelRef.current) supabase.removeChannel(typingChannelRef.current);
     const tCh = supabase.channel(`typing:${activeChatId}`, { config: { broadcast: { ack: false } } })
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -229,14 +233,17 @@ export default function ChatPage() {
       [RECEIPTS_USER_COLUMN]: selfId,
       status: 'read',
     }));
-    await supabase.from('message_receipts').upsert(rows, {
-      onConflict: 'message_id,user_id,status',
-    }).catch(() => {});
-    await supabase.from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('chat_id', activeChatId)
-      .eq('member_id', selfId)
-      .catch(() => {});
+    try {
+      await supabase.from('message_receipts').upsert(rows, {
+        onConflict: 'message_id,user_id,status',
+      });
+    } catch {}
+    try {
+      await supabase.from('chat_members')
+        .update({ last_read_at: new Date().toISOString() })
+        .eq('chat_id', activeChatId)
+        .eq('member_id', selfId);
+    } catch {}
     markChatRead(activeChatId).catch(() => {});
   }, [activeChatId, selfId]);
 
@@ -247,7 +254,7 @@ export default function ChatPage() {
     return `${arr.slice(0,2).join(', ')}${arr.length>2 ? ` и ещё ${arr.length-2}`:''} печатают…`;
   }, [typing]);
 
-  // суммарный бейдж для верхнего меню (локальные непрочитанные)
+  // суммарный бейдж для верхнего меню
   useEffect(() => {
     const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
     if (typeof window !== 'undefined') {
@@ -255,7 +262,40 @@ export default function ChatPage() {
     }
   }, [unreadByChat]);
 
-  // ====== Лэйаут: фикс наверху, скроллятся только колонки
+  // ==== отправка сообщения + файлов (ВОЗВРАТИЛ)
+  const handleSend = useCallback(async ({ text, files }) => {
+    if (!activeChatId || !selfId) return;
+    const body = (text || '').trim();
+
+    // 1) создаём сообщение
+    const { data: msg, error: msgErr } = await supabase
+      .from('chat_messages')
+      .insert({ chat_id: activeChatId, author_id: selfId, body: body || null })
+      .select()
+      .single();
+    if (msgErr || !msg) return;
+
+    // 2) если есть файлы — загружаем первый (как раньше)
+    if (files && files.length) {
+      let i = 0;
+      for (const f of files) {
+        const cleanName = f.name.replace(/[^0-9A-Za-z._-]+/g, '_');
+        const path = `${activeChatId}/${msg.id}/${Date.now()}_${cleanName}`;
+        const up = await supabase.storage.from('chat-attachments').upload(path, f, { contentType: f.type });
+        if (!up.error && i === 0) {
+          try {
+            await supabase
+              .from('chat_messages')
+              .update({ file_url: path, file_name: cleanName, file_type: f.type, file_size: f.size })
+              .eq('id', msg.id);
+          } catch {}
+        }
+        i++;
+      }
+    }
+  }, [activeChatId, selfId]);
+
+  // ====== Лэйаут: фикс наверху и внизу, скролл только у списка/колонок
   return (
     <div
       style={{
@@ -286,8 +326,7 @@ export default function ChatPage() {
             chat={chats.find(c => c.chat_id === activeChatId) || null}
             typingText={typingText}
             members={members}
-            // ВАЖНО: не передаём onCall — кнопка звонка должна скрыться,
-            // а если в ChatHeader не предусмотрено — добавь там условие!
+            // без onCall -> кнопка звонка не будет показываться
           />
         </div>
 
@@ -304,10 +343,10 @@ export default function ChatPage() {
         </div>
 
         {/* инпут */}
-        <div style={{ padding:'12px', borderTop:'1px solid #eee', background:'#fff' }}>
+        <div style={{ padding:'12px', borderTop:'1px solid #eee', background:'#fff', position:'sticky', bottom:0 }}>
           <MessageInput
             chatId={activeChatId}
-            onSent={() => {}}
+            onSent={handleSend}
           />
         </div>
       </div>
