@@ -3,28 +3,39 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import NotificationsBell from './notifications/NotificationsBell.jsx';
 
-
 const NavItem = ({ to, label, active, badge }) => (
   <Link
     to={to}
     style={{
-      position:'relative',
+      position: 'relative',
       padding: '10px 14px',
       borderRadius: 10,
       textDecoration: 'none',
       color: active ? '#111827' : '#374151',
       background: active ? '#e5e7eb' : 'transparent',
       fontWeight: 600,
-      display:'inline-block'
+      display: 'inline-block',
     }}
   >
     {label}
     {badge > 0 && (
-      <span style={{
-        position:'absolute', top:-6, right:-6,
-        background:'#ef4444', color:'#fff', borderRadius:9999, padding:'2px 6px',
-        fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
-      }}>{badge}</span>
+      <span
+        style={{
+          position: 'absolute',
+          top: -6,
+          right: -6,
+          background: '#ef4444',
+          color: '#fff',
+          borderRadius: 9999,
+          padding: '2px 6px',
+          fontSize: 12,
+          fontWeight: 700,
+          minWidth: 18,
+          textAlign: 'center',
+        }}
+      >
+        {badge}
+      </span>
     )}
   </Link>
 );
@@ -37,7 +48,10 @@ export default function TopNav() {
   const { role, logout, profile } = useAuth();
   const { pathname } = useLocation();
 
-  const [chatUnread, setChatUnread] = useState(Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0));
+  // бейдж для пункта "Чат" — как было (берём суммарные непрочитанные из локального события)
+  const [chatUnread, setChatUnread] = useState(
+    Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0)
+  );
   useEffect(() => {
     const h = (e) => setChatUnread(Number(e.detail?.total || 0));
     window.addEventListener('chat-unread-changed', h);
@@ -59,7 +73,10 @@ export default function TopNav() {
     ['/finance', '💵 Финансы'],
   ];
 
-  const items = (role === 'admin' ? [...baseItems, ['/chat','💬 Чат']] : [...baseItems, ['/chat','💬 Чат']]);
+  const items =
+    role === 'admin'
+      ? [...baseItems, ['/chat', '💬 Чат']]
+      : [...baseItems, ['/chat', '💬 Чат']];
 
   return (
     <div
@@ -88,18 +105,22 @@ export default function TopNav() {
             badge={to === '/chat' ? chatUnread : 0}
           />
         ))}
-        {role === 'admin' && adminOnly.map(([to, label]) => (
-          <NavItem
-            key={to}
-            to={to}
-            label={label}
-            active={isActive(pathname, to)}
-            badge={0}
-          />
-        ))}
+        {role === 'admin' &&
+          adminOnly.map(([to, label]) => (
+            <NavItem
+              key={to}
+              to={to}
+              label={label}
+              active={isActive(pathname, to)}
+              badge={0}
+            />
+          ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        {/* колокольчик уведомлений — in-app нотификации */}
+        <NotificationsBell />
+
         <div style={{ fontSize: 12, color: '#6b7280' }}>
           {profile?.full_name ? `${profile.full_name} • ${role}` : role}
         </div>
