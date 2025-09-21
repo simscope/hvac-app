@@ -1,148 +1,168 @@
-// client/src/components/notifications/NotificationsBell.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
+import { markManyAsReadByIds, listMyNotifications } from '../../api/notifications';
 
-function Item({ n, onOpen }) {
-  const payload = n?.payload || {};
-  const title = n?.type === 'chat:new_message' ? 'Новое сообщение' : (n?.type || 'Событие');
-  const text  = payload?.text || '';
-  const dt = n?.created_at ? new Date(n.created_at).toLocaleString() : '';
-
-  const unread = !n.read_at;
-
-  return (
-    <button
-      onClick={() => onOpen?.(n)}
-      style={{
-        width:'100%', textAlign:'left', padding:'10px 12px', border:'none', background:'#fff',
-        borderBottom:'1px solid #eee', cursor:'pointer'
-      }}
-    >
-      <div style={{fontWeight:700, color: unread ? '#111827' : '#6b7280'}}>{title}</div>
-      {text && <div style={{color:'#374151', marginTop:4}}>{text}</div>}
-      <div style={{fontSize:12, color:'#9ca3af', marginTop:4}}>{dt}</div>
-    </button>
-  );
-}
-
+/**
+ * Показывает колокольчик, выпадающий список уведомлений и живое обновление.
+ * - unreadCount синхронизируем с localStorage('CHAT_UNREAD_TOTAL') и событием window 'chat-unread-changed'
+ * - Клик по карточке помечает уведомление прочитанным и шлёт кастомное событие, чтобы ChatPage мог открыть нужное сообщение.
+ */
 export default function NotificationsBell() {
+  const [user, setUser] = useState(null);
   const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState([]);
-  const userIdRef = useRef(null);
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  // загрузка пользователя
+  const unreadCount = useMemo(
+    () => items.filter(n => !n.read_at).length,
+    [items]
+  );
+
+  // auth
   useEffect(() => {
-    let unsubAuth;
+    let sub;
     (async () => {
       const { data } = await supabase.auth.getUser();
-      userIdRef.current = data?.user?.id || null;
-      await load();
-      // realtime подписка только на свои уведомления
-      sub();
+      setUser(data?.user ?? null);
+      sub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null));
     })();
-
-    function sub() {
-      const ch = supabase
-        .channel('notif-self')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userIdRef.current}` },
-          async () => load(true)
-        )
-        .subscribe();
-      return () => supabase.removeChannel(ch);
-    }
-
-    return () => {
-      try { unsubAuth?.(); } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { try { sub?.data?.subscription?.unsubscribe(); } catch {} };
   }, []);
 
-  async function load(silent=false) {
-    if (!userIdRef.current) return;
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', userIdRef.current)
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (!error) setRows(data || []);
+  // начальная загрузка + RT
+  useEffect(() => {
+    if (!user?.id) { setItems([]); return; }
 
-    // синхронизируем бейдж в top-nav через кастомное событие
-    const total = (data || []).filter(x => !x.read_at).length;
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      const { data } = await listMyNotifications(50);
+      if (mounted) setItems(data || []);
+      setLoading(false);
+    })();
+
+    const ch = supabase
+      .channel('notif-rt')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        (payload) => {
+          setItems(prev => [payload.new, ...prev].slice(0, 200));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        (payload) => {
+          setItems(prev => prev.map(i => i.id === payload.new.id ? payload.new : i));
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(ch);
+  }, [user?.id]);
+
+  // синхронизация бейджа в шапке
+  useEffect(() => {
+    const total = unreadCount;
     localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
-  }
+    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail:{ total } }));
+  }, [unreadCount]);
 
-  const unread = useMemo(() => rows.filter(r => !r.read_at).length, [rows]);
-
-  async function markAllRead() {
-    if (!userIdRef.current) return;
-    await supabase
-      .from('notifications')
-      .update({ read_at: new Date().toISOString() })
-      .eq('user_id', userIdRef.current)
-      .is('read_at', null);
-
-    load(true);
-  }
-
-  async function openOne(n) {
-    // помечаем прочитанным и открываем чат+сообщение
-    await supabase
-      .from('notifications')
-      .update({ read_at: new Date().toISOString() })
-      .eq('id', n.id);
-
-    const chatId = n?.payload?.chat_id;
-    const msgId  = n?.payload?.message_id; // если есть
-    if (chatId) {
-      const url = msgId ? `/chat?chat=${chatId}&mid=${msgId}` : `/chat?chat=${chatId}`;
-      window.location.assign(url);
+  // пометить все в раскрытом списке как прочитанные
+  const markAllVisibleAsRead = async () => {
+    const unreadIds = items.filter(n => !n.read_at).map(n => n.id);
+    if (!unreadIds.length) return;
+    const { error } = await markManyAsReadByIds(unreadIds);
+    if (!error) {
+      const now = new Date().toISOString();
+      setItems(prev => prev.map(n => unreadIds.includes(n.id) ? { ...n, read_at: now } : n));
     }
+  };
+
+  // клик по одному уведомлению
+  const onClickItem = async (n) => {
+    if (!n) return;
+
+    if (!n.read_at) {
+      const { error } = await markManyAsReadByIds([n.id]);
+      if (!error) {
+        setItems(prev => prev.map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x));
+      }
+    }
+
+    // скажем странице чата открыть нужный чат/сообщение
+    const chatId = n.payload?.chat_id;
+    const messageId = n.payload?.message_id;
+    window.dispatchEvent(new CustomEvent('open-chat-message', { detail: { chatId, messageId } }));
     setOpen(false);
-  }
+  };
 
   return (
     <div style={{ position:'relative' }}>
       <button
-        type="button"
         onClick={() => setOpen(v => !v)}
-        style={{
-          position:'relative',
-          width:40, height:40, borderRadius:9999, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer'
-        }}
         title="Уведомления"
+        style={{
+          width:36,height:36,borderRadius:9999,border:'1px solid #e5e7eb',
+          background:'#fff',position:'relative',cursor:'pointer'
+        }}
       >
         🔔
-        {unread > 0 && (
+        {!!unreadCount && (
           <span style={{
-            position:'absolute', top:-6, right:-6,
-            background:'#ef4444', color:'#fff', borderRadius:9999, padding:'2px 6px',
-            fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
-          }}>{unread}</span>
+            position:'absolute', top:-4, right:-4,
+            background:'#ef4444', color:'#fff', borderRadius:9999,
+            padding:'1px 6px', fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
+          }}>
+            {unreadCount}
+          </span>
         )}
       </button>
 
       {open && (
         <div
           style={{
-            position:'absolute', right:0, marginTop:6, width:330, maxHeight:400,
-            overflow:'auto', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, boxShadow:'0 10px 30px rgba(0,0,0,.08)', zIndex:50
+            position:'absolute', right:0, top:44, width:360, maxHeight:480,
+            background:'#fff', border:'1px solid #e5e7eb', borderRadius:12,
+            boxShadow:'0 10px 20px rgba(0,0,0,.08)', overflow:'auto', zIndex:100
           }}
         >
-          <div style={{padding:'10px 12px', fontWeight:800, borderBottom:'1px solid #eee', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-            <div>Уведомления</div>
-            {unread > 0 && (
-              <button onClick={markAllRead} style={{border:'none', background:'transparent', color:'#2563eb', cursor:'pointer', fontWeight:700}}>
-                Отметить прочитанными
-              </button>
-            )}
+          <div style={{ padding:'10px 14px', fontWeight:800, display:'flex', justifyContent:'space-between' }}>
+            <span>Уведомления</span>
+            <button
+              onClick={markAllVisibleAsRead}
+              style={{ fontSize:12, border:'none', background:'transparent', color:'#2563eb', cursor:'pointer' }}
+              disabled={!unreadCount || loading}
+            >
+              Пометить всё прочитанным
+            </button>
           </div>
 
-          {rows.length === 0 && <div style={{padding:20, color:'#6b7280'}}>Нет уведомлений</div>}
-          {rows.map(n => <Item key={n.id} n={n} onOpen={openOne} />)}
+          {loading && <div style={{ padding:14, color:'#6b7280' }}>Загрузка…</div>}
+
+          {!loading && !items.length && (
+            <div style={{ padding:14, color:'#6b7280' }}>Нет уведомлений</div>
+          )}
+
+          {items.map(n => (
+            <div
+              key={n.id}
+              onClick={() => onClickItem(n)}
+              style={{
+                padding:'10px 14px', borderTop:'1px solid #f3f4f6', cursor:'pointer',
+                background: n.read_at ? '#fff' : '#eef2ff'
+              }}
+            >
+              <div style={{ fontWeight:700, fontSize:14, marginBottom:4 }}>Новое сообщение</div>
+              <div style={{ color:'#374151', fontSize:14, marginBottom:6 }}>
+                {n.payload?.text || 'Сообщение'}
+              </div>
+              <div style={{ color:'#6b7280', fontSize:12 }}>
+                {new Date(n.created_at).toLocaleString()}
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
