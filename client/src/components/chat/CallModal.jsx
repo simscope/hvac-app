@@ -1,6 +1,7 @@
 // client/src/components/chat/CallModal.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
+import { sendMessage, listMessages, subscribeToChat } from '../../api/chat';
 
 export default function CallModal({ state, user, channelName, onClose }) {
   const pcRef = useRef(null);
@@ -94,3 +95,4 @@ export default function CallModal({ state, user, channelName, onClose }) {
     </div>
   );
 }
+
