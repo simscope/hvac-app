@@ -274,7 +274,6 @@ export default function ChatPage() {
 
     // пушим событие — колокол и бейджи обновятся мгновенно
     window.dispatchEvent(new CustomEvent('notifications-changed'));
-  }, [activeChatId, selfId]);
 
   // строка "печатает…"
   const typingNames = useMemo(() => {
@@ -372,3 +371,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
