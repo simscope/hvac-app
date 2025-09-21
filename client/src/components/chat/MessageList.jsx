@@ -1,14 +1,14 @@
 // client/src/components/chat/MessageList.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import { sendMessage } from '../../api/chat';
 
-
+/* ---------- helpers ---------- */
 
 function Ticks({ mine, stats, memberNames }) {
   if (!mine) return null;
   const delivered = stats?.delivered && stats.delivered.size > 0;
   const read = stats?.read && stats.read.size > 0;
+
   const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
   const title = readers.length
     ? `Прочитали: ${readers.join(', ')}`
@@ -54,36 +54,70 @@ function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-at
   );
 }
 
-const fmtTime = ts => {
+const fmtTime = (ts) => {
   try { return new Date(ts).toLocaleString(); } catch { return ''; }
 };
 
+/* ---------- main component ---------- */
+
 export default function MessageList({
+  chatId,
   messages,
   loading,
   currentUserId,
-  receipts = {},
-  onMarkVisibleRead,
-  memberNames = {}
+  receipts = {},             // { [messageId]: { delivered:Set<userId>, read:Set<userId> } }
+  memberNames = {},
+  enableAutoRead = true,     // можно выключить автопометку прочитанным
+  onReadSent,                // коллбек после отправки "read" (не обязателен)
 }) {
   const bottomRef = useRef(null);
   const observerRef = useRef(null);
   const pendingToReadRef = useRef(new Set());
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages?.length]);
-
   useEffect(() => {
-    if (!messages?.length || !onMarkVisibleRead) return;
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages?.length]);
 
-    if (observerRef.current) { try { observerRef.current.disconnect(); } catch {} }
-    const flush = () => {
+  // Помечаем прочитанными сообщения, попавшие в вьюпорт (только чужие)
+  useEffect(() => {
+    if (!enableAutoRead || !messages?.length || !chatId) return;
+
+    // создаём/обновляем наблюдателя
+    try { observerRef.current?.disconnect(); } catch {}
+    const flush = async () => {
       const ids = Array.from(pendingToReadRef.current);
       pendingToReadRef.current.clear();
-      if (ids.length) onMarkVisibleRead(ids);
+      if (!ids.length) return;
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        // строим строки для upsert (обновляем статус на 'read')
+        const rows = ids.map((message_id) => ({
+          chat_id: chatId,
+          message_id,
+          user_id: user.id,
+          status: 'read',
+        }));
+
+        const { error } = await supabase
+          .from('message_receipts')
+          .upsert(rows, {
+            onConflict: 'chat_id,message_id,user_id', // совпадает с нашим уникальным ключом
+            // ignoreDuplicates не указываем → будет DO UPDATE (delivered -> read)
+          });
+
+        if (error) console.error('mark read error', error);
+        onReadSent?.(ids);
+      } catch (e) {
+        console.error('mark read error', e);
+      }
     };
+
     const flushDebounced = (() => {
       let t = null;
-      return () => { clearTimeout(t); t = setTimeout(flush, 300); };
+      return () => { clearTimeout(t); t = setTimeout(flush, 250); };
     })();
 
     const io = new IntersectionObserver((entries) => {
@@ -91,20 +125,25 @@ export default function MessageList({
         if (!e.isIntersecting) continue;
         const id = e.target.getAttribute('data-mid');
         const mine = e.target.getAttribute('data-mine') === '1';
-        if (id && !mine) {
-          pendingToReadRef.current.add(id);
-          flushDebounced();
-        }
+        if (!id || mine) continue;
+
+        // уже прочитано мной? — не шлём повторно
+        const alreadyReadByMe = receipts[id]?.read?.has?.(currentUserId);
+        if (alreadyReadByMe) continue;
+
+        pendingToReadRef.current.add(id);
+        flushDebounced();
       }
     }, { root: null, rootMargin: '0px 0px -20% 0px', threshold: 0.5 });
 
+    // подписываем все сообщения
     setTimeout(() => {
       document.querySelectorAll('[data-mid]').forEach((el) => io.observe(el));
     }, 0);
 
     observerRef.current = io;
     return () => { try { io.disconnect(); } catch {} };
-  }, [messages, onMarkVisibleRead, currentUserId]);
+  }, [chatId, messages, currentUserId, enableAutoRead, receipts, onReadSent]);
 
   if (loading) return <div>Загрузка…</div>;
   if (!messages?.length) return <div>Сообщений пока нет</div>;
@@ -112,7 +151,8 @@ export default function MessageList({
   return (
     <div>
       {messages.map((m) => {
-        const mine = (m.author_id || m.sender_id) === currentUserId;
+        const authorId = m.author_id || m.sender_id;
+        const mine = authorId === currentUserId;
         const stats = receipts[m.id];
 
         return (
@@ -122,13 +162,15 @@ export default function MessageList({
             data-mine={mine ? '1' : '0'}
             style={{ margin: '8px 0', display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}
           >
-            <div style={{
-              maxWidth: '72%',
-              background: mine ? '#e8f0fe' : '#f5f5f5',
-              borderRadius: 10,
-              padding: '8px 10px',
-              wordBreak: 'break-word'
-            }}>
+            <div
+              style={{
+                maxWidth: '72%',
+                background: mine ? '#e8f0fe' : '#f5f5f5',
+                borderRadius: 10,
+                padding: '8px 10px',
+                wordBreak: 'break-word'
+              }}
+            >
               {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
 
               {(m.file_url || m.attachment_url) && (
@@ -161,7 +203,3 @@ export default function MessageList({
     </div>
   );
 }
-
-
-
-
