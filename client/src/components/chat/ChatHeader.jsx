@@ -1,5 +1,7 @@
 // client/src/components/chat/ChatHeader.jsx
 import React from 'react';
+import { sendMessage, listMessages, subscribeToChat } from '../../api/chat';
+
 
 export default function ChatHeader({
   chat,
@@ -47,3 +49,4 @@ export default function ChatHeader({
     </div>
   );
 }
+
