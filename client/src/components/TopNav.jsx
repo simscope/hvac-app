@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import NotificationsBell from './notifications/NotificationsBell.jsx';
 
 const NavItem = ({ to, label, active, badge }) => (
   <Link
@@ -48,7 +47,7 @@ export default function TopNav() {
   const { role, logout, profile } = useAuth();
   const { pathname } = useLocation();
 
-  // бейдж для пункта "Чат" — как было (берём суммарные непрочитанные из локального события)
+  // только бейдж на "Чат"
   const [chatUnread, setChatUnread] = useState(
     Number(localStorage.getItem('CHAT_UNREAD_TOTAL') || 0)
   );
@@ -66,17 +65,7 @@ export default function TopNav() {
     ['/jobs/all', '📄 Все заявки'],
     ['/materials', '📦 Детали'],
   ];
-
-  const adminOnly = [
-    ['/chat-admin', '🛡️ Чат-админка'],
-    ['/technicians', '👥 Сотрудники'],
-    ['/finance', '💵 Финансы'],
-  ];
-
-  const items =
-    role === 'admin'
-      ? [...baseItems, ['/chat', '💬 Чат']]
-      : [...baseItems, ['/chat', '💬 Чат']];
+  const items = [...baseItems, ['/chat', '💬 Чат']];
 
   return (
     <div
@@ -105,22 +94,9 @@ export default function TopNav() {
             badge={to === '/chat' ? chatUnread : 0}
           />
         ))}
-        {role === 'admin' &&
-          adminOnly.map(([to, label]) => (
-            <NavItem
-              key={to}
-              to={to}
-              label={label}
-              active={isActive(pathname, to)}
-              badge={0}
-            />
-          ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {/* колокольчик уведомлений — in-app нотификации */}
-        <NotificationsBell />
-
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ fontSize: 12, color: '#6b7280' }}>
           {profile?.full_name ? `${profile.full_name} • ${role}` : role}
         </div>
