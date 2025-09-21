@@ -1,6 +1,7 @@
 // client/src/pages/ChatAdminPage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { listMessages, subscribeToChat, sendMessage } from '../api/chat';
 
 /**
  * Админ-панель чатов:
@@ -573,4 +574,5 @@ export default function ChatAdminPage() {
 /* ===== общие стили модалки ===== */
 const modalWrap = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', display: 'grid', placeItems: 'center', zIndex: 50 };
 const modal = { width: 560, maxWidth: '90vw', background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 10px 24px rgba(0,0,0,.15)' };
+
 
