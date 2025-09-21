@@ -1,14 +1,9 @@
 // client/src/api/notifications.js
 import { supabase } from '../supabaseClient';
 
-/**
- * Получить первые уведомления и количество непрочитанных.
- */
+/** Загрузка первых уведомлений + счётчик непрочитанных */
 export async function fetchNotifications({ limit = 20 } = {}) {
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   if (!user) return { items: [], unread: 0, user: null };
 
@@ -29,28 +24,18 @@ export async function fetchNotifications({ limit = 20 } = {}) {
   return { items: items ?? [], unread: count ?? 0, user };
 }
 
-/**
- * Подписаться на новые уведомления текущего юзера (INSERT).
- * Возвращает функцию отписки.
- */
+/** Подписка на INSERT для текущего пользователя (реальное realtime) */
 export async function subscribeNotifications(onNew) {
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
+  const { data: { user }, error: authErr } = await supabase.auth.getUser();
   if (authErr) throw authErr;
   if (!user) return () => {};
 
+  // ВАЖНО: канал создаём после получения user.id, без промисов в filter
   const channel = supabase
-    .channel('notifications_' + user.id)
+    .channel(`notifications_${user.id}`)
     .on(
       'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'notifications',
-        filter: `user_id=eq.${user.id}`,
-      },
+      { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
       (payload) => onNew?.(payload.new)
     )
     .subscribe();
@@ -58,7 +43,6 @@ export async function subscribeNotifications(onNew) {
   return () => supabase.removeChannel(channel);
 }
 
-/** Пометить уведомление прочитанным */
 export async function markNotificationRead(id) {
   const { error } = await supabase
     .from('notifications')
@@ -67,7 +51,6 @@ export async function markNotificationRead(id) {
   if (error) throw error;
 }
 
-/** Пометить все прочитанными */
 export async function markAllRead() {
   const { error } = await supabase
     .from('notifications')
