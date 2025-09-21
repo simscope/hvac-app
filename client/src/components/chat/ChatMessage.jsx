@@ -1,5 +1,5 @@
 import React from 'react';
-import { sendMessage, listMessages, subscribeToChat } from '../api/chat';
+import { sendMessage } from '../../api/chat';
 
 export default function ChatMessage({ m, isMine, receipts }) {
   const r = receipts[m.id] || { delivered:new Set(), read:new Set() };
