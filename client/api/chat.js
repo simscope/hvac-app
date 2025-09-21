@@ -1,4 +1,4 @@
-// client/src/api/chat.js
+// client/api/chat.js
 import { supabase } from '../supabaseClient';
 
 /** Отправка сообщения через RPC */
