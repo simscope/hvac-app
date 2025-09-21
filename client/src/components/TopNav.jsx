@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import NotificationsBell from './notifications/NotificationsBell.jsx';
+
 
 const NavItem = ({ to, label, active, badge }) => (
   <Link
