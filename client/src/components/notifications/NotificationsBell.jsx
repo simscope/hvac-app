@@ -11,7 +11,6 @@ import Toast from './Toast';
 function BellIcon({ hasUnread }) {
   return (
     <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-      {/* иконка-колокол */}
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
         <path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 002 2zM18 16v-5a6 6 0 10-12 0v5l-2 2v1h16v-1l-2-2z" fill="#111827" />
       </svg>
@@ -40,6 +39,7 @@ export default function NotificationsBell() {
   const [toasts, setToasts] = useState([]);
   const ref = useRef(null);
 
+  // загрузка и realtime
   useEffect(() => {
     let unsub = null;
     (async () => {
@@ -47,24 +47,31 @@ export default function NotificationsBell() {
       setItems(firstItems);
       setUnread(cnt);
 
-      unsub = await subscribeNotifications((n) => {
+      unsub = await subscribeNotifications(async (n) => {
+        // если дропдаун открыт — считаем сразу прочитанным
+        if (open) {
+          try { await markNotificationRead(n.id); } catch {}
+        } else {
+          setUnread((x) => x + 1);
+        }
         setItems((prev) => [n, ...prev].slice(0, 50));
-        setUnread((x) => x + 1);
 
-        // показать тост
+        // тост
         setToasts((prev) => [
           ...prev,
           {
             id: n.id,
             title: 'Новое сообщение',
             text: n?.payload?.text || 'Сообщение',
-            url: n?.payload?.chat_id ? `/chat/${n.payload.chat_id}` : undefined,
+            url: n?.payload?.chat_id && n?.payload?.message_id
+              ? `/chat/${n.payload.chat_id}?mid=${n.payload.message_id}`
+              : undefined,
           },
         ]);
       });
     })();
 
-    // закрытие выпадашки при клике вне
+    // закрытие выпадашки по клику вне
     const onDoc = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
@@ -74,31 +81,41 @@ export default function NotificationsBell() {
       unsub?.();
       document.removeEventListener('click', onDoc);
     };
-  }, []);
+  }, [open]);
+
+  const onToggle = async () => {
+    const next = !open;
+    setOpen(next);
+    // при открытии — пометить всё как прочитанное
+    if (!open) {
+      try {
+        await markAllRead();
+        setUnread(0);
+        setItems((prev) => prev.map((it) => (it.read_at ? it : { ...it, read_at: new Date().toISOString() })));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  };
 
   const onClickItem = async (n) => {
     if (!n.read_at) {
-      await markNotificationRead(n.id);
+      try { await markNotificationRead(n.id); } catch {}
       setUnread((x) => Math.max(0, x - 1));
       setItems((prev) => prev.map((it) => (it.id === n.id ? { ...it, read_at: new Date().toISOString() } : it)));
     }
-    const url = n?.payload?.chat_id ? `/chat/${n.payload.chat_id}` : null;
+    const url = n?.payload?.chat_id && n?.payload?.message_id
+      ? `/chat/${n.payload.chat_id}?mid=${n.payload.message_id}`
+      : (n?.payload?.chat_id ? `/chat/${n.payload.chat_id}` : null);
     if (url) window.location.href = url;
-  };
-
-  const onMarkAll = async () => {
-    await markAllRead();
-    setUnread(0);
-    setItems((prev) => prev.map((it) => (it.read_at ? it : { ...it, read_at: new Date().toISOString() })));
   };
 
   return (
     <>
-      {/* Иконка */}
       <div ref={ref} style={{ position: 'relative' }}>
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={onToggle}
           title="Уведомления"
           style={{
             display: 'inline-flex',
@@ -115,7 +132,6 @@ export default function NotificationsBell() {
           {unread > 0 && <span style={{ fontSize: 12, color: '#111827' }}>{unread}</span>}
         </button>
 
-        {/* Выпадашка */}
         {open && (
           <div
             style={{
@@ -135,7 +151,7 @@ export default function NotificationsBell() {
             <div style={{ padding: '10px 12px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between' }}>
               <b>Уведомления</b>
               {unread > 0 && (
-                <button onClick={onMarkAll} style={{ border: 'none', background: 'transparent', color: '#2563eb', cursor: 'pointer' }}>
+                <button onClick={async (e) => { e.stopPropagation(); await onToggle(); }} style={{ border: 'none', background: 'transparent', color: '#2563eb', cursor: 'pointer' }}>
                   Прочитать всё
                 </button>
               )}
@@ -170,7 +186,6 @@ export default function NotificationsBell() {
         )}
       </div>
 
-      {/* Тосты */}
       {toasts.map((t) => (
         <Toast
           key={t.id}
