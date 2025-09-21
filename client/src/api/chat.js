@@ -1,57 +1,57 @@
 // client/src/api/chat.js
 import { supabase } from '../supabaseClient';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * Отправка сообщения:
- * 1) гарантируем членство (через RPC add_self_to_chat → technicians.auth_user_id)
- * 2) шлём сообщение через RPC send_message
- */
-export async function sendMessage(chatId, text, fileUrl = null) {
+export async function sendMessageDirect(chatId, authorId, text) {
+  const body = String(text || '').trim();
   if (!UUID_RE.test(String(chatId))) throw new Error(`Invalid chatId: ${chatId}`);
-  const body = String(text ?? '').trim();
+  if (!UUID_RE.test(String(authorId))) throw new Error(`Invalid author: ${authorId}`);
   if (!body) throw new Error('Пустое сообщение');
 
-  // Проверим авторизацию
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  if (!user) throw new Error('Not authenticated');
-
-  // 1) Корректное «вступление» в чат (членство через technicians → chat_members)
-  const { error: addErr } = await supabase.rpc('add_self_to_chat', { p_chat_id: chatId });
-  if (addErr) throw addErr;
-
-  // 2) Отправка
-  const { data, error } = await supabase.rpc('send_message', {
-    p_chat_id: chatId,
-    p_body: body,
-    p_file_url: fileUrl ?? null,
-  });
-  if (error) throw error;
-  return data;
-}
-
-export async function listMessages(chatId, limit = 200) {
-  const { data, error } = await supabase
+  // 1) создаём запись сообщения
+  const { data: msg, error: insErr } = await supabase
     .from('chat_messages')
-    .select('*')
-    .eq('chat_id', chatId)
-    .order('created_at', { ascending: true })
-    .limit(limit);
-  if (error) throw error;
-  return data;
+    .insert({ chat_id: chatId, author_id: authorId, body })
+    .select()
+    .single();
+
+  if (insErr) throw insErr;
+
+  // 2) создаём уведомления через RPC (SECURITY DEFINER – обходит RLS корректно)
+  const { error: notifErr } = await supabase.rpc('notify_chat_new_message', {
+    p_chat_id: chatId,
+    p_message_id: msg.id,
+    p_author: authorId,
+    p_text: body,
+  });
+  if (notifErr) {
+    // не падаем отправкой – логни и продолжай
+    console.warn('notify_chat_new_message error', notifErr);
+  }
+
+  return msg;
 }
 
-export function subscribeToChat(chatId, onInsert) {
-  const ch = supabase
-    .channel(`chat_${chatId}`)
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${chatId}` },
-      (payload) => onInsert?.(payload.new)
-    )
-    .subscribe();
-  return () => supabase.removeChannel(ch);
+export async function upsertReceiptDelivered(chatId, messageId, userId) {
+  // уникальность по (message_id, user_id, status) – как в БД
+  return supabase.from('message_receipts').upsert([{
+    chat_id: chatId,
+    message_id: messageId,
+    user_id: userId,
+    status: 'delivered',
+  }], { onConflict: 'message_id,user_id,status' });
+}
+
+export async function upsertReceiptRead(chatId, ids, userId) {
+  if (!ids?.length) return;
+  const rows = ids.map(message_id => ({
+    chat_id: chatId,
+    message_id,
+    user_id: userId,
+    status: 'read',
+  }));
+  return supabase.from('message_receipts').upsert(rows, {
+    onConflict: 'message_id,user_id,status',
+  });
 }
