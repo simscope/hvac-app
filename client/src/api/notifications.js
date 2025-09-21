@@ -1,60 +1,43 @@
 // client/src/api/notifications.js
 import { supabase } from '../supabaseClient';
 
-/** Загрузка первых уведомлений + счётчик непрочитанных */
-export async function fetchNotifications({ limit = 20 } = {}) {
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  if (!user) return { items: [], unread: 0, user: null };
+/** Получить последние уведомления текущего пользователя */
+export async function listMyNotifications(limit = 50) {
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
-  const [{ data: items, error }, { count, error: cntErr }] = await Promise.all([
-    supabase
-      .from('notifications')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(limit),
-    supabase
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .is('read_at', null),
-  ]);
-  if (error) throw error;
-  if (cntErr) throw cntErr;
-
-  return { items: items ?? [], unread: count ?? 0, user };
+  return { data: data || [], error };
 }
 
-/** Подписка на INSERT для текущего пользователя (реальное realtime) */
-export async function subscribeNotifications(onNew) {
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  if (!user) return () => {};
-
-  // ВАЖНО: канал создаём после получения user.id, без промисов в filter
-  const channel = supabase
-    .channel(`notifications_${user.id}`)
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-      (payload) => onNew?.(payload.new)
-    )
-    .subscribe();
-
-  return () => supabase.removeChannel(channel);
-}
-
-export async function markNotificationRead(id) {
+/** Пометить список уведомлений прочитанными */
+export async function markManyAsReadByIds(ids = []) {
+  if (!ids?.length) return { error: null };
   const { error } = await supabase
     .from('notifications')
     .update({ read_at: new Date().toISOString() })
-    .eq('id', id);
-  if (error) throw error;
+    .in('id', ids);
+  return { error };
 }
 
-export async function markAllRead() {
+/** Пометить все уведомления по конкретному чату прочитанными */
+export async function markByChatIdAsRead(chatId) {
+  if (!chatId) return { error: null };
   const { error } = await supabase
     .from('notifications')
     .update({ read_at: new Date().toISOString() })
-    .is('read_at', null);
-  if (error) throw error;
+    .is('read_at', null)
+    .filter('payload->>chat_id', 'eq', String(chatId));
+  return { error };
 }
+
+// На всякий случай — default-экспорт теми же функциями,
+// чтобы любой способ импорта работал.
+const api = {
+  listMyNotifications,
+  markManyAsReadByIds,
+  markByChatIdAsRead,
+};
+export default api;
