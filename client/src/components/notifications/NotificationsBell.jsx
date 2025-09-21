@@ -1,103 +1,124 @@
+// client/src/components/notifications/NotificationsBell.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import { useNavigate } from 'react-router-dom';
+
+function Item({ n, onOpen }) {
+  const payload = n?.payload || {};
+  const title = n?.type === 'chat:new_message' ? 'Новое сообщение' : (n?.type || 'Событие');
+  const text  = payload?.text || '';
+  const dt = n?.created_at ? new Date(n.created_at).toLocaleString() : '';
+
+  const unread = !n.read_at;
+
+  return (
+    <button
+      onClick={() => onOpen?.(n)}
+      style={{
+        width:'100%', textAlign:'left', padding:'10px 12px', border:'none', background:'#fff',
+        borderBottom:'1px solid #eee', cursor:'pointer'
+      }}
+    >
+      <div style={{fontWeight:700, color: unread ? '#111827' : '#6b7280'}}>{title}</div>
+      {text && <div style={{color:'#374151', marginTop:4}}>{text}</div>}
+      <div style={{fontSize:12, color:'#9ca3af', marginTop:4}}>{dt}</div>
+    </button>
+  );
+}
 
 export default function NotificationsBell() {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState([]); // rows из public.notifications
-  const [userId, setUserId] = useState(null);
-  const subRef = useRef(null);
-  const nav = useNavigate();
+  const [rows, setRows] = useState([]);
+  const userIdRef = useRef(null);
 
-  // кто я
+  // загрузка пользователя
   useEffect(() => {
+    let unsubAuth;
     (async () => {
       const { data } = await supabase.auth.getUser();
-      setUserId(data?.user?.id || null);
+      userIdRef.current = data?.user?.id || null;
+      await load();
+      // realtime подписка только на свои уведомления
+      sub();
     })();
-  }, []);
 
-  // загрузка + realtime подписка
-  useEffect(() => {
-    if (!userId) return;
-
-    const load = async () => {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(100);
-      if (!error) setItems(data || []);
-    };
-    load();
-
-    if (subRef.current) supabase.removeChannel(subRef.current);
-    const ch = supabase
-      .channel(`noti-${userId}`)
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
-        () => load()
-      )
-      .subscribe();
-    subRef.current = ch;
-
-    const h = () => load();
-    window.addEventListener('notifications-changed', h);
+    function sub() {
+      const ch = supabase
+        .channel('notif-self')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userIdRef.current}` },
+          async () => load(true)
+        )
+        .subscribe();
+      return () => supabase.removeChannel(ch);
+    }
 
     return () => {
-      window.removeEventListener('notifications-changed', h);
-      supabase.removeChannel(ch);
+      try { unsubAuth?.(); } catch {}
     };
-  }, [userId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const unread = useMemo(() => (items || []).filter(i => !i.read_at).length, [items]);
+  async function load(silent=false) {
+    if (!userIdRef.current) return;
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', userIdRef.current)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (!error) setRows(data || []);
 
-  const openNotification = async (n) => {
-    if (!n) return;
+    // синхронизируем бейдж в top-nav через кастомное событие
+    const total = (data || []).filter(x => !x.read_at).length;
+    localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
+    window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
+  }
 
-    // ставим read_at мгновенно (и локально тоже) — без перезагрузки
-    const now = new Date().toISOString();
-    await supabase.from('notifications').update({ read_at: now }).eq('id', n.id);
-    setItems(prev => prev.map(x => x.id === n.id ? { ...x, read_at: now } : x));
-    window.dispatchEvent(new CustomEvent('notifications-changed'));
+  const unread = useMemo(() => rows.filter(r => !r.read_at).length, [rows]);
 
-    const chatId = n.payload?.chat_id || n.chat_id; // на случай старых записей
-    const messageId = n.payload?.message_id || null;
-
-    // переходим в чат и (опционально) подсвечиваем сообщение
-    nav('/chat', { state: { chatId, highlightMessageId: messageId } });
-    setOpen(false);
-  };
-
-  // по открытию колокола — можно прочитать ВСЁ (опционально)
-  const markAllRead = async () => {
-    if (!userId) return;
-    const now = new Date().toISOString();
+  async function markAllRead() {
+    if (!userIdRef.current) return;
     await supabase
       .from('notifications')
-      .update({ read_at: now })
-      .eq('user_id', userId)
+      .update({ read_at: new Date().toISOString() })
+      .eq('user_id', userIdRef.current)
       .is('read_at', null);
-    setItems(prev => prev.map(x => x.read_at ? x : { ...x, read_at: now }));
-    window.dispatchEvent(new CustomEvent('notifications-changed'));
-  };
+
+    load(true);
+  }
+
+  async function openOne(n) {
+    // помечаем прочитанным и открываем чат+сообщение
+    await supabase
+      .from('notifications')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', n.id);
+
+    const chatId = n?.payload?.chat_id;
+    const msgId  = n?.payload?.message_id; // если есть
+    if (chatId) {
+      const url = msgId ? `/chat?chat=${chatId}&mid=${msgId}` : `/chat?chat=${chatId}`;
+      window.location.assign(url);
+    }
+    setOpen(false);
+  }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position:'relative' }}>
       <button
-        onClick={() => { const next = !open; setOpen(next); if (next) markAllRead(); }}
-        title="Уведомления"
+        type="button"
+        onClick={() => setOpen(v => !v)}
         style={{
           position:'relative',
-          width:36, height:36, borderRadius:18, border:'1px solid #e5e7eb',
-          background:'#fff', cursor:'pointer'
+          width:40, height:40, borderRadius:9999, border:'1px solid #e5e7eb', background:'#fff', cursor:'pointer'
         }}
+        title="Уведомления"
       >
         🔔
         {unread > 0 && (
           <span style={{
-            position:'absolute', top:-4, right:-4,
+            position:'absolute', top:-6, right:-6,
             background:'#ef4444', color:'#fff', borderRadius:9999, padding:'2px 6px',
             fontSize:12, fontWeight:700, minWidth:18, textAlign:'center'
           }}>{unread}</span>
@@ -107,29 +128,21 @@ export default function NotificationsBell() {
       {open && (
         <div
           style={{
-            position:'absolute', right:0, top:44, width:360, maxHeight:420, overflow:'auto',
-            background:'#fff', border:'1px solid #e5e7eb', borderRadius:10, boxShadow:'0 10px 30px rgba(0,0,0,.08)', zIndex:50
+            position:'absolute', right:0, marginTop:6, width:330, maxHeight:400,
+            overflow:'auto', background:'#fff', border:'1px solid #e5e7eb', borderRadius:12, boxShadow:'0 10px 30px rgba(0,0,0,.08)', zIndex:50
           }}
         >
-          <div style={{ padding:'10px 12px', fontWeight:800 }}>Уведомления</div>
-          {(items?.length ? items : []).map(n => (
-            <div
-              key={n.id}
-              onClick={() => openNotification(n)}
-              style={{
-                padding:'10px 12px', cursor:'pointer',
-                background: n.read_at ? '#fff' : '#eef2ff',
-                borderTop:'1px solid #f3f4f6'
-              }}
-            >
-              <div style={{ fontWeight:700 }}>Новое сообщение</div>
-              <div style={{ color:'#374151' }}>{n.payload?.text || 'Сообщение в чате'}</div>
-              <div style={{ fontSize:12, color:'#9ca3af' }}>
-                {new Date(n.created_at).toLocaleString()}
-              </div>
-            </div>
-          ))}
-          {!items?.length && <div style={{ padding:12, color:'#6b7280' }}>Нет уведомлений</div>}
+          <div style={{padding:'10px 12px', fontWeight:800, borderBottom:'1px solid #eee', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+            <div>Уведомления</div>
+            {unread > 0 && (
+              <button onClick={markAllRead} style={{border:'none', background:'transparent', color:'#2563eb', cursor:'pointer', fontWeight:700}}>
+                Отметить прочитанными
+              </button>
+            )}
+          </div>
+
+          {rows.length === 0 && <div style={{padding:20, color:'#6b7280'}}>Нет уведомлений</div>}
+          {rows.map(n => <Item key={n.id} n={n} onOpen={openOne} />)}
         </div>
       )}
     </div>
