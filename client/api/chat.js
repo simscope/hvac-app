@@ -1,6 +1,7 @@
-// client/api/chat.js
+// client/src/api/chat.js
 import { supabase } from '../supabaseClient';
 
+/** Отправка сообщения через RPC */
 export async function sendMessage(chatId, text, fileUrl = null) {
   const { data, error } = await supabase.rpc('send_message', {
     p_chat_id: chatId,
@@ -11,6 +12,7 @@ export async function sendMessage(chatId, text, fileUrl = null) {
   return data;
 }
 
+/** История сообщений */
 export async function listMessages(chatId, limit = 200) {
   const { data, error } = await supabase
     .from('chat_messages')
@@ -22,6 +24,7 @@ export async function listMessages(chatId, limit = 200) {
   return data;
 }
 
+/** Realtime-подписка на новые сообщения */
 export function subscribeToChat(chatId, onInsert) {
   const ch = supabase
     .channel(`chat_${chatId}`)
