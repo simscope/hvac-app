@@ -1,12 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+// client/src/components/notifications/NotificationsBell.jsx
+import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../supabaseClient';
-import { markManyAsReadByIds, listMyNotifications } from '../../api/notifications';
+import * as notif from '../../api/notifications'; // ← namespace-импорт
 
-/**
- * Показывает колокольчик, выпадающий список уведомлений и живое обновление.
- * - unreadCount синхронизируем с localStorage('CHAT_UNREAD_TOTAL') и событием window 'chat-unread-changed'
- * - Клик по карточке помечает уведомление прочитанным и шлёт кастомное событие, чтобы ChatPage мог открыть нужное сообщение.
- */
 export default function NotificationsBell() {
   const [user, setUser] = useState(null);
   const [open, setOpen] = useState(false);
@@ -36,7 +32,7 @@ export default function NotificationsBell() {
     let mounted = true;
     (async () => {
       setLoading(true);
-      const { data } = await listMyNotifications(50);
+      const { data } = await notif.listMyNotifications(50);
       if (mounted) setItems(data || []);
       setLoading(false);
     })();
@@ -46,16 +42,12 @@ export default function NotificationsBell() {
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        (payload) => {
-          setItems(prev => [payload.new, ...prev].slice(0, 200));
-        }
+        (payload) => setItems(prev => [payload.new, ...prev].slice(0, 200))
       )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-        (payload) => {
-          setItems(prev => prev.map(i => i.id === payload.new.id ? payload.new : i));
-        }
+        (payload) => setItems(prev => prev.map(i => i.id === payload.new.id ? payload.new : i))
       )
       .subscribe();
 
@@ -69,29 +61,26 @@ export default function NotificationsBell() {
     window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail:{ total } }));
   }, [unreadCount]);
 
-  // пометить все в раскрытом списке как прочитанные
   const markAllVisibleAsRead = async () => {
     const unreadIds = items.filter(n => !n.read_at).map(n => n.id);
     if (!unreadIds.length) return;
-    const { error } = await markManyAsReadByIds(unreadIds);
+    const { error } = await notif.markManyAsReadByIds(unreadIds);
     if (!error) {
       const now = new Date().toISOString();
       setItems(prev => prev.map(n => unreadIds.includes(n.id) ? { ...n, read_at: now } : n));
     }
   };
 
-  // клик по одному уведомлению
   const onClickItem = async (n) => {
     if (!n) return;
 
     if (!n.read_at) {
-      const { error } = await markManyAsReadByIds([n.id]);
+      const { error } = await notif.markManyAsReadByIds([n.id]);
       if (!error) {
         setItems(prev => prev.map(x => x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x));
       }
     }
 
-    // скажем странице чата открыть нужный чат/сообщение
     const chatId = n.payload?.chat_id;
     const messageId = n.payload?.message_id;
     window.dispatchEvent(new CustomEvent('open-chat-message', { detail: { chatId, messageId } }));
@@ -103,10 +92,7 @@ export default function NotificationsBell() {
       <button
         onClick={() => setOpen(v => !v)}
         title="Уведомления"
-        style={{
-          width:36,height:36,borderRadius:9999,border:'1px solid #e5e7eb',
-          background:'#fff',position:'relative',cursor:'pointer'
-        }}
+        style={{ width:36,height:36,borderRadius:9999,border:'1px solid #e5e7eb', background:'#fff',position:'relative',cursor:'pointer' }}
       >
         🔔
         {!!unreadCount && (
@@ -140,10 +126,7 @@ export default function NotificationsBell() {
           </div>
 
           {loading && <div style={{ padding:14, color:'#6b7280' }}>Загрузка…</div>}
-
-          {!loading && !items.length && (
-            <div style={{ padding:14, color:'#6b7280' }}>Нет уведомлений</div>
-          )}
+          {!loading && !items.length && <div style={{ padding:14, color:'#6b7280' }}>Нет уведомлений</div>}
 
           {items.map(n => (
             <div
