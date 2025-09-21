@@ -1,6 +1,6 @@
 // client/src/components/chat/MessageInput.jsx
 import React, { useState } from 'react';
-import { sendMessage } from '../api/chat'; // ВАЖНО: две точки вверх!
+import { sendMessage } from '../../api/chat';
 
 export default function MessageInput({ chatId, onSent }) {
   const [text, setText] = useState('');
@@ -46,4 +46,5 @@ export default function MessageInput({ chatId, onSent }) {
     </form>
   );
 }
+
 
