@@ -62,3 +62,107 @@ export function AuthProvider({ children }) {
           });
           setProfRow(null);
         } else {
+          setProfRow(data || null);
+        }
+      } catch (e) {
+        console.error('[AUTH] profiles query exception:', e?.message || e);
+        setProfRow(null);
+      } finally {
+        if (alive) setProfLoading(false);
+      }
+    }
+
+    loadProfile(session?.user?.id || null);
+    return () => { alive = false; };
+  }, [session?.user?.id]);
+
+  // 3) Если роль technician и есть technician_id — тянем public.technicians по id
+  useEffect(() => {
+    let alive = true;
+
+    const roleText = String(profRow?.role || '').toLowerCase();
+    const isTech = roleText === 'technician' || roleText === 'tech';
+    const techId = profRow?.technician_id || null;
+
+    async function loadTech(id) {
+      setTechRow(null);
+      if (!id) return;
+
+      setTechLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('technicians')
+          .select('id, full_name, name, phone, email')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!alive) return;
+
+        if (error) {
+          console.error('[AUTH] technicians query error:', {
+            message: error.message, details: error.details, hint: error.hint, code: error.code,
+          });
+          setTechRow(null);
+        } else {
+          setTechRow(data || null);
+        }
+      } catch (e) {
+        console.error('[AUTH] technicians query exception:', e?.message || e);
+        setTechRow(null);
+      } finally {
+        if (alive) setTechLoading(false);
+      }
+    }
+
+    if (isTech) loadTech(techId);
+    else { setTechRow(null); setTechLoading(false); }
+
+    return () => { alive = false; };
+  }, [profRow?.role, profRow?.technician_id]);
+
+  // 4) Роль
+  const role = useMemo(() => {
+    const r = String(profRow?.role || '').toLowerCase();
+    if (r === 'technician') return 'tech';
+    if (r === 'admin' || r === 'manager' || r === 'tech') return r;
+    return null;
+  }, [profRow?.role]);
+
+  // 5) Собираем profile для приложения
+  // ВАЖНО: profile.id для tech = technicians.id (нужно для JobAccess)
+  const profile = useMemo(() => {
+    if (!profRow) return null;
+
+    const base = {
+      // это id техники (для admin/manager будет null)
+      id: role === 'tech' ? (techRow?.id ?? profRow?.technician_id ?? null) : null,
+      full_name: (techRow?.full_name || techRow?.name || profRow?.full_name || null),
+      phone: techRow?.phone ?? null,
+      email: techRow?.email ?? null,
+      org_id: profRow?.org_id ?? null,
+    };
+    return base;
+  }, [role, profRow, techRow]);
+
+  const loading = authLoading || profLoading || techLoading;
+
+  const value = useMemo(() => ({
+    session,
+    user: session?.user ?? null,
+    profile,
+    role,                  // 'admin' | 'manager' | 'tech' | null
+    isAdmin: role === 'admin',
+    isActive: true,
+    loading,
+    logout: async () => {
+      try { await supabase.auth.signOut(); }
+      catch (e) { console.error('[AUTH] signOut error:', e?.message || e); }
+    },
+  }), [session, profile, role, loading]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  return useContext(AuthContext);
+}
