@@ -11,6 +11,11 @@ import ChatHeader from '../components/chat/ChatHeader.jsx';
 const RECEIPTS_USER_COLUMN = 'user_id';
 
 export default function ChatPage() {
+
+  // кто я в Auth
+const authUserId = user?.id || null;
+// кто я в staff
+const memberId   = profile?.id || null; // technicians.id, если нужен
   // ===== auth =====
   const [user, setUser] = useState(null);
   useEffect(() => {
@@ -305,3 +310,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
