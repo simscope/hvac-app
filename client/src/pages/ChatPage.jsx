@@ -7,56 +7,43 @@ import MessageList from '../components/chat/MessageList.jsx';
 import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 
-// Колонка пользователя в message_receipts
+// колонка пользователя в message_receipts
 const RECEIPTS_USER_COLUMN = 'user_id';
 
 export default function ChatPage() {
-  // текущий supabase user
+  // ===== auth =====
   const [user, setUser] = useState(null);
+  useEffect(() => {
+    let sub;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      setUser(data?.session?.user ?? null);
+      sub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null)).data?.subscription;
+    })();
+    return () => sub?.unsubscribe?.();
+  }, []);
+  const selfId = user?.id || null;
+  const canSend = Boolean(selfId);
 
-  // чаты и активный чат
+  // ===== чаты =====
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
+  const [unreadByChat, setUnreadByChat] = useState({}); // { [chat_id]: count }
 
-  // сообщения
+  // ===== сообщения/квитанции/участники =====
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [receipts, setReceipts] = useState({}); // { [messageId]: { delivered:Set, read:Set } }
 
-  // квитанции { [messageId]: { delivered:Set, read:Set } }
-  const [receipts, setReceipts] = useState({});
+  const [members, setMembers] = useState([]);         // ids участников (auth.uid)
+  const [memberNames, setMemberNames] = useState({}); // { [uid]: 'Имя' }
 
-  // участники + имена
-  const [members, setMembers] = useState([]);
-  const [memberNames, setMemberNames] = useState({});
-
-  // локальные счётчики непрочитанного по чатам
-  const [unreadByChat, setUnreadByChat] = useState({});
-
-  // подписки
   const messagesSubRef = useRef(null);
   const receiptsSubRef = useRef(null);
 
-  // кто я
-  const selfId = user?.id ?? (typeof window !== 'undefined'
-    ? window.APP_MEMBER_ID || localStorage.getItem('member_id') || null
-    : null);
-  const canSend = Boolean(selfId);
-
-  // ====== auth ======
+  // ===== загрузка списка чатов =====
   useEffect(() => {
-    let unsub;
-    (async () => {
-      const { data: s } = await supabase.auth.getSession();
-      setUser(s?.session?.user ?? null);
-      unsub = supabase.auth.onAuthStateChange((_evt, sess) => {
-        setUser(sess?.user ?? null);
-      }).data?.subscription;
-    })();
-    return () => { try { unsub?.unsubscribe(); } catch {} };
-  }, []);
-
-  // ====== список чатов ======
-  useEffect(() => {
+    let channel;
     const loadChats = async () => {
       const { data, error } = await supabase
         .from('chats')
@@ -64,7 +51,7 @@ export default function ChatPage() {
         .order('updated_at', { ascending: false });
 
       if (error) {
-        console.error('chats error', error);
+        console.error('[CHAT] chats load error:', error);
         setChats([]);
         return;
       }
@@ -75,39 +62,39 @@ export default function ChatPage() {
         last_at: r.updated_at,
       }));
       setChats(mapped);
-
-      if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
+      if (!activeChatId && mapped.length) {
+        setActiveChatId(mapped[0].chat_id);
+      }
     };
 
     loadChats();
 
-    // подсортировать чат вверх при новом сообщении
-    const ch = supabase
-      .channel('overview-messages')
+    // поднять чат наверх при новом сообщении + бейдж непрочитанного
+    channel = supabase
+      .channel('chats-overview')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         (payload) => {
-          const cid = payload.new.chat_id;
+          const m = payload.new;
           setChats(prev => {
             const arr = [...prev];
-            const i = arr.findIndex(c => c.chat_id === cid);
+            const i = arr.findIndex(c => c.chat_id === m.chat_id);
             if (i >= 0) {
-              arr[i] = { ...arr[i], last_at: payload.new.created_at };
-              arr.sort((a, b) => new Date(b.last_at||0) - new Date(a.last_at||0));
+              arr[i] = { ...arr[i], last_at: m.created_at };
+              arr.sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
             }
             return arr;
           });
-          // локальный индикатор непрочитанного
-          if (cid !== activeChatId && selfId && payload.new.author_id !== selfId) {
-            setUnreadByChat(prev => ({ ...prev, [cid]: (prev[cid] || 0) + 1 }));
+          if (selfId && m.author_id !== selfId && m.chat_id !== activeChatId) {
+            setUnreadByChat(prev => ({ ...prev, [m.chat_id]: (prev[m.chat_id] || 0) + 1 }));
           }
         })
       .subscribe();
 
-    return () => { try { supabase.removeChannel(ch); } catch {} };
+    return () => { try { supabase.removeChannel(channel); } catch {} };
   }, [activeChatId, selfId]);
 
-  // ====== участники активного чата ======
+  // ===== участники активного чата + имена =====
   useEffect(() => {
     if (!activeChatId) { setMembers([]); setMemberNames({}); return; }
 
@@ -117,24 +104,35 @@ export default function ChatPage() {
         .select('member_id')
         .eq('chat_id', activeChatId);
 
-      if (error) { setMembers([]); setMemberNames({}); return; }
+      if (error) {
+        console.error('[CHAT] members error:', error);
+        setMembers([]); setMemberNames({});
+        return;
+      }
 
       const ids = (mems || []).map(m => m.member_id).filter(Boolean);
       setMembers(ids);
 
       if (!ids.length) { setMemberNames({}); return; }
-      const { data: techs } = await supabase
-        .from('technicians')
-        .select('auth_user_id, name')
-        .in('auth_user_id', ids);
+
+      const { data: profs, error: pErr } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .in('id', ids);
+
+      if (pErr) {
+        console.warn('[CHAT] profiles load error:', pErr);
+        setMemberNames({});
+        return;
+      }
 
       const dict = {};
-      (techs || []).forEach(t => { dict[t.auth_user_id] = t.name || '—'; });
+      (profs || []).forEach(p => { dict[p.id] = p.full_name || '—'; });
       setMemberNames(dict);
     })();
   }, [activeChatId]);
 
-  // ====== загрузка сообщений ======
+  // ===== загрузка сообщений =====
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
@@ -143,59 +141,64 @@ export default function ChatPage() {
       .select('id, chat_id, author_id, body, file_url, file_name, file_type, file_size, created_at, attachment_url')
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
+
     setLoadingMessages(false);
-    if (error) { console.error('chat_messages', error); setMessages([]); return; }
+    if (error) {
+      console.error('[CHAT] messages load error:', error);
+      setMessages([]);
+      return;
+    }
     setMessages(data || []);
   }, []);
 
-  // ====== подписки по активному чату ======
+  // ===== подписки по активному чату =====
   useEffect(() => {
     if (!activeChatId) return;
 
     fetchMessages(activeChatId);
     setReceipts({});
-    setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 })); // сброс локального бейджа
+    setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 }));
 
-    // подписка на новые сообщения
+    // сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
     const msgCh = supabase
-      .channel(`chat-${activeChatId}`)
+      .channel(`chat:${activeChatId}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
           const m = payload.new;
           setMessages(prev => [...prev, m]);
 
-          // delivered для входящих — ВАЖНО: передаём chat_id, т.к. в БД он NOT NULL
+          // входящие -> квитанция delivered
           if (selfId && m.author_id !== selfId) {
-            const rows = [{
-              chat_id: m.chat_id,
+            const row = {
+              chat_id: m.chat_id,          // безопасно, если NOT NULL
               message_id: m.id,
               [RECEIPTS_USER_COLUMN]: selfId,
               status: 'delivered',
-            }];
-            const { error: rErr } = await supabase
+            };
+            const { error } = await supabase
               .from('message_receipts')
-              .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
-            if (rErr) console.warn('deliver upsert err', rErr);
+              .upsert([row], { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
+            if (error) console.warn('[CHAT] deliver upsert error:', error);
           }
         })
       .subscribe();
     messagesSubRef.current = msgCh;
 
-    // подписка на квитанции
+    // квитанции
     if (receiptsSubRef.current) supabase.removeChannel(receiptsSubRef.current);
     const rCh = supabase
-      .channel(`receipts-${activeChatId}`)
+      .channel(`receipts:${activeChatId}`)
       .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'message_receipts' },
+        { event: 'INSERT', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
         (p) => {
           const r = p.new;
           setReceipts(prev => {
             const obj = { ...prev };
             const entry = obj[r.message_id] || { delivered: new Set(), read: new Set() };
-            const tgt = (r.status === 'read') ? entry.read : entry.delivered;
-            tgt.add(r.user_id);
+            const set = r.status === 'read' ? entry.read : entry.delivered;
+            set.add(r.user_id);
             obj[r.message_id] = entry;
             return obj;
           });
@@ -209,11 +212,10 @@ export default function ChatPage() {
     };
   }, [activeChatId, selfId, fetchMessages]);
 
-  // ====== пометить сообщения как прочитанные (пачкой) ======
+  // ===== пометить сообщения как прочитанные пачкой =====
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
 
-    // передаём chat_id, т.к. колонка NOT NULL
     const rows = ids.map(message_id => ({
       chat_id: activeChatId,
       message_id,
@@ -224,9 +226,9 @@ export default function ChatPage() {
     const { error } = await supabase
       .from('message_receipts')
       .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
-    if (error) console.warn('receipts upsert error', error);
+    if (error) console.warn('[CHAT] receipts read upsert error:', error);
 
-    // обновим last_read_at — без .catch на результате await
+    // обновим last_read_at
     try {
       await supabase
         .from('chat_members')
@@ -236,10 +238,7 @@ export default function ChatPage() {
     } catch {}
   }, [activeChatId, selfId]);
 
-  // текст «печатает…»
-  const typingText = useMemo(() => '', []);
-
-  // суммарный бейдж наверху (для TopNav)
+  // ===== суммарный бейдж (на верхнем меню) =====
   useEffect(() => {
     const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
     if (typeof window !== 'undefined') {
@@ -248,14 +247,16 @@ export default function ChatPage() {
     }
   }, [unreadByChat]);
 
+  const typingText = useMemo(() => '', []);
+
   return (
     <div style={{
       display: 'grid',
       gridTemplateRows: 'auto 1fr',
-      height: 'calc(100vh - 64px)',      // 64px — высота верхнего TopNav
+      height: 'calc(100vh - 64px)',
       overflow: 'hidden'
     }}>
-      {/* Верхняя полоса заголовка активного чата */}
+      {/* заголовок */}
       <div style={{ borderBottom: '1px solid #eee', background:'#fff', position:'sticky', top:0, zIndex:2 }}>
         <ChatHeader
           chat={chats.find(c => c.chat_id === activeChatId) || null}
@@ -265,8 +266,9 @@ export default function ChatPage() {
         />
       </div>
 
-      {/* Содержимое: слева список чатов, справа сообщения — правая колонка скроллится */}
+      {/* контент */}
       <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', minHeight:0 }}>
+        {/* список чатов */}
         <div style={{ borderRight:'1px solid #eee', overflow:'auto' }}>
           <div style={{ padding:'12px' }}>
             <h3 style={{ margin:0 }}>Чаты</h3>
@@ -279,8 +281,8 @@ export default function ChatPage() {
           />
         </div>
 
+        {/* сообщения + инпут */}
         <div style={{ display:'grid', gridTemplateRows:'1fr auto', minHeight:0 }}>
-          {/* список сообщений со своей прокруткой */}
           <div style={{ overflow:'auto' }}>
             <MessageList
               messages={messages}
@@ -291,8 +293,6 @@ export default function ChatPage() {
               memberNames={memberNames}
             />
           </div>
-
-          {/* поле ввода */}
           <div style={{ borderTop:'1px solid #eee', padding:'10px', background:'#fff' }}>
             <MessageInput
               chatId={activeChatId}
