@@ -100,7 +100,7 @@ export default function TopNav() {
     <header className="tn">
       <div className="tn__left">
         <img
-          src={require('../assets/logo_invoice_header.png')}
+          src={require('../client/public/logo192.png')}
           alt="Sim Scope"
           className="tn__logo"
           onError={(e) => { e.currentTarget.style.display = 'none'; }}
