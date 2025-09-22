@@ -2,16 +2,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabaseClient';
 
-/**
- * Вспомогательные компоненты:
- *  - галочки (✓/✓✓) с подсказкой кто прочитал
- *  - предпросмотр файла (автогенерация signed URL для storage пути)
- */
+// Если у тебя другой бакет, поменяй здесь и в MessageInput.jsx
+const STORAGE_BUCKET = 'chat-attachments';
 
+/** Галочки доставки/чтения с подсказкой */
 function Ticks({ mine, stats, memberNames }) {
   if (!mine) return null;
-  const delivered = stats?.delivered && stats.delivered.size > 0;
-  const read = stats?.read && stats.read.size > 0;
+  const delivered = !!stats?.delivered && stats.delivered.size > 0;
+  const read = !!stats?.read && stats.read.size > 0;
 
   const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
   const title = readers.length
@@ -27,7 +25,8 @@ function Ticks({ mine, stats, memberNames }) {
   );
 }
 
-function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-attachments' }) {
+/** Превью файла: http-ссылки используем как есть; для путей Storage делаем signed URL */
+function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = STORAGE_BUCKET }) {
   const [url, setUrl] = useState(null);
   const isHttp = /^https?:\/\//i.test(pathOrUrl || '');
 
@@ -47,6 +46,8 @@ function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = 'chat-at
   }, [pathOrUrl, bucket, isHttp]);
 
   const isImage = (fileType || '').startsWith('image/');
+  if (!pathOrUrl) return null;
+
   return (
     <div>
       {isImage ? (
@@ -71,10 +72,10 @@ const fmtTime = (ts) => {
  * MessageList
  *
  * Props:
- * - messages: массив сообщений (id, chat_id, author_id, body, file_* ...)
- * - loading: флаг загрузки
- * - currentUserId: id текущего пользователя (тот же тип, что и author_id)
- * - receipts: { [messageId]: { delivered:Set, read:Set } }
+ * - messages: [{ id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at }]
+ * - loading: boolean
+ * - currentUserId: auth.uid() текущего пользователя
+ * - receipts: { [messageId]: { delivered:Set<uid>, read:Set<uid> } }
  * - onMarkVisibleRead?: (ids: string[]) => void
  * - memberNames?: { [userId]: string }
  */
@@ -95,7 +96,7 @@ export default function MessageList({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages?.length]);
 
-  // наблюдаем появление НЕ своих сообщений в вьюпорте и помечаем read
+  // наблюдаем появление НЕ своих сообщений и помечаем read
   useEffect(() => {
     if (!messages?.length || !onMarkVisibleRead) return;
 
@@ -123,12 +124,13 @@ export default function MessageList({
       }
     }, { root: null, rootMargin: '0px 0px -20% 0px', threshold: 0.5 });
 
-    setTimeout(() => {
+    // чуть позже, чтобы DOM уже отрисовался
+    const t = setTimeout(() => {
       document.querySelectorAll('[data-mid]').forEach((el) => io.observe(el));
     }, 0);
 
     observerRef.current = io;
-    return () => { try { io.disconnect(); } catch {} };
+    return () => { clearTimeout(t); try { io.disconnect(); } catch {} };
   }, [messages, onMarkVisibleRead, currentUserId]);
 
   if (loading) return <div style={{ padding: 12 }}>Загрузка…</div>;
@@ -137,7 +139,7 @@ export default function MessageList({
   return (
     <div>
       {messages.map((m) => {
-        const mine = (m.author_id || m.sender_id) === currentUserId;
+        const mine = m.author_id === currentUserId; // строго по author_id
         const stats = receipts[m.id];
 
         return (
@@ -154,7 +156,7 @@ export default function MessageList({
               padding: '8px 10px',
               wordBreak: 'break-word'
             }}>
-              {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
+              {!!m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
 
               {(m.file_url || m.attachment_url) && (
                 <div style={{ marginTop: 6 }}>
@@ -164,7 +166,6 @@ export default function MessageList({
                       fileName={m.file_name}
                       fileType={m.file_type}
                       fileSize={m.file_size}
-                      bucket="chat-attachments"
                     />
                   ) : (
                     <a href={m.attachment_url} target="_blank" rel="noreferrer">
