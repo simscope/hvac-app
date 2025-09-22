@@ -392,7 +392,7 @@ export default function ChatPage() {
       {/* Контент: слева список чатов, справа — сообщения */}
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', minHeight: 0 }}>
         {/* Список чатов */}
-        <div style={{ borderRight: '1px solid '#eee', overflow: 'auto' }}>
+        <div style={{ borderRight: '1px solid #eee', overflow: 'auto' }}>
           <div style={{ padding: '12px' }}>
             <h3 style={{ margin: 0 }}>Чаты</h3>
           </div>
@@ -429,3 +429,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
