@@ -26,7 +26,7 @@ export default function ChatPage() {
     return () => sub?.unsubscribe?.();
   }, []);
 
-  const selfId = user?.id ?? null;            // auth.uid()
+  const selfId = user?.id ?? null; // auth.uid()
   const canSend = Boolean(selfId);
 
   /** ───────────────────────  СПИСОК ЧАТОВ  ──────────────────── */
@@ -49,7 +49,7 @@ export default function ChatPage() {
         return;
       }
 
-      const mapped = (data || []).map(r => ({
+      const mapped = (data || []).map((r) => ({
         chat_id: r.id,
         title: r.title,
         is_group: r.is_group,
@@ -71,32 +71,46 @@ export default function ChatPage() {
         (payload) => {
           const m = payload.new;
 
-          setChats(prev => {
+          setChats((prev) => {
             const arr = [...prev];
-            const i = arr.findIndex(c => c.chat_id === m.chat_id);
+            const i = arr.findIndex((c) => c.chat_id === m.chat_id);
             if (i >= 0) {
               arr[i] = { ...arr[i], last_at: m.created_at };
-              arr.sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
+              arr.sort(
+                (a, b) =>
+                  new Date(b.last_at || 0) - new Date(a.last_at || 0),
+              );
             }
             return arr;
           });
 
           if (selfId && m.author_id !== selfId && m.chat_id !== activeChatId) {
-            setUnreadByChat(prev => ({ ...prev, [m.chat_id]: (prev[m.chat_id] || 0) + 1 }));
+            setUnreadByChat((prev) => ({
+              ...prev,
+              [m.chat_id]: (prev[m.chat_id] || 0) + 1,
+            }));
           }
-        }
+        },
       )
       .subscribe();
 
-    return () => { try { supabase.removeChannel(channel); } catch {} };
+    return () => {
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
+    };
   }, [activeChatId, selfId]);
 
   /** ───────────────  УЧАСТНИКИ АКТИВНОГО ЧАТА + ИМЕНА  ─────────────── */
-  const [members, setMembers] = useState([]);         // массив auth.user.id
+  const [members, setMembers] = useState([]); // массив auth.user.id
   const [memberNames, setMemberNames] = useState({}); // { user_id: 'Имя' }
 
   useEffect(() => {
-    if (!activeChatId) { setMembers([]); setMemberNames({}); return; }
+    if (!activeChatId) {
+      setMembers([]);
+      setMemberNames({});
+      return;
+    }
 
     (async () => {
       // Берём участников
@@ -107,15 +121,19 @@ export default function ChatPage() {
 
       if (error) {
         console.error('[CHAT] members error:', error);
-        setMembers([]); setMemberNames({});
+        setMembers([]);
+        setMemberNames({});
         return;
       }
 
-      const ids = (mems || []).map(m => m.member_id).filter(Boolean);
+      const ids = (mems || []).map((m) => m.member_id).filter(Boolean);
       setMembers(ids);
 
       // Имена из profiles
-      if (!ids.length) { setMemberNames({}); return; }
+      if (!ids.length) {
+        setMemberNames({});
+        return;
+      }
 
       const { data: profs, error: pErr } = await supabase
         .from('profiles')
@@ -129,7 +147,9 @@ export default function ChatPage() {
       }
 
       const dict = {};
-      (profs || []).forEach(p => { dict[p.id] = p.full_name || '—'; });
+      (profs || []).forEach((p) => {
+        dict[p.id] = p.full_name || '—';
+      });
       setMemberNames(dict);
     })();
   }, [activeChatId]);
@@ -146,9 +166,15 @@ export default function ChatPage() {
     if (!chatId) return;
     setLoadingMessages(true);
 
+    // Тянем сообщения вместе с автором
     const { data, error } = await supabase
       .from('chat_messages')
-      .select('id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at')
+      .select(
+        `
+        id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at,
+        author:profiles ( id, full_name, avatar_url, role )
+      `,
+      )
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
 
@@ -167,7 +193,7 @@ export default function ChatPage() {
 
     fetchMessages(activeChatId);
     setReceipts({});
-    setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 })); // сброс бейджа
+    setUnreadByChat((prev) => ({ ...prev, [activeChatId]: 0 })); // сброс бейджа
 
     // Новые сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
@@ -178,22 +204,37 @@ export default function ChatPage() {
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
           const m = payload.new;
-          setMessages(prev => [...prev, m]);
+
+          // Дотягиваем профиль автора (короткий селект по id)
+          let author = null;
+          if (m.author_id) {
+            const { data: prof } = await supabase
+              .from('profiles')
+              .select('id, full_name, avatar_url, role')
+              .eq('id', m.author_id)
+              .single();
+            author = prof || null;
+          }
+
+          setMessages((prev) => [...prev, { ...m, author }]);
 
           // Входящее → ставим delivered
           if (selfId && m.author_id !== selfId) {
             const row = {
-              chat_id: m.chat_id,        // NOT NULL
+              chat_id: m.chat_id, // NOT NULL
               message_id: m.id,
               [RECEIPTS_USER_COLUMN]: selfId,
               status: 'delivered',
             };
             const { error } = await supabase
               .from('message_receipts')
-              .upsert([row], { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
+              .upsert([row], {
+                onConflict: 'message_id,user_id,status',
+                ignoreDuplicates: true,
+              });
             if (error) console.warn('[CHAT] deliver upsert error:', error);
           }
-        }
+        },
       )
       .subscribe();
     messagesSubRef.current = msgCh;
@@ -207,49 +248,62 @@ export default function ChatPage() {
         { event: 'INSERT', schema: 'public', table: 'message_receipts', filter: `chat_id=eq.${activeChatId}` },
         (p) => {
           const r = p.new;
-          setReceipts(prev => {
+          setReceipts((prev) => {
             const obj = { ...prev };
-            const entry = obj[r.message_id] || { delivered: new Set(), read: new Set() };
+            const entry = obj[r.message_id] || {
+              delivered: new Set(),
+              read: new Set(),
+            };
             const target = r.status === 'read' ? entry.read : entry.delivered;
             target.add(r.user_id);
             obj[r.message_id] = entry;
             return obj;
           });
-        }
+        },
       )
       .subscribe();
     receiptsSubRef.current = rCh;
 
     return () => {
-      try { supabase.removeChannel(msgCh); } catch {}
-      try { supabase.removeChannel(rCh); } catch {}
+      try {
+        supabase.removeChannel(msgCh);
+      } catch {}
+      try {
+        supabase.removeChannel(rCh);
+      } catch {}
     };
   }, [activeChatId, selfId, fetchMessages]);
 
   // Пометить пачку сообщений прочитанными
-  const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !selfId || !activeChatId) return;
+  const markReadForMessageIds = useCallback(
+    async (ids) => {
+      if (!ids?.length || !selfId || !activeChatId) return;
 
-    const rows = ids.map(message_id => ({
-      chat_id: activeChatId,
-      message_id,
-      [RECEIPTS_USER_COLUMN]: selfId,
-      status: 'read',
-    }));
+      const rows = ids.map((message_id) => ({
+        chat_id: activeChatId,
+        message_id,
+        [RECEIPTS_USER_COLUMN]: selfId,
+        status: 'read',
+      }));
 
-    const { error } = await supabase
-      .from('message_receipts')
-      .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
-    if (error) console.warn('[CHAT] receipts read upsert error:', error);
+      const { error } = await supabase
+        .from('message_receipts')
+        .upsert(rows, {
+          onConflict: 'message_id,user_id,status',
+          ignoreDuplicates: true,
+        });
+      if (error) console.warn('[CHAT] receipts read upsert error:', error);
 
-    try {
-      await supabase
-        .from('chat_members')
-        .update({ last_read_at: new Date().toISOString() })
-        .eq('chat_id', activeChatId)
-        .eq('member_id', selfId);
-    } catch {}
-  }, [activeChatId, selfId]);
+      try {
+        await supabase
+          .from('chat_members')
+          .update({ last_read_at: new Date().toISOString() })
+          .eq('chat_id', activeChatId)
+          .eq('member_id', selfId);
+      } catch {}
+    },
+    [activeChatId, selfId],
+  );
 
   /** ─────────────────────  ОТПРАВКА СООБЩЕНИЯ  ───────────────────── */
   const handleSend = useCallback(
@@ -258,7 +312,7 @@ export default function ChatPage() {
 
       const f = files?.[0] || null;
 
-      // ВАЖНО: author_id обязателен для RLS
+      // author_id передаём явно (у тебя есть триггер, но это не мешает)
       const row = {
         chat_id: activeChatId,
         author_id: selfId,
@@ -277,15 +331,20 @@ export default function ChatPage() {
         alert(error.message || 'Не удалось отправить сообщение');
       }
     },
-    [activeChatId, selfId]
+    [activeChatId, selfId],
   );
 
   /** ─────────────────────  СУММАРНЫЙ БЕЙДЖ В НАВИГАЦИИ  ───────────── */
   useEffect(() => {
-    const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
+    const total = Object.values(unreadByChat).reduce(
+      (s, n) => s + (n || 0),
+      0,
+    );
     if (typeof window !== 'undefined') {
       localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-      window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
+      window.dispatchEvent(
+        new CustomEvent('chat-unread-changed', { detail: { total } }),
+      );
     }
   }, [unreadByChat]);
 
@@ -293,16 +352,26 @@ export default function ChatPage() {
 
   /** ─────────────────────────  РЕНДЕР  ─────────────────────────── */
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateRows: 'auto 1fr',
-      height: 'calc(100vh - 64px)',
-      overflow: 'hidden'
-    }}>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateRows: 'auto 1fr',
+        height: 'calc(100vh - 64px)',
+        overflow: 'hidden',
+      }}
+    >
       {/* Шапка активного чата */}
-      <div style={{ borderBottom: '1px solid #eee', background:'#fff', position:'sticky', top:0, zIndex:2 }}>
+      <div
+        style={{
+          borderBottom: '1px solid #eee',
+          background: '#fff',
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+        }}
+      >
         <ChatHeader
-          chat={chats.find(c => c.chat_id === activeChatId) || null}
+          chat={chats.find((c) => c.chat_id === activeChatId) || null}
           typingText={typingText}
           members={members}
           memberNames={memberNames}
@@ -310,11 +379,11 @@ export default function ChatPage() {
       </div>
 
       {/* Контент: слева список чатов, справа — сообщения */}
-      <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', minHeight:0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', minHeight: 0 }}>
         {/* Список чатов */}
-        <div style={{ borderRight:'1px solid #eee', overflow:'auto' }}>
-          <div style={{ padding:'12px' }}>
-            <h3 style={{ margin:0 }}>Чаты</h3>
+        <div style={{ borderRight: '1px solid #eee', overflow: 'auto' }}>
+          <div style={{ padding: '12px' }}>
+            <h3 style={{ margin: 0 }}>Чаты</h3>
           </div>
           <ChatList
             chats={chats}
@@ -325,8 +394,8 @@ export default function ChatPage() {
         </div>
 
         {/* Сообщения и инпут */}
-        <div style={{ display:'grid', gridTemplateRows:'1fr auto', minHeight:0 }}>
-          <div style={{ overflow:'auto' }}>
+        <div style={{ display: 'grid', gridTemplateRows: '1fr auto', minHeight: 0 }}>
+          <div style={{ overflow: 'auto' }}>
             <MessageList
               messages={messages}
               loading={loadingMessages}
@@ -336,7 +405,7 @@ export default function ChatPage() {
               memberNames={memberNames}
             />
           </div>
-          <div style={{ borderTop:'1px solid #eee', padding:'10px', background:'#fff' }}>
+          <div style={{ borderTop: '1px solid #eee', padding: '10px', background: '#fff' }}>
             <MessageInput
               chatId={activeChatId}
               onSend={handleSend}
