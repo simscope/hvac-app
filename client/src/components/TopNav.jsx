@@ -9,7 +9,7 @@ const norm = (r) => {
   return x === 'technician' ? 'tech' : x;
 };
 
-// Встроенные SVG-иконки (без внешних ассетов)
+// Встроенные SVG-иконки
 const Icon = {
   Jobs: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
@@ -55,6 +55,8 @@ const Icon = {
 
 export default function TopNav() {
   const { user, role, logout } = useAuth();
+
+  // все хуки — до любого return
   const r = useMemo(() => norm(role), [role]);
 
   // Фолбэк логотипа: /logo_invoice_header.png → /logo192.png → скрыть
@@ -66,13 +68,11 @@ export default function TopNav() {
       setLogoSrc(`${base}/logo192.png`);
       setTriedFallback(true);
     } else {
-      setLogoSrc(null); // второй файл тоже не найден — убираем <img>
+      setLogoSrc(null);
     }
   };
 
-  if (!user) return null;
-
-  // Пункты меню по роли
+  // Пункты меню по роли — считаем всегда (для правила хуков)
   const links = useMemo(() => {
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> }];
     if (r === 'admin' || r === 'manager') {
@@ -93,13 +93,16 @@ export default function TopNav() {
     return arr;
   }, [r]);
 
-  // Инициалы пользователя для «аватарки»
+  // Инициалы (тоже считаем всегда)
   const initials = useMemo(() => {
     const name = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || '').trim();
     if (!name) return 'U';
     const parts = name.split(/\s+/);
     return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase();
   }, [user]);
+
+  // ранний выход — ТОЛЬКО после всех хуков
+  if (!user) return null;
 
   return (
     <header className="tn">
@@ -189,7 +192,7 @@ export default function TopNav() {
         }
         .tn__btn:hover { background: rgba(255,255,255,0.08); }
         @media (max-width: 980px) {
-          .tn__text { display:none; }  /* оставим иконки на узких экранах */
+          .tn__text { display:none; }
           .tn__brand { display:none; }
         }
       `}</style>
