@@ -2,11 +2,10 @@
 import React, { useEffect, useState } from 'react';
 import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 
-import { AuthProvider } from './context/AuthContext';
-import { useAuth } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { supabase } from './supabaseClient';
 
-import RequireRole from './components/RequireRole.jsx';
+import ProtectedRoute from './components/ProtectedRoute.jsx';
 import TopNav from './components/TopNav.jsx';
 
 // страницы
@@ -26,9 +25,10 @@ import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Гард на доступ к конкретной заявке для техника
-// ───────────────────────────────────────────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────────────────────
+   Гард на доступ к конкретной заявке для техника:
+   admin / manager — всегда; tech — только если заявка назначена на него
+   ─────────────────────────────────────────────────────────────────────────── */
 function JobAccess({ children }) {
   const { role, profile, user, loading } = useAuth();
   const { id } = useParams();
@@ -43,7 +43,7 @@ function JobAccess({ children }) {
     async function run() {
       if (loading) return;
       if (!user) {
-        if (alive) setOk(false);
+        if (alive) { setOk(false); setChecking(false); }
         return;
       }
       if (role === 'admin' || role === 'manager') {
@@ -59,8 +59,9 @@ function JobAccess({ children }) {
         .maybeSingle();
 
       if (!alive) return;
+
       if (error) {
-        console.error('JobAccess check error', error);
+        console.error('JobAccess check error:', error?.message || error);
         setOk(false);
         setChecking(false);
         return;
@@ -68,7 +69,7 @@ function JobAccess({ children }) {
 
       const jobTechId = data?.technician_id ?? data?.tech_id ?? null;
       const allow = !!profile?.id && jobTechId === profile.id;
-      setOk(allow);
+      setOk(!!allow);
       setChecking(false);
     }
 
@@ -82,9 +83,9 @@ function JobAccess({ children }) {
   return children;
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Оболочка с верхним меню
-// ───────────────────────────────────────────────────────────────────────────────
+/* ──────────────────────────────────────────────────────────────────────────────
+   Оболочка с верхним меню
+   ─────────────────────────────────────────────────────────────────────────── */
 function Shell() {
   const { pathname } = useLocation();
   const hideNav = pathname === '/login' || pathname === '/no-access';
@@ -98,79 +99,89 @@ function Shell() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/no-access" element={<NoAccessPage />} />
 
-          {/* Менеджер + Админ */}
+          {/* Заявки (список) — менеджер + админ */}
           <Route
             path="/jobs"
             element={
-              <RequireRole allow={['admin', 'manager']}>
+              <ProtectedRoute allow={['admin', 'manager']}>
                 <JobsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/jobs/all"
-            element={
-              <RequireRole allow={['admin', 'manager']}>
-                <AllJobsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/calendar"
-            element={
-              <RequireRole allow={['admin', 'manager']}>
-                <CalendarPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/materials"
-            element={
-              <RequireRole allow={['admin', 'manager']}>
-                <MaterialsPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/chat"
-            element={
-              <RequireRole allow={['admin', 'manager']}>
-                <ChatPage />
-              </RequireRole>
-            }
-          />
-          <Route
-            path="/invoice/:id"
-            element={
-              <RequireRole allow={['admin', 'manager']}>
-                <InvoicePage />
-              </RequireRole>
+              </ProtectedRoute>
             }
           />
 
-          {/* Только Админ */}
+          {/* Все заявки (расширенный список) — менеджер + админ */}
+          <Route
+            path="/jobs/all"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <AllJobsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Календарь — менеджер + админ */}
+          <Route
+            path="/calendar"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <CalendarPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Материалы — менеджер + админ */}
+          <Route
+            path="/materials"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <MaterialsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Чат (операционный) — менеджер + админ */}
+          <Route
+            path="/chat"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <ChatPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Инвойс — менеджер + админ */}
+          <Route
+            path="/invoice/:id"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <InvoicePage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Только админ */}
           <Route
             path="/technicians"
             element={
-              <RequireRole allow={['admin']}>
+              <ProtectedRoute allow="admin">
                 <TechniciansPage />
-              </RequireRole>
+              </ProtectedRoute>
             }
           />
           <Route
             path="/finance"
             element={
-              <RequireRole allow={['admin']}>
+              <ProtectedRoute allow="admin">
                 <FinancePage />
-              </RequireRole>
+              </ProtectedRoute>
             }
           />
           <Route
             path="/chat-admin"
             element={
-              <RequireRole allow={['admin']}>
+              <ProtectedRoute allow="admin">
                 <ChatAdminPage />
-              </RequireRole>
+              </ProtectedRoute>
             }
           />
 
@@ -178,22 +189,22 @@ function Shell() {
           <Route
             path="/jobs/:id"
             element={
-              <RequireRole allow={['admin', 'manager', 'tech']}>
+              <ProtectedRoute allow={['admin', 'manager', 'tech']}>
                 <JobAccess>
                   <JobDetailsPage />
                 </JobAccess>
-              </RequireRole>
+              </ProtectedRoute>
             }
           />
           {/* Алиас для старых ссылок /job/:id */}
           <Route
             path="/job/:id"
             element={
-              <RequireRole allow={['admin', 'manager', 'tech']}>
+              <ProtectedRoute allow={['admin', 'manager', 'tech']}>
                 <JobAccess>
                   <JobDetailsPage />
                 </JobAccess>
-              </RequireRole>
+              </ProtectedRoute>
             }
           />
 
@@ -206,6 +217,9 @@ function Shell() {
   );
 }
 
+/* ──────────────────────────────────────────────────────────────────────────────
+   Корневой экспорт
+   ─────────────────────────────────────────────────────────────────────────── */
 export default function App() {
   return (
     <AuthProvider>
