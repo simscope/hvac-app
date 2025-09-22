@@ -2,7 +2,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-// ───── маленькие стили (без Tailwind) ─────
 const page   = { padding: 16, display: 'grid', gridTemplateColumns: '420px 1fr', gap: 12 };
 const card   = { border: '1px solid #e5e7eb', borderRadius: 10, background: '#fff' };
 const block  = { ...card, padding: 12 };
@@ -18,54 +17,49 @@ const warning= { ...btn, borderColor: '#f59e0b', color: '#b45309' };
 const tag    = { display: 'inline-block', padding: '2px 8px', borderRadius: 999, border: '1px solid #e5e7eb', fontSize: 12, background: '#f9fafb' };
 
 const fmt = (ts) => (ts ? new Date(ts).toLocaleString() : '—');
-
-// Если у вас обязателен org_id — поправьте константу ниже или подставляйте из профиля
 const ORG_ID = 1;
 
 export default function ChatAdminPage() {
-  // сотрудники
-  const [staff, setStaff] = useState([]); // technicians: id, name, role, is_admin, org_id
-
-  // список чатов
+  // Сотрудники (важно: берём auth_user_id!)
+  const [staff, setStaff] = useState([]);
+  // Чаты
   const [chats, setChats] = useState([]);
   const [loadingChats, setLoadingChats] = useState(true);
   const [showHidden, setShowHidden] = useState(true);
   const [q, setQ] = useState('');
   const [selectedId, setSelectedId] = useState(null);
-
-  // детали выбранного чата
-  const [members, setMembers] = useState([]);
+  // Участники выбранного чата
+  const [members, setMembers] = useState([]); // [{member_id, role, name?}]
   const [membersLoading, setMembersLoading] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [stats, setStats] = useState({ count: 0, lastAt: null });
-
-  // добавление участников
-  const [pickedToAdd, setPickedToAdd] = useState([]);
-
-  // создание нового чата (модалка)
+  // Добавление участников
+  const [pickedToAdd, setPickedToAdd] = useState([]); // массив auth_user_id (строкой)
+  // Создание чата
   const [creatorOpen, setCreatorOpen] = useState(false);
   const [creatorTitle, setCreatorTitle] = useState('');
-  const [creatorPicked, setCreatorPicked] = useState([]); // массив technician.id (string)
+  const [creatorPicked, setCreatorPicked] = useState([]); // массив auth_user_id
   const [creatorIsGroup, setCreatorIsGroup] = useState(false);
 
-  // ───── загрузка сотрудников ─────
+  // ── сотрудники
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
         .from('technicians')
-        .select('id,name,is_admin,role,org_id')
+        .select('id,name,is_admin,role,org_id,auth_user_id')
         .eq('org_id', ORG_ID)
         .order('name', { ascending: true });
       if (error) {
         console.warn('[chat-admin] technicians error:', error);
         setStaff([]);
       } else {
-        setStaff(data || []);
+        // отфильтруем тех, у кого нет привязки к пользователю
+        setStaff((data || []).filter(x => !!x.auth_user_id));
       }
     })();
   }, []);
 
-  // ───── список чатов ─────
+  // ── список чатов
   useEffect(() => {
     loadChats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,7 +89,7 @@ export default function ChatAdminPage() {
     setLoadingChats(false);
   };
 
-  // ───── участники + статистика для выбранного чата ─────
+  // ── участники + статистика для выбранного чата
   useEffect(() => {
     if (!selectedId) {
       setMembers([]); setNewTitle(''); setStats({ count: 0, lastAt: null });
@@ -109,20 +103,35 @@ export default function ChatAdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  // NEW: берём member_id/role, потом имена подтягиваем по technicians.auth_user_id
   const loadMembers = async (chatId) => {
     setMembersLoading(true);
     const { data, error } = await supabase
       .from('chat_members')
-      .select('member_id, role, member:technicians(id,name,is_admin,role)')
-      .eq('chat_id', chatId)
-      .order('member(name)', { ascending: true });
+      .select('member_id, role')
+      .eq('chat_id', chatId);
 
     if (error) {
       console.warn('[chat-admin] loadMembers error:', error);
       setMembers([]);
-    } else {
-      setMembers(data || []);
+      setMembersLoading(false);
+      return;
     }
+
+    const ids = Array.from(new Set((data || []).map(r => r.member_id).filter(Boolean)));
+    let names = {};
+    if (ids.length) {
+      const { data: tdata } = await supabase
+        .from('technicians')
+        .select('auth_user_id,name')
+        .in('auth_user_id', ids);
+      (tdata || []).forEach(t => { names[t.auth_user_id] = t.name; });
+    }
+
+    const enriched = (data || []).map(r => ({ ...r, name: names[r.member_id] }));
+    // можно отсортировать по имени
+    enriched.sort((a,b) => (a.name || a.member_id).localeCompare(b.name || b.member_id));
+    setMembers(enriched);
     setMembersLoading(false);
   };
 
@@ -143,7 +152,6 @@ export default function ChatAdminPage() {
     setStats({ count: count ?? 0, lastAt: last?.created_at ?? null });
   };
 
-  // фильтрация списка чатов
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return chats;
@@ -152,13 +160,9 @@ export default function ChatAdminPage() {
 
   const selected = chats.find((c) => c.id === selectedId) || null;
 
-  // ───── действия по чату ─────
   const toggleHidden = async (chat, toHidden) => {
     const { error } = await supabase.from('chats').update({ deleted: toHidden }).eq('id', chat.id);
-    if (error) {
-      console.warn('[chat-admin] toggleHidden error:', error);
-      return alert(error.message || 'Не удалось изменить видимость чата');
-    }
+    if (error) { console.warn('[chat-admin] toggleHidden error:', error); return alert(error.message || 'Не удалось изменить видимость чата'); }
     await loadChats();
   };
 
@@ -166,10 +170,7 @@ export default function ChatAdminPage() {
     if (!selected) return;
     const title = (newTitle || '').trim() || null;
     const { error } = await supabase.from('chats').update({ title }).eq('id', selected.id);
-    if (error) {
-      console.warn('[chat-admin] rename error:', error);
-      return alert(error.message || 'Не удалось переименовать');
-    }
+    if (error) { console.warn('[chat-admin] rename error:', error); return alert(error.message || 'Не удалось переименовать'); }
     await loadChats();
   };
 
@@ -177,19 +178,11 @@ export default function ChatAdminPage() {
     if (!selected) return;
     if (!window.confirm(`Удалить чат "${selected.title || selected.id}" вместе с сообщениями и файлами?`)) return;
 
-    // 1) удалить сообщения
     const { error: delErr } = await supabase.from('chat_messages').delete().eq('chat_id', selected.id);
-    if (delErr) {
-      console.warn('[chat-admin] purge messages error:', delErr);
-      return alert(delErr.message || 'Не удалось удалить сообщения');
-    }
+    if (delErr) { console.warn('[chat-admin] purge messages error:', delErr); return alert(delErr.message || 'Не удалось удалить сообщения'); }
 
-    // 2) удалить сам чат
     const { error } = await supabase.from('chats').delete().eq('id', selected.id);
-    if (error) {
-      console.warn('[chat-admin] delete chat error:', error);
-      return alert(error.message || 'Не удалось удалить чат');
-    }
+    if (error) { console.warn('[chat-admin] delete chat error:', error); return alert(error.message || 'Не удалось удалить чат'); }
 
     setSelectedId(null);
     await loadChats();
@@ -202,10 +195,7 @@ export default function ChatAdminPage() {
       .select('*')
       .eq('chat_id', selected.id)
       .order('created_at', { ascending: true });
-    if (error) {
-      console.warn('[chat-admin] export error:', error);
-      return alert(error.message || 'Не удалось выгрузить сообщения');
-    }
+    if (error) { console.warn('[chat-admin] export error:', error); return alert(error.message || 'Не удалось выгрузить сообщения'); }
     const blob = new Blob([JSON.stringify(data || [], null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -213,18 +203,18 @@ export default function ChatAdminPage() {
     a.click();
   };
 
-  // ───── участники ─────
+  // Кандидаты = сотрудники, у которых есть auth_user_id, и которых ещё нет в чате
   const candidates = useMemo(() => {
     if (!selected) return [];
     const inChat = new Set(members.map((m) => String(m.member_id)));
-    return staff.filter((s) => !inChat.has(String(s.id)));
+    return staff.filter((s) => s.auth_user_id && !inChat.has(String(s.auth_user_id)));
   }, [members, staff, selected]);
 
   const addMembers = async () => {
     if (!selected || pickedToAdd.length === 0) return;
-    const payload = pickedToAdd.map((id) => ({
+    const payload = pickedToAdd.map((uid) => ({
       chat_id: selected.id,
-      member_id: id,
+      member_id: uid,      // ВАЖНО: это auth.users.id
       role: 'member',
       org_id: ORG_ID,
     }));
@@ -247,10 +237,7 @@ export default function ChatAdminPage() {
       .delete()
       .eq('chat_id', selected.id)
       .eq('member_id', memberId);
-    if (error) {
-      console.warn('[chat-admin] removeMember error:', error);
-      return alert(error.message || 'Не удалось удалить участника');
-    }
+    if (error) { console.warn('[chat-admin] removeMember error:', error); return alert(error.message || 'Не удалось удалить участника'); }
     await loadMembers(selected.id);
   };
 
@@ -264,40 +251,28 @@ export default function ChatAdminPage() {
       .update({ role: makeAdmin ? 'admin' : 'member' })
       .eq('chat_id', selected.id)
       .eq('member_id', memberId);
-    if (error) {
-      console.warn('[chat-admin] toggleAdmin error:', error);
-      return alert(error.message || 'Не удалось изменить роль');
-    }
+    if (error) { console.warn('[chat-admin] toggleAdmin error:', error); return alert(error.message || 'Не удалось изменить роль'); }
     await loadMembers(selected.id);
   };
 
-  // ───── создание чата ─────
   const createChat = async () => {
-    // выбраны technician.id (uuid)
     const uniq = Array.from(new Set(creatorPicked.map(String)));
     if (uniq.length === 0) return alert('Выберите хотя бы одного участника');
 
-    // получаем текущего пользователя (auth user id)
     const { data: userRes, error: uErr } = await supabase.auth.getUser();
-    if (uErr || !userRes?.user?.id) {
-      return alert('Нет авторизации для создания чата');
-    }
+    if (uErr || !userRes?.user?.id) return alert('Нет авторизации для создания чата');
     const me = userRes.user.id;
 
     const isGroup = creatorIsGroup || uniq.length > 1;
-    // ⚠️ НЕ отправляем created_by — БД/триггер/DEFAULT поставят auth.uid()
     const { data: chat, error } = await supabase
       .from('chats')
       .insert({ title: isGroup ? (creatorTitle || 'Группа') : (creatorTitle || null), is_group: isGroup, org_id: ORG_ID })
       .select('id')
       .single();
 
-    if (error) {
-      console.warn('[chat-admin] createChat error:', error);
-      return alert(error.message || 'Не удалось создать чат');
-    }
+    if (error) { console.warn('[chat-admin] createChat error:', error); return alert(error.message || 'Не удалось создать чат'); }
 
-    // Добавляем участников + обязательно создателя
+    // Добавляем участников + создателя (все — auth.users.id)
     const allMembers = Array.from(new Set([...uniq, me]));
     const rows = allMembers.map((uid) => ({
       chat_id: chat.id,
@@ -305,35 +280,25 @@ export default function ChatAdminPage() {
       role: 'member',
       org_id: ORG_ID,
     }));
-
     const { error: mErr } = await supabase.from('chat_members').insert(rows);
-    if (mErr) {
-      console.warn('[chat-admin] add members after create error:', mErr);
-      alert('Чат создан, но участников добавить не удалось');
-    }
+    if (mErr) { console.warn('[chat-admin] add members after create error:', mErr); alert('Чат создан, но участников добавить не удалось'); }
 
     setCreatorOpen(false);
     setCreatorIsGroup(false);
     setCreatorTitle('');
     setCreatorPicked([]);
-
     await loadChats();
     setSelectedId(chat.id);
   };
 
   return (
     <div style={page}>
-      {/* левая панель */}
+      {/* Левая панель */}
       <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', gap: 10 }}>
         <div style={block}>
           <div style={h1}>🛠 Администрирование чатов</div>
           <div style={{ display: 'grid', gap: 8 }}>
-            <input
-              style={searchBox}
-              placeholder="Поиск по названию или ID…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+            <input style={searchBox} placeholder="Поиск по названию или ID…" value={q} onChange={(e) => setQ(e.target.value)} />
             <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
               Показывать скрытые чаты
@@ -353,9 +318,7 @@ export default function ChatAdminPage() {
                 <div onClick={() => setSelectedId(c.id)} style={{ cursor: 'pointer' }}>
                   <div style={{ fontWeight: 600 }}>
                     {c.title || <span style={muted}>Без названия</span>}
-                    {c.is_group
-                      ? <span style={{ ...tag, marginLeft: 8 }}>группа</span>
-                      : <span style={{ ...tag, marginLeft: 8 }}>диалог</span>}
+                    {c.is_group ? <span style={{ ...tag, marginLeft: 8 }}>группа</span> : <span style={{ ...tag, marginLeft: 8 }}>диалог</span>}
                     {c.deleted && <span style={{ ...tag, marginLeft: 8, borderColor: '#f59e0b', background: '#fff7ed' }}>скрыт</span>}
                   </div>
                   <div style={{ fontSize: 12, color: '#6b7280' }}>обновлён: {fmt(c.updated_at)}</div>
@@ -375,7 +338,7 @@ export default function ChatAdminPage() {
         <div />
       </div>
 
-      {/* правая панель */}
+      {/* Правая панель */}
       <div style={{ display: 'grid', gap: 10 }}>
         {!selected && <div style={block}><div style={muted}>Выберите чат слева</div></div>}
 
@@ -390,12 +353,7 @@ export default function ChatAdminPage() {
                 <div><b>Сообщений:</b> {stats.count} {stats.lastAt ? <span style={muted}> • последнее: {fmt(stats.lastAt)}</span> : null}</div>
 
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input
-                    style={{ ...searchBox, maxWidth: 420 }}
-                    placeholder="Название чата (опционально)"
-                    value={newTitle}
-                    onChange={(e) => setNewTitle(e.target.value)}
-                  />
+                  <input style={{ ...searchBox, maxWidth: 420 }} placeholder="Название чата (опционально)" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} />
                   <button style={btn} onClick={renameChat}>Сохранить</button>
                   <button style={warning} onClick={() => hardDelete()}>Удалить чат навсегда</button>
                   <button style={btn} onClick={exportChat}>Экспорт JSON</button>
@@ -414,15 +372,11 @@ export default function ChatAdminPage() {
                     {members.map((m) => (
                       <div key={m.member_id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '6px 4px' }}>
                         <div>
-                          <b>{m.member?.name || m.member_id}</b>{' '}
+                          <b>{m.name || m.member_id}</b>{' '}
                           {m.role === 'admin' && <span style={{ ...tag, marginLeft: 6 }}>админ</span>}
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
-                          <button
-                            style={btn}
-                            onClick={() => toggleAdmin(m.member_id, m.role !== 'admin')}
-                            title={m.role === 'admin' ? 'Снять админа' : 'Сделать админом'}
-                          >
+                          <button style={btn} onClick={() => toggleAdmin(m.member_id, m.role !== 'admin')}>
                             {m.role === 'admin' ? 'Снять админа' : 'Сделать админом'}
                           </button>
                           <button style={danger} onClick={() => removeMember(m.member_id)}>Удалить</button>
@@ -436,16 +390,16 @@ export default function ChatAdminPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'start' }}>
                     <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8 }}>
                       {candidates.map((s) => {
-                        const checked = pickedToAdd.includes(String(s.id));
+                        const uid = String(s.auth_user_id);
+                        const checked = pickedToAdd.includes(uid);
                         return (
-                          <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px' }}>
+                          <label key={uid} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px' }}>
                             <input
                               type="checkbox"
                               checked={checked}
-                              onChange={(e) => {
-                                const id = String(s.id);
-                                setPickedToAdd((prev) => e.target.checked ? [...prev, id] : prev.filter((x) => x !== id));
-                              }}
+                              onChange={(e) =>
+                                setPickedToAdd((prev) => e.target.checked ? [...prev, uid] : prev.filter((x) => x !== uid))
+                              }
                             />
                             {s.name} {s.role && s.role !== 'technician' ? `(${s.role})` : ''}
                           </label>
@@ -454,7 +408,9 @@ export default function ChatAdminPage() {
                       {candidates.length === 0 && <div style={muted}>Все сотрудники уже в чате</div>}
                     </div>
                     <div style={{ display: 'grid', gap: 8 }}>
-                      <button style={primary} disabled={pickedToAdd.length === 0} onClick={addMembers}>Добавить выбранных</button>
+                      <button style={primary} disabled={pickedToAdd.length === 0} onClick={addMembers}>
+                        Добавить выбранных
+                      </button>
                     </div>
                   </div>
                 </>
@@ -464,7 +420,7 @@ export default function ChatAdminPage() {
         )}
       </div>
 
-      {/* модалка создания */}
+      {/* Модалка создания */}
       {creatorOpen && (
         <div style={modalWrap} onClick={() => setCreatorOpen(false)}>
           <div style={modal} onClick={(e) => e.stopPropagation()}>
@@ -486,14 +442,16 @@ export default function ChatAdminPage() {
               <div style={{ fontWeight: 600, marginTop: 4 }}>Участники</div>
               <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 8 }}>
                 {staff.map((s) => {
-                  const id = String(s.id);
-                  const checked = creatorPicked.includes(id);
+                  const uid = String(s.auth_user_id);
+                  const checked = creatorPicked.includes(uid);
                   return (
-                    <label key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px' }}>
+                    <label key={uid} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px' }}>
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={(e) => setCreatorPicked((prev) => e.target.checked ? [...prev, id] : prev.filter((x) => x !== id))}
+                        onChange={(e) =>
+                          setCreatorPicked((prev) => e.target.checked ? [...prev, uid] : prev.filter((x) => x !== uid))
+                        }
                       />
                       {s.name} {s.role && s.role !== 'technician' ? `(${s.role})` : ''}
                     </label>
@@ -514,6 +472,5 @@ export default function ChatAdminPage() {
   );
 }
 
-/* стили модалки */
 const modalWrap = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', display: 'grid', placeItems: 'center', zIndex: 50 };
 const modal     = { width: 560, maxWidth: '90vw', background: '#fff', borderRadius: 12, padding: 16, boxShadow: '0 10px 24px rgba(0,0,0,.15)' };
