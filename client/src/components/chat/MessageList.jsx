@@ -1,189 +1,258 @@
 // client/src/components/chat/MessageList.jsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '../../supabaseClient';
-
-// Если у тебя другой бакет, поменяй здесь и в MessageInput.jsx
-const STORAGE_BUCKET = 'chat-attachments';
-
-/** Галочки доставки/чтения с подсказкой */
-function Ticks({ mine, stats, memberNames }) {
-  if (!mine) return null;
-  const delivered = !!stats?.delivered && stats.delivered.size > 0;
-  const read = !!stats?.read && stats.read.size > 0;
-
-  const readers = read ? Array.from(stats.read).map(id => memberNames?.[id] || id) : [];
-  const title = readers.length
-    ? `Прочитали: ${readers.join(', ')}`
-    : (delivered ? 'Доставлено' : 'Отправлено');
-
-  return (
-    <span title={title} style={{ marginLeft: 6, fontSize: 12, userSelect: 'none' }}>
-      {!delivered && '✓'}
-      {delivered && !read && '✓✓'}
-      {delivered && read && <span style={{ color: '#1a73e8' }}>✓✓</span>}
-    </span>
-  );
-}
-
-/** Превью файла: http-ссылки используем как есть; для путей Storage делаем signed URL */
-function InlineFile({ pathOrUrl, fileName, fileType, fileSize, bucket = STORAGE_BUCKET }) {
-  const [url, setUrl] = useState(null);
-  const isHttp = /^https?:\/\//i.test(pathOrUrl || '');
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      if (!pathOrUrl) return;
-      if (isHttp) { setUrl(pathOrUrl); return; }
-      try {
-        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(pathOrUrl, 3600);
-        if (!error && mounted) setUrl(data?.signedUrl || null);
-      } catch {
-        /* noop */
-      }
-    })();
-    return () => { mounted = false; };
-  }, [pathOrUrl, bucket, isHttp]);
-
-  const isImage = (fileType || '').startsWith('image/');
-  if (!pathOrUrl) return null;
-
-  return (
-    <div>
-      {isImage ? (
-        <a href={url || '#'} target="_blank" rel="noreferrer">
-          {/* eslint-disable-next-line jsx-a11y/alt-text */}
-          <img src={url || ''} style={{ maxWidth: '50%', borderRadius: 6 }} />
-        </a>
-      ) : (
-        <a href={url || '#'} target="_blank" rel="noreferrer">
-          {fileName || 'file'} {fileSize ? `(${Math.round(fileSize / 1024)} KB)` : ''}
-        </a>
-      )}
-    </div>
-  );
-}
-
-const fmtTime = (ts) => {
-  try { return new Date(ts).toLocaleString(); } catch { return ''; }
-};
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 /**
- * MessageList
- *
- * Props:
- * - messages: [{ id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at }]
+ * props:
+ * - messages: Array<{
+ *     id, chat_id, author_id, body, file_url, file_name, file_type, file_size,
+ *     attachment_url, created_at, author?: { id, full_name, role }
+ *   }>
  * - loading: boolean
- * - currentUserId: auth.uid() текущего пользователя
- * - receipts: { [messageId]: { delivered:Set<uid>, read:Set<uid> } }
- * - onMarkVisibleRead?: (ids: string[]) => void
- * - memberNames?: { [userId]: string }
+ * - currentUserId: string | null
+ * - receipts: { [messageId]: { delivered: Set<string>, read: Set<string> } }
+ * - onMarkVisibleRead: (ids: string[]) => void
+ * - memberNames: { [userId]: string }
  */
 export default function MessageList({
   messages,
   loading,
   currentUserId,
-  receipts = {},
+  receipts,
   onMarkVisibleRead,
-  memberNames = {}
+  memberNames,
 }) {
+  const wrapRef = useRef(null);
   const bottomRef = useRef(null);
-  const observerRef = useRef(null);
-  const pendingToReadRef = useRef(new Set());
 
-  // автоскролл вниз при появлении новых
+  // чтобы не слать onMarkVisibleRead несколько раз подряд
+  const alreadyMarkedRef = useRef(new Set());
+
+  // ——— форматтер даты
+  const fmt = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'short',
+        timeStyle: 'medium',
+      }),
+    []
+  );
+
+  // ——— автоскролл, если мы «почти снизу»
+  const isNearBottom = useRef(true);
+  const handleScroll = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const delta = el.scrollHeight - el.scrollTop - el.clientHeight;
+    isNearBottom.current = delta < 120; // px
+  }, []);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // при добавлении сообщений прокручиваем, если пользователь внизу
+    if (isNearBottom.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages?.length]);
 
-  // наблюдаем появление НЕ своих сообщений и помечаем read
+  // ——— наблюдаем за «видимостью» последних N входящих сообщений
   useEffect(() => {
-    if (!messages?.length || !onMarkVisibleRead) return;
+    const root = wrapRef.current;
+    if (!root || !messages?.length) return;
 
-    try { observerRef.current?.disconnect(); } catch {}
+    const last = messages.slice(-50); // наблюдаем только «хвост», этого хватает
+    const nodes = new Map(); // messageId -> HTMLElement
 
-    const flush = () => {
-      const ids = Array.from(pendingToReadRef.current);
-      pendingToReadRef.current.clear();
-      if (ids.length) onMarkVisibleRead(ids);
-    };
-    const flushDebounced = (() => {
-      let t = null;
-      return () => { clearTimeout(t); t = setTimeout(flush, 300); };
-    })();
-
-    const io = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue;
-        const id = e.target.getAttribute('data-mid');
-        const mine = e.target.getAttribute('data-mine') === '1';
-        if (id && !mine) {
-          pendingToReadRef.current.add(id);
-          flushDebounced();
+    // создаём/обновляем DOM-узлы маркеров для наблюдения
+    last.forEach((m) => {
+      if (m.author_id === currentUserId) return; // свои не отмечаем
+      const id = `msg-observe-${m.id}`;
+      let anchor = document.getElementById(id);
+      if (!anchor) {
+        anchor = document.createElement('div');
+        anchor.id = id;
+        anchor.style.height = '1px';
+        anchor.style.width = '100%';
+        anchor.style.pointerEvents = 'none';
+        const bubble = document.getElementById(`msg-bubble-${m.id}`);
+        if (bubble && bubble.parentElement) {
+          bubble.parentElement.appendChild(anchor);
         }
       }
-    }, { root: null, rootMargin: '0px 0px -20% 0px', threshold: 0.5 });
+      if (anchor) nodes.set(m.id, anchor);
+    });
 
-    // чуть позже, чтобы DOM уже отрисовался
-    const t = setTimeout(() => {
-      document.querySelectorAll('[data-mid]').forEach((el) => io.observe(el));
-    }, 0);
+    const io = new IntersectionObserver(
+      (entries) => {
+        const idsToMark = [];
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          // message id из якоря
+          const key = e.target.id.replace('msg-observe-', '');
+          if (!alreadyMarkedRef.current.has(key)) {
+            alreadyMarkedRef.current.add(key);
+            idsToMark.push(key);
+          }
+        }
+        if (idsToMark.length) onMarkVisibleRead?.(idsToMark);
+      },
+      { root, rootMargin: '0px', threshold: 0.66 }
+    );
 
-    observerRef.current = io;
-    return () => { clearTimeout(t); try { io.disconnect(); } catch {} };
-  }, [messages, onMarkVisibleRead, currentUserId]);
+    nodes.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [messages, currentUserId, onMarkVisibleRead]);
 
-  if (loading) return <div style={{ padding: 12 }}>Загрузка…</div>;
-  if (!messages?.length) return <div style={{ padding: 12, color:'#6b7280' }}>Сообщений пока нет</div>;
+  // ——— помощники
+  const getDisplayName = useCallback(
+    (m) => {
+      const isMe = m.author_id === currentUserId;
+      return (
+        m.author?.full_name ||
+        memberNames?.[m.author_id] ||
+        (isMe ? 'Вы' : 'Участник')
+      );
+    },
+    [currentUserId, memberNames]
+  );
+
+  const renderStatus = useCallback(
+    (m) => {
+      // статусы показываем только для своих сообщений
+      if (m.author_id !== currentUserId) return null;
+      const entry = receipts?.[m.id];
+      const delivered = entry?.delivered?.size > 0;
+      const read = entry?.read?.size > 0;
+      return (
+        <span style={{ marginLeft: 8, color: read ? '#2563eb' : '#9ca3af' }}>
+          {read ? '✓✓' : delivered ? '✓' : null}
+        </span>
+      );
+    },
+    [currentUserId, receipts]
+  );
 
   return (
-    <div>
-      {messages.map((m) => {
-        const mine = m.author_id === currentUserId; // строго по author_id
-        const stats = receipts[m.id];
+    <div
+      ref={wrapRef}
+      onScroll={handleScroll}
+      style={{ padding: 12, overflow: 'auto', height: '100%' }}
+    >
+      {loading && (
+        <div style={{ color: '#999', fontSize: 13, padding: '6px 0' }}>
+          Загрузка…
+        </div>
+      )}
+
+      {(messages || []).map((m) => {
+        const isMe = m.author_id === currentUserId;
+        const name = getDisplayName(m);
 
         return (
           <div
             key={m.id}
-            data-mid={m.id}
-            data-mine={mine ? '1' : '0'}
-            style={{ margin: '8px 0', display: 'flex', justifyContent: mine ? 'flex-end' : 'flex-start' }}
+            style={{
+              display: 'flex',
+              justifyContent: isMe ? 'flex-end' : 'flex-start',
+              margin: '8px 0',
+            }}
           >
-            <div style={{
-              maxWidth: '72%',
-              background: mine ? '#e8f0fe' : '#f5f5f5',
-              borderRadius: 10,
-              padding: '8px 10px',
-              wordBreak: 'break-word'
-            }}>
-              {!!m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
-
-              {(m.file_url || m.attachment_url) && (
-                <div style={{ marginTop: 6 }}>
-                  {m.file_url ? (
-                    <InlineFile
-                      pathOrUrl={m.file_url}
-                      fileName={m.file_name}
-                      fileType={m.file_type}
-                      fileSize={m.file_size}
-                    />
-                  ) : (
-                    <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                      {m.attachment_url}
-                    </a>
-                  )}
+            <div style={{ maxWidth: 640 }}>
+              <div
+                id={`msg-bubble-${m.id}`}
+                style={{
+                  display: 'inline-block',
+                  background: isMe ? '#e8f0ff' : '#f3f4f6',
+                  padding: '8px 10px',
+                  borderRadius: 12,
+                  boxShadow: '0 1px 2px rgba(0,0,0,.06)',
+                  wordBreak: 'break-word',
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: '#6b7280',
+                    marginBottom: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{name}</span>
+                  <span>• {fmt.format(new Date(m.created_at))}</span>
+                  {renderStatus(m)}
                 </div>
-              )}
 
-              <div style={{ fontSize: 11, color: '#888', marginTop: 6, display: 'flex', alignItems: 'center' }}>
-                {fmtTime(m.created_at)}
-                <Ticks mine={mine} stats={stats} memberNames={memberNames} />
+                {m.body && (
+                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 15 }}>
+                    {m.body}
+                  </div>
+                )}
+
+                {m.file_name && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: 8,
+                      borderRadius: 8,
+                      background: '#fff',
+                      border: '1px solid #e5e7eb',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: 14,
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 8,
+                        height: 8,
+                        background: '#94a3b8',
+                        borderRadius: '50%',
+                      }}
+                    />
+                    <span title={m.file_name}>
+                      {m.file_name} {m.file_size ? `(${formatBytes(m.file_size)})` : ''}
+                    </span>
+                    {m.file_url && (
+                      <a
+                        href={m.file_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ marginLeft: 6 }}
+                      >
+                        открыть
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
         );
       })}
+
       <div ref={bottomRef} />
     </div>
   );
+}
+
+/* ================= helpers ================= */
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0,
+    num = bytes;
+  while (num >= 1024 && i < units.length - 1) {
+    num /= 1024;
+    i++;
+  }
+  return `${num.toFixed(num < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
