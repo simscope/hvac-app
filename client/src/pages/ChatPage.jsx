@@ -10,12 +10,11 @@ import ChatHeader from '../components/chat/ChatHeader.jsx';
 // В message_receipts колонка пользователя называется так:
 const RECEIPTS_USER_COLUMN = 'user_id';
 
-// Явный список полей профиля, которые ТОЧНО есть в твоей таблице
-// (avatar_url убран, чтобы не падало)
+// Поля профиля, которые реально есть (avatar_url убран)
 const PROFILE_FIELDS = 'id, full_name, role';
 
-// Если имя внешнего ключа другое — подставь его сюда
-// смотри в Table Editor → chat_messages → Foreign keys
+// Имя внешнего ключа chat_messages.author_id -> profiles.id.
+// Если у тебя другое — подставь точное из Table Editor (Foreign Keys).
 const AUTHOR_FK_ALIAS = 'chat_messages_author_fk';
 
 export default function ChatPage() {
@@ -34,7 +33,7 @@ export default function ChatPage() {
     return () => sub?.unsubscribe?.();
   }, []);
 
-  const selfId = user?.id ?? null; // auth.uid()
+  const selfId = user?.id ?? null;
   const canSend = Boolean(selfId);
 
   /** ───────────────────────  СПИСОК ЧАТОВ  ──────────────────── */
@@ -145,7 +144,7 @@ export default function ChatPage() {
 
       const { data: profs, error: pErr } = await supabase
         .from('profiles')
-        .select('id, full_name') // avatar_url убран
+        .select('id, full_name')
         .in('id', ids);
 
       if (pErr) {
@@ -170,7 +169,7 @@ export default function ChatPage() {
   const messagesSubRef = useRef(null);
   const receiptsSubRef = useRef(null);
 
-  // хелпер — получить профиль автора по id без лишних полей
+  // хелпер — получить профиль автора по id
   const fetchAuthor = useCallback(async (authorId) => {
     if (!authorId) return null;
     const { data } = await supabase
@@ -181,11 +180,33 @@ export default function ChatPage() {
     return data || null;
   }, []);
 
+  // батч-дотяжка авторов, если эмбед не сработал
+  const backfillAuthors = useCallback(async (rows) => {
+    const missingIds = Array.from(
+      new Set(rows.filter((r) => !r.author && r.author_id).map((r) => r.author_id)),
+    );
+    if (!missingIds.length) return rows;
+
+    const { data: profs, error } = await supabase
+      .from('profiles')
+      .select(PROFILE_FIELDS)
+      .in('id', missingIds);
+
+    if (error) {
+      console.warn('[CHAT] backfill authors error:', error);
+      return rows;
+    }
+
+    const map = new Map((profs || []).map((p) => [p.id, p]));
+    return rows.map((r) => (r.author ? r : { ...r, author: map.get(r.author_id) || null }));
+  }, []);
+
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
 
-    // ВАЖНО: эмбед через явный FK-алиас и без avatar_url
+    // Пытаемся получить автора эмбедами (явный FK-алиас).
+    // Если алиас другой — ниже подхватит backfillAuthors.
     const { data, error } = await supabase
       .from('chat_messages')
       .select(
@@ -203,8 +224,10 @@ export default function ChatPage() {
       setMessages([]);
       return;
     }
-    setMessages(data || []);
-  }, []);
+
+    const withAuthors = await backfillAuthors(data || []);
+    setMessages(withAuthors);
+  }, [backfillAuthors]);
 
   // Подписки по активному чату
   useEffect(() => {
@@ -223,16 +246,13 @@ export default function ChatPage() {
         { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${activeChatId}` },
         async (payload) => {
           const m = payload.new;
-
-          // Дотягиваем профиль автора (короткий селект по id, без avatar_url)
-          const author = await fetchAuthor(m.author_id);
-
+          const author = await fetchAuthor(m.author_id); // дотягиваем автора
           setMessages((prev) => [...prev, { ...m, author }]);
 
           // Входящее → ставим delivered
           if (selfId && m.author_id !== selfId) {
             const row = {
-              chat_id: m.chat_id, // NOT NULL
+              chat_id: m.chat_id,
               message_id: m.id,
               [RECEIPTS_USER_COLUMN]: selfId,
               status: 'delivered',
@@ -323,7 +343,6 @@ export default function ChatPage() {
 
       const f = files?.[0] || null;
 
-      // author_id передаём явно (триггер тоже поставит — не конфликтует)
       const row = {
         chat_id: activeChatId,
         author_id: selfId,
@@ -429,4 +448,3 @@ export default function ChatPage() {
     </div>
   );
 }
-
