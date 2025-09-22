@@ -10,6 +10,14 @@ import ChatHeader from '../components/chat/ChatHeader.jsx';
 // В message_receipts колонка пользователя называется так:
 const RECEIPTS_USER_COLUMN = 'user_id';
 
+// Явный список полей профиля, которые ТОЧНО есть в твоей таблице
+// (avatar_url убран, чтобы не падало)
+const PROFILE_FIELDS = 'id, full_name, role';
+
+// Если имя внешнего ключа другое — подставь его сюда
+// смотри в Table Editor → chat_messages → Foreign keys
+const AUTHOR_FK_ALIAS = 'chat_messages_author_fk';
+
 export default function ChatPage() {
   /** ─────────────────────────  AUTH  ───────────────────────── */
   const [user, setUser] = useState(null);
@@ -137,7 +145,7 @@ export default function ChatPage() {
 
       const { data: profs, error: pErr } = await supabase
         .from('profiles')
-        .select('id, full_name')
+        .select('id, full_name') // avatar_url убран
         .in('id', ids);
 
       if (pErr) {
@@ -162,17 +170,28 @@ export default function ChatPage() {
   const messagesSubRef = useRef(null);
   const receiptsSubRef = useRef(null);
 
+  // хелпер — получить профиль автора по id без лишних полей
+  const fetchAuthor = useCallback(async (authorId) => {
+    if (!authorId) return null;
+    const { data } = await supabase
+      .from('profiles')
+      .select(PROFILE_FIELDS)
+      .eq('id', authorId)
+      .single();
+    return data || null;
+  }, []);
+
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
 
-    // Тянем сообщения вместе с автором
+    // ВАЖНО: эмбед через явный FK-алиас и без avatar_url
     const { data, error } = await supabase
       .from('chat_messages')
       .select(
         `
         id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at,
-        author:profiles ( id, full_name, avatar_url, role )
+        author:profiles!${AUTHOR_FK_ALIAS} ( ${PROFILE_FIELDS} )
       `,
       )
       .eq('chat_id', chatId)
@@ -205,16 +224,8 @@ export default function ChatPage() {
         async (payload) => {
           const m = payload.new;
 
-          // Дотягиваем профиль автора (короткий селект по id)
-          let author = null;
-          if (m.author_id) {
-            const { data: prof } = await supabase
-              .from('profiles')
-              .select('id, full_name, avatar_url, role')
-              .eq('id', m.author_id)
-              .single();
-            author = prof || null;
-          }
+          // Дотягиваем профиль автора (короткий селект по id, без avatar_url)
+          const author = await fetchAuthor(m.author_id);
 
           setMessages((prev) => [...prev, { ...m, author }]);
 
@@ -272,7 +283,7 @@ export default function ChatPage() {
         supabase.removeChannel(rCh);
       } catch {}
     };
-  }, [activeChatId, selfId, fetchMessages]);
+  }, [activeChatId, selfId, fetchMessages, fetchAuthor]);
 
   // Пометить пачку сообщений прочитанными
   const markReadForMessageIds = useCallback(
@@ -312,7 +323,7 @@ export default function ChatPage() {
 
       const f = files?.[0] || null;
 
-      // author_id передаём явно (у тебя есть триггер, но это не мешает)
+      // author_id передаём явно (триггер тоже поставит — не конфликтует)
       const row = {
         chat_id: activeChatId,
         author_id: selfId,
@@ -381,7 +392,7 @@ export default function ChatPage() {
       {/* Контент: слева список чатов, справа — сообщения */}
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', minHeight: 0 }}>
         {/* Список чатов */}
-        <div style={{ borderRight: '1px solid #eee', overflow: 'auto' }}>
+        <div style={{ borderRight: '1px solid '#eee', overflow: 'auto' }}>
           <div style={{ padding: '12px' }}>
             <h3 style={{ margin: 0 }}>Чаты</h3>
           </div>
