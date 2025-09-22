@@ -67,7 +67,24 @@ export default function ChatPage() {
       if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
     };
 
-    loadChats();
+    const loadUnreadCounters = async () => {
+      // забираем с сервера непрочитанные по всем чатам
+      const { data, error } = await supabase.rpc('get_unread_by_chat');
+      if (error) {
+        console.warn('[CHAT] unread counters rpc error:', error);
+        return;
+      }
+      const dict = {};
+      (data || []).forEach((row) => {
+        dict[row.chat_id] = Number(row.unread) || 0;
+      });
+      setUnreadByChat(dict);
+    };
+
+    (async () => {
+      await loadChats();
+      await loadUnreadCounters();
+    })();
 
     // Пересортировать чат и инкрементнуть непрочитанные при новых сообщениях
     channel = supabase
@@ -91,6 +108,7 @@ export default function ChatPage() {
             return arr;
           });
 
+          // если пришло чужое сообщение и чат не активный — инкрементим бэйдж
           if (selfId && m.author_id !== selfId && m.chat_id !== activeChatId) {
             setUnreadByChat((prev) => ({
               ...prev,
@@ -235,7 +253,16 @@ export default function ChatPage() {
 
     fetchMessages(activeChatId);
     setReceipts({});
-    setUnreadByChat((prev) => ({ ...prev, [activeChatId]: 0 })); // сброс бейджа
+
+    // отметим чат прочитанным на сервере + локально обнулим бэйдж
+    (async () => {
+      try {
+        await supabase.rpc('mark_chat_read', { p_chat_id: activeChatId });
+      } catch (e) {
+        console.warn('[CHAT] mark_chat_read error:', e);
+      }
+    })();
+    setUnreadByChat((prev) => ({ ...prev, [activeChatId]: 0 }));
 
     // Новые сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
