@@ -11,42 +11,51 @@ import ChatHeader from '../components/chat/ChatHeader.jsx';
 const RECEIPTS_USER_COLUMN = 'user_id';
 
 export default function ChatPage() {
-
-  // кто я в Auth
-const authUserId = user?.id || null;
-// кто я в staff
-const memberId   = profile?.id || null; // technicians.id, если нужен
-  // ===== auth =====
+  // ───────────────────────────────────────────────────────────────
+  // AUTH
+  // ───────────────────────────────────────────────────────────────
   const [user, setUser] = useState(null);
+
   useEffect(() => {
     let sub;
     (async () => {
       const { data } = await supabase.auth.getSession();
       setUser(data?.session?.user ?? null);
-      sub = supabase.auth.onAuthStateChange((_e, s) => setUser(s?.user ?? null)).data?.subscription;
+      sub = supabase.auth
+        .onAuthStateChange((_evt, s) => setUser(s?.user ?? null))
+        ?.data?.subscription;
     })();
-    return () => sub?.unsubscribe?.();
+    return () => {
+      try { sub?.unsubscribe?.(); } catch {}
+    };
   }, []);
-  const selfId = user?.id || null;
-  const canSend = Boolean(selfId);
 
-  // ===== чаты / активный чат / бейджи =====
+  const authUserId = user?.id || null;
+  const canSend = Boolean(authUserId);
+
+  // ───────────────────────────────────────────────────────────────
+  // ЧАТЫ / АКТИВНЫЙ ЧАТ / НЕПРОЧИТАННЫЕ
+  // ───────────────────────────────────────────────────────────────
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
   const [unreadByChat, setUnreadByChat] = useState({}); // { [chat_id]: count }
 
-  // ===== сообщения / квитанции / участники =====
+  // ───────────────────────────────────────────────────────────────
+  // СООБЩЕНИЯ / КВИТАНЦИИ / УЧАСТНИКИ
+  // ───────────────────────────────────────────────────────────────
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [receipts, setReceipts] = useState({}); // { [messageId]: { delivered:Set, read:Set } }
 
-  const [members, setMembers] = useState([]);         // массив uid участников
-  const [memberNames, setMemberNames] = useState({}); // { uid: 'Имя' }
+  const [members, setMembers] = useState([]);         // массив user_id участников
+  const [memberNames, setMemberNames] = useState({}); // { user_id: 'Имя' }
 
   const messagesSubRef = useRef(null);
   const receiptsSubRef = useRef(null);
 
-  // ===== загрузка списка чатов =====
+  // ───────────────────────────────────────────────────────────────
+  // ЗАГРУЗКА СПИСКА ЧАТОВ
+  // ───────────────────────────────────────────────────────────────
   useEffect(() => {
     let channel;
 
@@ -61,19 +70,21 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
         setChats([]);
         return;
       }
+
       const mapped = (data || []).map(r => ({
         chat_id: r.id,
         title: r.title,
         is_group: r.is_group,
         last_at: r.updated_at,
       }));
+
       setChats(mapped);
       if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
     };
 
     loadChats();
 
-    // при новом сообщении — обновить last_at и инкрементнуть непрочитанные, если чат не активный
+    // при вставке сообщения — обновить last_at и непрочитанные (если чат не активен)
     channel = supabase
       .channel('chats-overview')
       .on('postgres_changes',
@@ -89,16 +100,22 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
             }
             return arr;
           });
-          if (selfId && m.author_id !== selfId && m.chat_id !== activeChatId) {
+
+          if (authUserId && m.author_id !== authUserId && m.chat_id !== activeChatId) {
             setUnreadByChat(prev => ({ ...prev, [m.chat_id]: (prev[m.chat_id] || 0) + 1 }));
           }
-        })
+        }
+      )
       .subscribe();
 
-    return () => { try { supabase.removeChannel(channel); } catch {} };
-  }, [activeChatId, selfId]);
+    return () => {
+      try { supabase.removeChannel(channel); } catch {}
+    };
+  }, [activeChatId, authUserId]);
 
-  // ===== участники активного чата + имена =====
+  // ───────────────────────────────────────────────────────────────
+  // УЧАСТНИКИ АКТИВНОГО ЧАТА + ИМЕНА (profiles)
+  // ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!activeChatId) { setMembers([]); setMemberNames({}); return; }
 
@@ -119,6 +136,7 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
 
       if (!ids.length) { setMemberNames({}); return; }
 
+      // предполагается, что profiles.id = auth.users.id
       const { data: profs, error: pErr } = await supabase
         .from('profiles')
         .select('id, full_name')
@@ -136,10 +154,13 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
     })();
   }, [activeChatId]);
 
-  // ===== загрузка сообщений =====
+  // ───────────────────────────────────────────────────────────────
+  // ЗАГРУЗКА СООБЩЕНИЙ
+  // ───────────────────────────────────────────────────────────────
   const fetchMessages = useCallback(async (chatId) => {
     if (!chatId) return;
     setLoadingMessages(true);
+
     const { data, error } = await supabase
       .from('chat_messages')
       .select('id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at')
@@ -147,6 +168,7 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
       .order('created_at', { ascending: true });
 
     setLoadingMessages(false);
+
     if (error) {
       console.error('[CHAT] messages load error:', error);
       setMessages([]);
@@ -155,7 +177,9 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
     setMessages(data || []);
   }, []);
 
-  // ===== подписки по активному чату =====
+  // ───────────────────────────────────────────────────────────────
+  // ПОДПИСКИ ПО АКТИВНОМУ ЧАТУ
+  // ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!activeChatId) return;
 
@@ -173,12 +197,12 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
           const m = payload.new;
           setMessages(prev => [...prev, m]);
 
-          // входящие -> квитанция delivered
-          if (selfId && m.author_id !== selfId) {
+          // входящее — зафиксировать delivered
+          if (authUserId && m.author_id !== authUserId) {
             const row = {
               chat_id: m.chat_id,
               message_id: m.id,
-              [RECEIPTS_USER_COLUMN]: selfId,
+              [RECEIPTS_USER_COLUMN]: authUserId,
               status: 'delivered',
             };
             const { error } = await supabase
@@ -186,7 +210,8 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
               .upsert([row], { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
             if (error) console.warn('[CHAT] deliver upsert error:', error);
           }
-        })
+        }
+      )
       .subscribe();
     messagesSubRef.current = msgCh;
 
@@ -199,14 +224,15 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
         (p) => {
           const r = p.new;
           setReceipts(prev => {
-            const obj = { ...prev };
-            const entry = obj[r.message_id] || { delivered: new Set(), read: new Set() };
-            const targetSet = r.status === 'read' ? entry.read : entry.delivered;
-            targetSet.add(r.user_id);
-            obj[r.message_id] = entry;
-            return obj;
+            const next = { ...prev };
+            const entry = next[r.message_id] || { delivered: new Set(), read: new Set() };
+            const setRef = r.status === 'read' ? entry.read : entry.delivered;
+            setRef.add(r.user_id);
+            next[r.message_id] = entry;
+            return next;
           });
-        })
+        }
+      )
       .subscribe();
     receiptsSubRef.current = rCh;
 
@@ -214,16 +240,18 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
       try { supabase.removeChannel(msgCh); } catch {}
       try { supabase.removeChannel(rCh); } catch {}
     };
-  }, [activeChatId, selfId, fetchMessages]);
+  }, [activeChatId, authUserId, fetchMessages]);
 
-  // ===== пометить видимые сообщения как прочитанные =====
+  // ───────────────────────────────────────────────────────────────
+  // ПОМЕТИТЬ ВИДИМЫЕ КАК ПРОЧИТАННЫЕ
+  // ───────────────────────────────────────────────────────────────
   const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !selfId || !activeChatId) return;
+    if (!ids?.length || !authUserId || !activeChatId) return;
 
     const rows = ids.map(message_id => ({
       chat_id: activeChatId,
       message_id,
-      [RECEIPTS_USER_COLUMN]: selfId,
+      [RECEIPTS_USER_COLUMN]: authUserId,
       status: 'read',
     }));
 
@@ -237,11 +265,42 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
         .from('chat_members')
         .update({ last_read_at: new Date().toISOString() })
         .eq('chat_id', activeChatId)
-        .eq('member_id', selfId);
+        .eq('member_id', authUserId);
     } catch {}
-  }, [activeChatId, selfId]);
+  }, [activeChatId, authUserId]);
 
-  // ===== суммарный бейдж наверху (TopNav) =====
+  // ───────────────────────────────────────────────────────────────
+  // ОТПРАВКА СООБЩЕНИЯ
+  // ───────────────────────────────────────────────────────────────
+  const handleSend = useCallback(
+    async ({ text, files }) => {
+      if (!activeChatId || !authUserId) return;
+
+      // Берём первый файл (если есть). В этой версии — без upload, только метаданные.
+      const first = files?.[0] || null;
+
+      const row = {
+        chat_id: activeChatId,
+        author_id: authUserId,                        // критично: auth.uid()
+        body: (text || '').trim() || null,
+        file_url: first ? null : null,               // при желании можно реализовать upload и путь
+        file_name: first ? first.name : null,
+        file_type: first ? first.type : null,
+        file_size: first ? first.size : null,
+      };
+
+      const { error } = await supabase.from('chat_messages').insert(row);
+      if (error) {
+        console.error('[CHAT] send error:', error);
+        alert(error.message || 'Не удалось отправить сообщение');
+      }
+    },
+    [activeChatId, authUserId]
+  );
+
+  // ───────────────────────────────────────────────────────────────
+  // СУММАРНЫЙ БЕЙДЖ
+  // ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
     if (typeof window !== 'undefined') {
@@ -250,9 +309,11 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
     }
   }, [unreadByChat]);
 
-  // typing
   const typingText = useMemo(() => '', []);
 
+  // ───────────────────────────────────────────────────────────────
+  // UI
+  // ───────────────────────────────────────────────────────────────
   return (
     <div style={{
       display: 'grid',
@@ -267,7 +328,6 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
           typingText={typingText}
           members={members}
           memberNames={memberNames}
-          // selfId={selfId} // опционально, если хочешь скрывать себя в списке
         />
       </div>
 
@@ -292,7 +352,7 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
             <MessageList
               messages={messages}
               loading={loadingMessages}
-              currentUserId={selfId}
+              currentUserId={authUserId}
               receipts={receipts}
               onMarkVisibleRead={markReadForMessageIds}
               memberNames={memberNames}
@@ -301,6 +361,7 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
           <div style={{ borderTop: '1px solid #eee', padding: '10px', background: '#fff' }}>
             <MessageInput
               chatId={activeChatId}
+              onSend={handleSend}
               onSent={() => {}}
               canSend={canSend}
             />
@@ -310,4 +371,3 @@ const memberId   = profile?.id || null; // technicians.id, если нужен
     </div>
   );
 }
-
