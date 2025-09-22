@@ -1,40 +1,40 @@
 // src/components/RequireRole.jsx
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-/**
- * Пропсы:
- * - allow: string | string[]  — список допустимых ролей ('admin' | 'manager' | 'tech')
- * - children: ReactNode       — что рендерить при доступе
- * - loadingFallback?: ReactNode — что показывать пока идёт загрузка роли (по умолчанию null)
- */
+const norm = (r) => {
+  if (!r) return null;
+  const x = String(r).toLowerCase();
+  if (x === 'technician') return 'tech';
+  return x;
+};
+
 export default function RequireRole({ allow, children, loadingFallback = null }) {
   const { loading, user, role } = useAuth();
   const location = useLocation();
 
-  // Нормализуем allow: допускаем строку и массив
-  const allowed = Array.isArray(allow) ? allow : (allow ? [allow] : ['admin','manager','tech']);
+  const allowed = useMemo(() => {
+    if (!allow) return ['admin','manager','tech'];
+    const arr = Array.isArray(allow) ? allow : [allow];
+    return arr.map(norm);
+  }, [allow]);
 
-  // Пока тянем сессию/профиль — ничего не решаем (иначе будут ложные "нет доступа")
   if (loading) return loadingFallback;
 
-  // Не залогинен — на логин с возвратом куда шёл
   if (!user) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  // Роль ещё не определилась (null) — показываем заглушку, НЕ режем доступ преждевременно
-  // Если хочешь явно запрещать при неизвестной роли — замени на редирект на /no-access
-  if (!role) {
+  const r = norm(role);
+  if (!r) {
+    // роль еще не определилась — показываем мягкую заглушку (не редирект)
     return loadingFallback ?? <div style={{ padding: 16 }}>Загрузка прав…</div>;
   }
 
-  // Нет права — на /no-access
-  if (!allowed.includes(role)) {
+  if (!allowed.includes(r)) {
     return <Navigate to="/no-access" replace />;
   }
 
-  // Доступ есть
   return children;
 }
