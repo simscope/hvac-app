@@ -166,9 +166,10 @@ export default function ChatPage() {
           const m = payload.new;
           setMessages(prev => [...prev, m]);
 
-          // delivered для входящих
+          // delivered для входящих — ВАЖНО: передаём chat_id, т.к. в БД он NOT NULL
           if (selfId && m.author_id !== selfId) {
             const rows = [{
+              chat_id: m.chat_id,
               message_id: m.id,
               [RECEIPTS_USER_COLUMN]: selfId,
               status: 'delivered',
@@ -210,24 +211,29 @@ export default function ChatPage() {
 
   // ====== пометить сообщения как прочитанные (пачкой) ======
   const markReadForMessageIds = useCallback(async (ids) => {
-    if (!ids?.length || !selfId) return;
+    if (!ids?.length || !selfId || !activeChatId) return;
+
+    // передаём chat_id, т.к. колонка NOT NULL
     const rows = ids.map(message_id => ({
+      chat_id: activeChatId,
       message_id,
       [RECEIPTS_USER_COLUMN]: selfId,
       status: 'read',
     }));
+
     const { error } = await supabase
       .from('message_receipts')
       .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
     if (error) console.warn('receipts upsert error', error);
 
-    // лёгкий маркер «я дочитал чат» — не обязателен, но полезно
-    await supabase
-      .from('chat_members')
-      .update({ last_read_at: new Date().toISOString() })
-      .eq('chat_id', activeChatId)
-      .eq('member_id', selfId)
-      .catch(() => {});
+    // обновим last_read_at — без .catch на результате await
+    try {
+      await supabase
+        .from('chat_members')
+        .update({ last_read_at: new Date().toISOString() })
+        .eq('chat_id', activeChatId)
+        .eq('member_id', selfId);
+    } catch {}
   }, [activeChatId, selfId]);
 
   // текст «печатает…»
