@@ -1,41 +1,64 @@
-// client/src/components/chat/MessageInput.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { supabase } from '../../supabaseClient';
 
 /**
- * Простой инпут сообщений с:
- * - отправкой по Enter (Shift+Enter — новая строка)
- * - выбором/сбросом файлов (первые файлы отправляются вместе с текстом)
- * - колбэком onTypingPulse() для "печатает…" (вызывается с лёгким дебаунсом)
+ * Поле ввода сообщений.
+ * Самостоятельно:
+ *  - берет текущего user из Supabase
+ *  - (опц.) грузит первый выбранный файл в Storage (bucket "chat-attachments")
+ *  - вставляет сообщение в public.chat_messages с полями:
+ *      chat_id, body, file_url, file_name, file_type, file_size, attachment_url
  *
  * Props:
- * - chatId: UUID активного чата
- * - disabled?: boolean
- * - onSend: ({ text, files }) => Promise<void> | void
- * - onSent?: (msgLike) => void   // опционально
- * - onTypingPulse?: () => void   // опционально
- * - canSend?: boolean            // переопределение disabled логики
+ *  - chatId: UUID активного чата
+ *  - disabled?: boolean
+ *  - canSend?: boolean               // переопределяет внутреннюю логику доступности кнопки
+ *  - onSent?: (insertedMessageLike)  // колбэк после удачной отправки
+ *  - onTypingPulse?: () => void      // "печатает…" с легким дебаунсом
+ *
+ * Требования к БД:
+ *  - chat_messages: колонки body (text), author_id (uuid, DEFAULT auth.uid()), chat_id (uuid)
+ *                   file_url, file_name, file_type, file_size, attachment_url (text) — опционально
+ *  - RLS для INSERT разрешает писать участнику чата; author_id через DEFAULT
+ *  - Для файлов создать Storage bucket "chat-attachments" (public) или поменять имя ниже
  */
+
+const STORAGE_BUCKET = 'chat-attachments';
+
 export default function MessageInput({
   chatId,
   disabled = false,
-  onSend,
+  canSend,
   onSent,
   onTypingPulse,
-  canSend, // если не задан — вычисляется из локального состояния
 }) {
   const [text, setText] = useState('');
-  const [files, setFiles] = useState([]);
+  const [files, setFiles] = useState([]); // File[]
   const [sending, setSending] = useState(false);
 
   const inputRef = useRef(null);
   const fileRef = useRef(null);
 
+  const [userId, setUserId] = useState(null);
+  useEffect(() => {
+    let sub;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      setUserId(data?.session?.user?.id || null);
+      sub = supabase.auth.onAuthStateChange((_e, s) => {
+        setUserId(s?.user?.id || null);
+      }).data?.subscription;
+    })();
+    return () => sub?.unsubscribe?.();
+  }, []);
+
   const normalizedCanSend = useMemo(() => {
     const hasContent = text.trim().length > 0 || files.length > 0;
-    return canSend ?? (!disabled && !sending && !!chatId && hasContent);
-  }, [canSend, disabled, sending, chatId, text, files]);
+    const ok = !!chatId && !disabled && !sending && !!userId && hasContent;
+    return canSend ?? ok;
+  }, [canSend, disabled, sending, chatId, userId, text, files]);
 
-  // Дебаунс для onTypingPulse
+  // "печатает…" дебаунс
   const typingDebounceRef = useRef(null);
   const pulseTyping = useCallback(() => {
     if (!onTypingPulse) return;
@@ -44,7 +67,6 @@ export default function MessageInput({
       try { onTypingPulse(); } catch {}
     }, 300);
   }, [onTypingPulse]);
-
   useEffect(() => () => clearTimeout(typingDebounceRef.current), []);
 
   const handleKeyDown = (e) => {
@@ -62,7 +84,6 @@ export default function MessageInput({
 
   const removeFileAt = (idx) => {
     setFiles(prev => prev.filter((_, i) => i !== idx));
-    // вернуть фокус в поле ввода
     inputRef.current?.focus();
   };
 
@@ -72,23 +93,67 @@ export default function MessageInput({
     try { if (fileRef.current) fileRef.current.value = ''; } catch {}
   };
 
-  const submit = async () => {
-    if (!normalizedCanSend || !onSend) return;
-    const payload = {
-      text: text.trim(),
-      files
+  // загрузка одного файла в Storage -> публичный URL
+  const uploadFirstFile = async () => {
+    if (!files.length) return null;
+    const file = files[0];
+    const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+    const path = `${chatId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+    // если бакета нет/приватный — просто не прикрепляем файл
+    const up = await supabase.storage.from(STORAGE_BUCKET).upload(path, file, {
+      cacheControl: '3600',
+      upsert: false,
+    });
+    if (up.error) {
+      console.warn('[CHAT] file upload error:', up.error?.message || up.error);
+      return null;
+    }
+    const pub = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+    const publicUrl = pub?.data?.publicUrl || null;
+
+    return {
+      file_url: publicUrl,
+      attachment_url: publicUrl,
+      file_name: file.name,
+      file_type: file.type || null,
+      file_size: file.size || null,
     };
+  };
+
+  const submit = async () => {
+    if (!normalizedCanSend) return;
+    const body = text.trim();
+    if (!body && files.length === 0) return;
+
+    setSending(true);
     try {
-      setSending(true);
-      await onSend(payload);
-      onSent?.(payload);
+      let fileFields = null;
+      if (files.length > 0) {
+        fileFields = await uploadFirstFile();
+      }
+
+      const row = {
+        chat_id: chatId,
+        body: body || (fileFields ? '' : null), // если только файл — допустим пустой текст
+        ...(fileFields || {}),
+      };
+
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .insert(row)
+        .select('id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at')
+        .single();
+
+      if (error) throw error;
+
+      onSent?.(data || row);
       clearForm();
     } catch (err) {
-      console.error('Message send error:', err);
+      console.error('[CHAT] send error:', err);
       alert(err?.message || 'Не удалось отправить сообщение');
     } finally {
       setSending(false);
-      // вернуть фокус
       inputRef.current?.focus();
     }
   };
