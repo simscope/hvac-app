@@ -1,5 +1,5 @@
 // client/src/components/TopNav.jsx
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -9,7 +9,7 @@ const norm = (r) => {
   return x === 'technician' ? 'tech' : x;
 };
 
-// Простые SVG-иконки (встроенные, чтобы не ловить 404 на ассеты)
+// Встроенные SVG-иконки (без внешних ассетов)
 const Icon = {
   Jobs: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
@@ -57,14 +57,24 @@ export default function TopNav() {
   const { user, role, logout } = useAuth();
   const r = useMemo(() => norm(role), [role]);
 
+  // Фолбэк логотипа: /logo_invoice_header.png → /logo192.png → скрыть
+  const base = process.env.PUBLIC_URL || '';
+  const [logoSrc, setLogoSrc] = useState(`${base}/logo_invoice_header.png`);
+  const [triedFallback, setTriedFallback] = useState(false);
+  const onLogoError = () => {
+    if (!triedFallback) {
+      setLogoSrc(`${base}/logo192.png`);
+      setTriedFallback(true);
+    } else {
+      setLogoSrc(null); // второй файл тоже не найден — убираем <img>
+    }
+  };
+
   if (!user) return null;
 
-  // пункты меню в зависимости от роли
+  // Пункты меню по роли
   const links = useMemo(() => {
-    const arr = [];
-    // Общие для всех — только «Заявки» (но у tech список может быть закрыт роут-гвардом)
-    arr.push({ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> });
-
+    const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> }];
     if (r === 'admin' || r === 'manager') {
       arr.push(
         { to: '/jobs/all', label: 'Все заявки', icon: <Icon.All /> },
@@ -83,29 +93,29 @@ export default function TopNav() {
     return arr;
   }, [r]);
 
-  // аватарка (инициалы)
+  // Инициалы пользователя для «аватарки»
   const initials = useMemo(() => {
-    const name = (user?.user_metadata?.full_name ||
-      user?.user_metadata?.name ||
-      user?.email ||
-      '').trim();
+    const name = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || '').trim();
     if (!name) return 'U';
-    const parts = String(name).split(/\s+/);
-    const a = parts[0]?.[0] || '';
-    const b = parts[1]?.[0] || '';
-    return (a + b).toUpperCase();
+    const parts = name.split(/\s+/);
+    return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase();
   }, [user]);
 
   return (
     <header className="tn">
       <div className="tn__left">
-        <img
-          src={require('client/public/logo192.png')}
-          alt="Sim Scope"
-          className="tn__logo"
-          onError={(e) => { e.currentTarget.style.display = 'none'; }}
-        />
+        {logoSrc && (
+          <img
+            src={logoSrc}
+            alt="Sim Scope"
+            className="tn__logo"
+            onError={onLogoError}
+            loading="eager"
+            decoding="async"
+          />
+        )}
         <span className="tn__brand">Sim&nbsp;Scope</span>
+
         <nav className="tn__nav">
           {links.map((l) => (
             <NavLink key={l.to} to={l.to} className={({ isActive }) => 'tn__link' + (isActive ? ' is-active' : '')}>
@@ -122,24 +132,20 @@ export default function TopNav() {
         <button className="tn__btn" onClick={logout}>Выйти</button>
       </div>
 
-      {/* Стили внутри компонента, чтобы ничего не ломать */}
       <style>{`
         :root {
           --tn-bg: linear-gradient(90deg, #0f172a 0%, #111827 50%, #1f2937 100%);
           --tn-fg: #e5e7eb;
-          --tn-muted: #9ca3af;
           --tn-pill: rgba(255,255,255,0.08);
           --tn-pill-active: rgba(59,130,246,0.22);
           --tn-border: rgba(255,255,255,0.08);
           --tn-accent: #60a5fa;
-          --tn-danger: #ef4444;
         }
         .tn {
           position: sticky; top: 0; z-index: 100;
           display:flex; align-items:center; justify-content:space-between;
           padding: 10px 14px;
-          background: var(--tn-bg);
-          color: var(--tn-fg);
+          background: var(--tn-bg); color: var(--tn-fg);
           border-bottom: 1px solid var(--tn-border);
           box-shadow: 0 6px 24px rgba(0,0,0,.25);
         }
@@ -173,7 +179,8 @@ export default function TopNav() {
         .tn__avatar {
           width: 32px; height: 32px; border-radius: 50%;
           display:grid; place-items:center; font-weight: 700;
-          background: #0ea5e9; color: white; box-shadow: inset 0 0 0 2px rgba(255,255,255,.35);
+          background: #0ea5e9; color: white;
+          box-shadow: inset 0 0 0 2px rgba(255,255,255,.35);
         }
         .tn__btn {
           border: 1px solid var(--tn-border); color: var(--tn-fg);
@@ -182,7 +189,7 @@ export default function TopNav() {
         }
         .tn__btn:hover { background: rgba(255,255,255,0.08); }
         @media (max-width: 980px) {
-          .tn__text { display:none; }
+          .tn__text { display:none; }  /* оставим иконки на узких экранах */
           .tn__brand { display:none; }
         }
       `}</style>
