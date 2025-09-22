@@ -1,5 +1,5 @@
 // client/src/components/chat/ChatList.jsx
-import React, { useMemo } from 'react';
+import React from 'react';
 
 function formatWhen(ts) {
   if (!ts) return '—';
@@ -24,16 +24,15 @@ const GroupIcon = () => (
   </svg>
 );
 
-export default function ChatList({ chats, activeChatId, onSelect, unreadByChat = {} }) {
-  const empty = !chats || chats.length === 0;
-  if (empty) {
-    return <div style={{ padding: 12, color: '#888' }}>Чатов пока нет</div>;
-  }
-
-  const items = useMemo(() => chats, [chats]);
+export default function ChatList({ chats = [], activeChatId, onSelect, unreadByChat = {} }) {
+  const items = Array.isArray(chats) ? chats : [];
 
   return (
     <div>
+      {items.length === 0 && (
+        <div style={{ padding: 12, color: '#888' }}>Чатов пока нет</div>
+      )}
+
       {items.map((c) => {
         const unread = unreadByChat[c.chat_id] || 0;
         const active = c.chat_id === activeChatId;
