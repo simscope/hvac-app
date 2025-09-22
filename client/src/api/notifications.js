@@ -1,65 +1,60 @@
-// клиентские помощники для уведомлений
+// client/src/api/notifications.js
 import { supabase } from '../supabaseClient';
 
-/**
- * Вернёт непрочитанные уведомления текущего пользователя.
- * Можно ограничить по типу/чату.
- */
-export async function listMyNotifications({ type, chatId } = {}) {
-  const { data: { user }, error: authErr } = await supabase.auth.getUser();
-  if (authErr) throw authErr;
-  if (!user) return [];
+/** Список моих уведомлений по чату (новые сверху) */
+export async function listMyNotifications({ chatId, limit = 100 } = {}) {
+  const q = supabase
+    .from('notifications')
+    .select('id, user_id, chat_id, type, payload, read_at, created_at')
+    .eq('user_id', (await supabase.auth.getUser()).data.user?.id ?? null)
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
-  let q = supabase.from('notifications').select('*')
-    .eq('user_id', user.id)
-    .is('read_at', null)
-    .order('created_at', { ascending: false });
-
-  if (type)   q = q.eq('type', type);
-  if (chatId) q = q.eq('chat_id', chatId);
+  if (chatId) q.eq('chat_id', chatId);
 
   const { data, error } = await q;
   if (error) throw error;
   return data || [];
 }
 
-/** Пометить набор уведомлений прочитанными. */
-export async function markRead(ids = []) {
-  if (!ids.length) return;
-  const { error } = await supabase.from('notifications')
-    .update({ read_at: new Date().toISOString() })
-    .in('id', ids);
-  if (error) throw error;
+/** Подписка на мои новые уведомления (опционально по чату) */
+export function subscribeMyNotifications({ chatId, onInsert }) {
+  const uid = supabase.auth.getUser().then(r => r.data.user?.id ?? null);
+  const ch = supabase.channel('notif-my');
+  Promise.resolve(uid).then((userId) => {
+    if (!userId) return;
+    ch.on('postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: chatId ? `user_id=eq.${userId},chat_id=eq.${chatId}` : `user_id=eq.${userId}`,
+      },
+      (p) => onInsert?.(p.new)
+    ).subscribe();
+  });
+  return () => supabase.removeChannel(ch);
 }
 
-/** Пометить ВСЕ уведомления по чату прочитанными. */
-export async function markChatRead(chatId) {
+/** Пометить все мои уведомления по чату прочитанными */
+export async function markChatRead({ chatId }) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user || !chatId) return;
 
-  const { error } = await supabase.from('notifications')
+  const { error } = await supabase
+    .from('notifications')
     .update({ read_at: new Date().toISOString() })
     .eq('user_id', user.id)
     .eq('chat_id', chatId)
-    .eq('type', 'chat:new_message')
     .is('read_at', null);
-  if (error) console.warn('notif markChatRead error', error);
+
+  if (error) throw error;
 }
 
-/** Пересчитать общий счётчик и распространить событие наверх (для TopNav). */
-export async function recalcAndDispatchUnreadTotal() {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return 0;
-
-  const { count, error } = await supabase
+/** Утилита для создания уведомления (если делаешь это с фронта) */
+export async function createNotif({ toUserId, chatId, type, payload }) {
+  const { error } = await supabase
     .from('notifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-    .is('read_at', null);
-
-  const total = error ? 0 : (count ?? 0);
-  try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(total)); } catch {}
-  const ev = new CustomEvent('chat-unread-changed', { detail: { total } });
-  window.dispatchEvent(ev);
-  return total;
+    .insert([{ user_id: toUserId, chat_id: chatId, type, payload }]);
+  if (error) throw error;
 }
