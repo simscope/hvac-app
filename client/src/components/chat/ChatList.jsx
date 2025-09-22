@@ -24,7 +24,12 @@ const GroupIcon = () => (
   </svg>
 );
 
-export default function ChatList({ chats = [], activeChatId, onSelect, unreadByChat = {} }) {
+export default function ChatList({
+  chats = [],              // [{ chat_id, title, is_group, last_at }]
+  activeChatId,
+  onSelect,
+  unreadByChat = {},       // { [chat_id]: number }
+}) {
   const items = Array.isArray(chats) ? chats : [];
 
   return (
@@ -61,36 +66,56 @@ export default function ChatList({ chats = [], activeChatId, onSelect, unreadByC
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              gap: 10
+              gap: 10,
             }}
+            aria-current={active ? 'true' : undefined}
+            aria-label={`${c.title || 'Без названия'}${unread ? `, ${unread} непрочитанных` : ''}`}
+            title={c.title || 'Без названия'}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
               {c.is_group ? (
-                <div style={{
-                  width: 24, height: 24, borderRadius: 9999,
-                  background: '#e5e7eb', color: '#6b7280',
-                  display: 'grid', placeItems: 'center', flex: '0 0 24px'
-                }}>
+                <div
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 9999,
+                    background: '#e5e7eb',
+                    color: '#6b7280',
+                    display: 'grid',
+                    placeItems: 'center',
+                    flex: '0 0 24px',
+                  }}
+                >
                   <GroupIcon />
                 </div>
               ) : (
-                <div style={{
-                  width: 24, height: 24, borderRadius: 9999,
-                  background: '#dbeafe', color: '#1d4ed8',
-                  display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700,
-                  flex: '0 0 24px'
-                }}>
+                <div
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 9999,
+                    background: '#dbeafe',
+                    color: '#1d4ed8',
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    flex: '0 0 24px',
+                  }}
+                >
                   {(c.title || 'Чат').trim().slice(0, 1).toUpperCase()}
                 </div>
               )}
 
               <div style={{ overflow: 'hidden' }}>
-                <div style={{
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis'
-                }}>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
                   {c.title || 'Без названия'}
                 </div>
                 <div style={{ fontSize: 12, color: '#9ca3af' }}>{when}</div>
@@ -108,10 +133,11 @@ export default function ChatList({ chats = [], activeChatId, onSelect, unreadByC
                   fontSize: 12,
                   fontWeight: 700,
                   minWidth: 22,
-                  textAlign: 'center'
+                  textAlign: 'center',
+                  userSelect: 'none',
                 }}
               >
-                {unread}
+                {unread > 99 ? '99+' : unread}
               </span>
             )}
           </div>
