@@ -25,18 +25,18 @@ export default function ChatPage() {
   const selfId = user?.id || null;
   const canSend = Boolean(selfId);
 
-  // ===== чаты =====
+  // ===== чаты / активный чат / бейджи =====
   const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState(null);
   const [unreadByChat, setUnreadByChat] = useState({}); // { [chat_id]: count }
 
-  // ===== сообщения/квитанции/участники =====
+  // ===== сообщения / квитанции / участники =====
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [receipts, setReceipts] = useState({}); // { [messageId]: { delivered:Set, read:Set } }
 
-  const [members, setMembers] = useState([]);         // ids участников (auth.uid)
-  const [memberNames, setMemberNames] = useState({}); // { [uid]: 'Имя' }
+  const [members, setMembers] = useState([]);         // массив uid участников
+  const [memberNames, setMemberNames] = useState({}); // { uid: 'Имя' }
 
   const messagesSubRef = useRef(null);
   const receiptsSubRef = useRef(null);
@@ -44,6 +44,7 @@ export default function ChatPage() {
   // ===== загрузка списка чатов =====
   useEffect(() => {
     let channel;
+
     const loadChats = async () => {
       const { data, error } = await supabase
         .from('chats')
@@ -62,14 +63,12 @@ export default function ChatPage() {
         last_at: r.updated_at,
       }));
       setChats(mapped);
-      if (!activeChatId && mapped.length) {
-        setActiveChatId(mapped[0].chat_id);
-      }
+      if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
     };
 
     loadChats();
 
-    // поднять чат наверх при новом сообщении + бейдж непрочитанного
+    // при новом сообщении — обновить last_at и инкрементнуть непрочитанные, если чат не активный
     channel = supabase
       .channel('chats-overview')
       .on('postgres_changes',
@@ -138,7 +137,7 @@ export default function ChatPage() {
     setLoadingMessages(true);
     const { data, error } = await supabase
       .from('chat_messages')
-      .select('id, chat_id, author_id, body, file_url, file_name, file_type, file_size, created_at, attachment_url')
+      .select('id, chat_id, author_id, body, file_url, file_name, file_type, file_size, attachment_url, created_at')
       .eq('chat_id', chatId)
       .order('created_at', { ascending: true });
 
@@ -157,7 +156,7 @@ export default function ChatPage() {
 
     fetchMessages(activeChatId);
     setReceipts({});
-    setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 }));
+    setUnreadByChat(prev => ({ ...prev, [activeChatId]: 0 })); // сброс бейджа
 
     // сообщения
     if (messagesSubRef.current) supabase.removeChannel(messagesSubRef.current);
@@ -172,7 +171,7 @@ export default function ChatPage() {
           // входящие -> квитанция delivered
           if (selfId && m.author_id !== selfId) {
             const row = {
-              chat_id: m.chat_id,          // безопасно, если NOT NULL
+              chat_id: m.chat_id,
               message_id: m.id,
               [RECEIPTS_USER_COLUMN]: selfId,
               status: 'delivered',
@@ -197,8 +196,8 @@ export default function ChatPage() {
           setReceipts(prev => {
             const obj = { ...prev };
             const entry = obj[r.message_id] || { delivered: new Set(), read: new Set() };
-            const set = r.status === 'read' ? entry.read : entry.delivered;
-            set.add(r.user_id);
+            const targetSet = r.status === 'read' ? entry.read : entry.delivered;
+            targetSet.add(r.user_id);
             obj[r.message_id] = entry;
             return obj;
           });
@@ -212,7 +211,7 @@ export default function ChatPage() {
     };
   }, [activeChatId, selfId, fetchMessages]);
 
-  // ===== пометить сообщения как прочитанные пачкой =====
+  // ===== пометить видимые сообщения как прочитанные =====
   const markReadForMessageIds = useCallback(async (ids) => {
     if (!ids?.length || !selfId || !activeChatId) return;
 
@@ -228,7 +227,6 @@ export default function ChatPage() {
       .upsert(rows, { onConflict: 'message_id,user_id,status', ignoreDuplicates: true });
     if (error) console.warn('[CHAT] receipts read upsert error:', error);
 
-    // обновим last_read_at
     try {
       await supabase
         .from('chat_members')
@@ -238,7 +236,7 @@ export default function ChatPage() {
     } catch {}
   }, [activeChatId, selfId]);
 
-  // ===== суммарный бейдж (на верхнем меню) =====
+  // ===== суммарный бейдж наверху (TopNav) =====
   useEffect(() => {
     const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
     if (typeof window !== 'undefined') {
@@ -247,6 +245,7 @@ export default function ChatPage() {
     }
   }, [unreadByChat]);
 
+  // typing
   const typingText = useMemo(() => '', []);
 
   return (
@@ -256,22 +255,23 @@ export default function ChatPage() {
       height: 'calc(100vh - 64px)',
       overflow: 'hidden'
     }}>
-      {/* заголовок */}
-      <div style={{ borderBottom: '1px solid #eee', background:'#fff', position:'sticky', top:0, zIndex:2 }}>
+      {/* шапка чата */}
+      <div style={{ borderBottom: '1px solid #eee', background: '#fff', position: 'sticky', top: 0, zIndex: 2 }}>
         <ChatHeader
           chat={chats.find(c => c.chat_id === activeChatId) || null}
           typingText={typingText}
           members={members}
           memberNames={memberNames}
+          // selfId={selfId} // опционально, если хочешь скрывать себя в списке
         />
       </div>
 
       {/* контент */}
-      <div style={{ display:'grid', gridTemplateColumns:'320px 1fr', minHeight:0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', minHeight: 0 }}>
         {/* список чатов */}
-        <div style={{ borderRight:'1px solid #eee', overflow:'auto' }}>
-          <div style={{ padding:'12px' }}>
-            <h3 style={{ margin:0 }}>Чаты</h3>
+        <div style={{ borderRight: '1px solid #eee', overflow: 'auto' }}>
+          <div style={{ padding: '12px' }}>
+            <h3 style={{ margin: 0 }}>Чаты</h3>
           </div>
           <ChatList
             chats={chats}
@@ -282,8 +282,8 @@ export default function ChatPage() {
         </div>
 
         {/* сообщения + инпут */}
-        <div style={{ display:'grid', gridTemplateRows:'1fr auto', minHeight:0 }}>
-          <div style={{ overflow:'auto' }}>
+        <div style={{ display: 'grid', gridTemplateRows: '1fr auto', minHeight: 0 }}>
+          <div style={{ overflow: 'auto' }}>
             <MessageList
               messages={messages}
               loading={loadingMessages}
@@ -293,11 +293,10 @@ export default function ChatPage() {
               memberNames={memberNames}
             />
           </div>
-          <div style={{ borderTop:'1px solid #eee', padding:'10px', background:'#fff' }}>
+          <div style={{ borderTop: '1px solid #eee', padding: '10px', background: '#fff' }}>
             <MessageInput
               chatId={activeChatId}
               onSent={() => {}}
-              currentUserId={selfId}
               canSend={canSend}
             />
           </div>
