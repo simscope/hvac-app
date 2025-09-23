@@ -46,7 +46,7 @@ async function loadLogoDataURL(timeoutMs = 2500) {
   }
 }
 
-/* ---------------- styles (для UI страницы) ---------------- */
+/* ---------------- styles (UI) ---------------- */
 const S = {
   page: { maxWidth: 1000, margin: '24px auto 80px', padding: '0 16px' },
   bar: { display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 },
@@ -66,6 +66,7 @@ const S = {
     padding: 24,
     boxShadow: '0 2px 24px rgba(0,0,0,0.04)',
   },
+
   header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 16 },
   brandStack: { display: 'flex', flexDirection: 'column' },
   brandName: { fontWeight: 700, fontSize: 16 },
@@ -114,9 +115,7 @@ const S = {
 export default function InvoicePage() {
   const { id } = useParams(); // job id (uuid)
 
-  // logo
   const [logoDataURL, setLogoDataURL] = useState(null);
-  // job
   const [job, setJob] = useState(null);
 
   // Bill To
@@ -140,10 +139,9 @@ export default function InvoicePage() {
 
   const [saving, setSaving] = useState(false);
 
-  /* ----------- load logo ----------- */
+  /* ----------- init ----------- */
   useEffect(() => { loadLogoDataURL().then((d) => setLogoDataURL(d || null)); }, []);
 
-  /* ----------- load job + client + materials + next invoice no ----------- */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -236,12 +234,12 @@ export default function InvoicePage() {
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ----------- PDF (новая верстка) ----------- */
+  /* ----------- PDF (обновлённая верстка) ----------- */
   async function saveAndDownload() {
     if (saving) return;
     setSaving(true);
     try {
-      // 1) анти-дубль + номер
+      // номер/антидубль
       let thisInvoiceNo = null;
       const recentFrom = nowMinusSecISO(45);
       const recentQ = await supabase
@@ -267,80 +265,79 @@ export default function InvoicePage() {
         thisInvoiceNo = Number(inserted.invoice_no);
       }
 
-      // 2) PDF
+      // PDF
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
 
-      // --- Шапка: логотип слева, INVOICE справа ---
-      const pageW = 612; // letter width pt
+      const pageW = 612;
       const marginX = 40;
 
-      let logoBottom = 0;
-      try {
-        const logo = logoDataURL || (await loadLogoDataURL());
-        if (logo) {
-          doc.addImage(logo, 'PNG', marginX, 24, 90, 90); // ЛОГО слева
-          logoBottom = 24 + 90;
-        }
-      } catch {}
-
-      // INVOICE справа
+      // 1) Заголовок справа
       doc.setFontSize(30);
       doc.setFont(undefined, 'bold');
       doc.text('INVOICE', pageW - marginX, 48, { align: 'right' });
-
       doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
       doc.setTextColor(100);
       doc.text(`# ${thisInvoiceNo}`, pageW - marginX, 66, { align: 'right' });
 
-      // Дата
-      doc.setTextColor(80);
-      doc.setFont(undefined, 'bold');
-      doc.text('Date:', marginX, 140);
-      doc.setFont(undefined, 'normal');
-      doc.text(human(invoiceDate), marginX + 40, 140);
-
-      // Капсула Balance Due (справа)
-      const pillX = pageW - marginX - 240;
-      const pillY = 110;
-      // рамка
-      doc.setDrawColor(229, 231, 235);
-      doc.setFillColor(246, 247, 251);
-      doc.roundedRect(pillX, pillY, 240, 40, 8, 8, 'FD');
-      // текст
-      doc.setTextColor(51);
-      doc.setFont(undefined, 'bold');
-      doc.text('Balance Due:', pillX + 10, pillY + 26);
-      doc.setTextColor(0);
-      const dueText = `$${N(total).toFixed(2)}`;
-      doc.text(dueText, pillX + 230, pillY + 26, { align: 'right' });
-
-      // --- Bill To слева ---
-      const billTop = Math.max(logoBottom, pillY + 40) + 20;
+      // 2) Логотип слева + реквизиты компании ПОД логотипом
+      let logoBottom = 24;
+      try {
+        const logo = logoDataURL || (await loadLogoDataURL());
+        if (logo) {
+          doc.addImage(logo, 'PNG', marginX, 24, 90, 90);
+          logoBottom = 24 + 90;
+        }
+      } catch {}
+      // Company under logo
+      let compTop = logoBottom + 8;
       doc.setTextColor(0);
       doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', marginX, billTop);
-      doc.setFont(undefined, 'normal');
-      let lineY = billTop + 16;
-      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), marginX, lineY);
-        lineY += 14;
-      });
-
-      // --- Company реквизиты справа (под логотипом) ---
-      let compTop = Math.max(logoBottom, 100);
-      doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', pageW - marginX, compTop, { align: 'right' });
+      doc.text('Sim Scope Inc.', marginX, compTop);
       compTop += 14;
       doc.setFont(undefined, 'normal');
       ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((t) => {
-        doc.text(t, pageW - marginX, compTop, { align: 'right' });
+        doc.text(t, marginX, compTop);
         compTop += 12;
       });
 
-      // --- Таблица позиций (тёмная шапка) ---
-      const tableStartY = Math.max(lineY, compTop) + 16;
+      // 3) Справа — ДАТА (над капсулой), затем капсула Balance Due, ниже Bill To
+      // Дата
+      const rightColX = pageW - marginX - 240; // выравниваем по капсуле
+      let rightY = 110;
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(80);
+      doc.text('Date:', rightColX, rightY);
+      doc.setFont(undefined, 'normal');
+      doc.setTextColor(0);
+      doc.text(human(invoiceDate), rightColX + 40, rightY);
+      rightY += 16;
 
+      // Капсула Balance Due
+      const pillW = 240, pillH = 40;
+      doc.setDrawColor(229, 231, 235);
+      doc.setFillColor(246, 247, 251);
+      doc.roundedRect(pageW - marginX - pillW, rightY, pillW, pillH, 8, 8, 'FD');
+
+      doc.setFont(undefined, 'bold');
+      doc.setTextColor(70);
+      doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
+      doc.setTextColor(0);
+      doc.text(`$${N(total).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
+      rightY += pillH + 18;
+
+      // Bill To (справа, напротив инфы о компании)
+      doc.setFont(undefined, 'bold');
+      doc.text('Bill To:', pageW - marginX - pillW, rightY);
+      rightY += 16;
+      doc.setFont(undefined, 'normal');
+      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
+        doc.text(String(line), pageW - marginX - pillW, rightY);
+        rightY += 14;
+      });
+
+      // 4) Таблица
+      const tableStartY = Math.max(compTop, rightY) + 16;
       const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
         String(N(r.qty)),
@@ -364,21 +361,19 @@ export default function InvoicePage() {
         },
       });
 
-      // --- Итоги справа под таблицей ---
+      // 5) Итоги справа
       let endY = doc.lastAutoTable.finalY + 10;
       const totalsRightX = pageW - marginX;
-
       doc.setFont(undefined, 'bold');
       doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
       endY += 16;
       doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
       endY += 18;
-
       doc.setFontSize(12);
       doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
       endY += 22;
 
-      // --- Warranty (как на твоём скрине) ---
+      // 6) Warranty
       if (includeWarranty && Number(warrantyDays) > 0) {
         const maxW = pageW - marginX * 2;
         doc.setFontSize(10);
@@ -398,16 +393,14 @@ export default function InvoicePage() {
         doc.text(lines, marginX, endY + 2);
       }
 
-      // благодарность в самом низу
+      // Низ страницы
       doc.setFontSize(10);
       doc.text('Thank you for your business!', pageW - marginX, 760, { align: 'right' });
 
       const filename = `invoice_${thisInvoiceNo}.pdf`;
-
-      // 3) Сохранение локально
       doc.save(filename);
 
-      // 4) Загрузка PDF в Storage
+      // upload storage
       try {
         const pdfBlob = doc.output('blob');
         const storageKey = `${id}/${filename}`;
@@ -419,7 +412,6 @@ export default function InvoicePage() {
         console.warn('PDF upload error:', e);
       }
 
-      // 5) визуально показать следующий номер
       setInvoiceNo(String((Number(thisInvoiceNo) || 0) + 1));
     } catch (e) {
       console.error('saveAndDownload error:', e);
@@ -474,7 +466,7 @@ export default function InvoicePage() {
       </div>
 
       <div style={S.card}>
-        {/* ШАПКА предпросмотра (совпадает со стилем PDF) */}
+        {/* Превью совпадает по структуре с PDF: слева компания, справа дата/баланс/BillTo */}
         <div style={S.header}>
           <div>
             {logoDataURL ? (
@@ -482,84 +474,53 @@ export default function InvoicePage() {
             ) : (
               <div style={{ width: 80, height: 80, borderRadius: 12, background: '#f3f4f6' }} />
             )}
-          </div>
-
-          <div style={S.brandStack}>
-            <div style={S.brandName}>Sim HVAC & Appliance repair</div>
-            <div style={{ color: '#6b7280', marginTop: 4 }}>
-              1587 E 19th St, Brooklyn, NY 11230 · (929) 412-9042 · simscopeinc@gmail.com
+            <div style={{ marginTop: 8, fontWeight: 700 }}>Sim Scope Inc.</div>
+            <div style={{ color: '#6b7280', lineHeight: 1.4 }}>
+              1587 E 19th St<br />
+              Brooklyn, NY 11230<br />
+              (929) 412-9042<br />
+              simscopeinc@gmail.com
             </div>
           </div>
 
-          <div>
+          <div />
+
+          <div style={{ textAlign: 'right' }}>
             <div style={S.invoiceTitle}>INVOICE</div>
             <div style={S.invoiceNo}># {invoiceNo || '—'}</div>
-          </div>
-        </div>
 
-        <div style={S.sep} />
+            <div style={{ marginTop: 10, color: '#6b7280', fontWeight: 600 }}>
+              Date:&nbsp;
+              <input
+                type="date"
+                style={{ ...S.input, width: 180, display: 'inline-block' }}
+                value={toInputDate(invoiceDate)}
+                onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
+              />
+            </div>
 
-        {/* МЕТА + PILL */}
-        <div style={S.metaRow}>
-          <div style={S.metaLabel}>Date:</div>
-          <div>
-            <input
-              type="date"
-              style={{ ...S.input, width: 180 }}
-              value={toInputDate(invoiceDate)}
-              onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
-            />
-          </div>
-          <div style={S.pillWrap}>
-            <div style={S.pill}>
+            <div style={{ ...S.pill, marginTop: 8 }}>
               <div style={S.pillRow}>
                 <div style={S.pillCellLeft}>Balance Due:</div>
                 <div style={S.pillCellRight}>${N(total).toFixed(2)}</div>
               </div>
             </div>
-          </div>
-        </div>
 
-        {/* BILL TO + JOB */}
-        <div style={S.cols2}>
-          <div style={S.subCard}>
-            <div style={S.subTitle}>Bill To</div>
-            <div style={{ display: 'grid', gap: 8 }}>
-              <input style={S.input} placeholder="Full name / Company" value={billName} onChange={(e) => setBillName(e.target.value)} />
-              <input style={S.input} placeholder="Address" value={billAddress} onChange={(e) => setBillAddress(e.target.value)} />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <input style={S.input} placeholder="Phone" value={billPhone} onChange={(e) => setBillPhone(e.target.value)} />
-                <input style={S.input} placeholder="Email" value={billEmail} onChange={(e) => setBillEmail(e.target.value)} />
-              </div>
-            </div>
-          </div>
-
-          <div style={S.subCard}>
-            <div style={S.subTitle}>Job</div>
-            <div style={S.muted}>
-              {job
-                ? [
-                    job?.job_number ? `Job #${job.job_number}` : '',
-                    job?.system_type ? `System: ${job.system_type}` : '',
-                    job?.issue ? `Issue: ${job.issue}` : '',
-                  ].filter(Boolean).join(' · ')
-                : 'No job linked'}
-            </div>
-            <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
-                Include warranty
-              </label>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                Days:
-                <input type="number" min={0} style={{ ...S.input, width: 90 }} value={warrantyDays}
-                  onChange={(e) => setWarrantyDays(Number(e.target.value || 0))} />
+            <div style={{ marginTop: 12, textAlign: 'left' }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Bill To</div>
+              <div style={{ color: '#111' }}>
+                <div>{billName}</div>
+                <div>{billAddress}</div>
+                <div>{billPhone}</div>
+                <div>{billEmail}</div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* ТАБЛИЦА */}
+        <div style={S.sep} />
+
+        {/* Таблица */}
         <div style={S.tableWrap}>
           <table style={S.table}>
             <thead>
@@ -579,7 +540,7 @@ export default function InvoicePage() {
           <button style={S.ghost} onClick={addRow}>+ Add row</button>
         </div>
 
-        {/* ИТОГИ */}
+        {/* Итоги */}
         <div style={S.totalsRow}>
           <div />
           <div style={S.totalsCard}>
@@ -603,6 +564,16 @@ export default function InvoicePage() {
           </div>
         </div>
 
+        {/* Warranty toggle */}
+        <div style={{ marginTop: 16, color: '#6b7280' }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
+            Include warranty
+          </label>
+          <span style={{ marginLeft: 10 }}>Days:&nbsp;</span>
+          <input type="number" min={0} style={{ ...S.input, width: 90, display: 'inline-block' }}
+                 value={warrantyDays} onChange={(e) => setWarrantyDays(Number(e.target.value || 0))} />
+        </div>
       </div>
     </div>
   );
