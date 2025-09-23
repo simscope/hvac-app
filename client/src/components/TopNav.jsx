@@ -58,7 +58,7 @@ export default function TopNav() {
   const { user, role, logout } = useAuth();
   const uid = user?.id || null;
 
-  // unread total for Chat badge (init из localStorage, чтобы быстро отрисовать)
+  // unread total для бэйджа «Чат» (быстрая инициализация из localStorage)
   const [chatUnreadTotal, setChatUnreadTotal] = useState(() => {
     try {
       const raw = localStorage.getItem('CHAT_UNREAD_TOTAL');
@@ -67,80 +67,96 @@ export default function TopNav() {
     } catch { return 0; }
   });
 
-  // лёгкий debounce для частых realtime-событий
+  const channelRef = useRef(null);
   const debounceRef = useRef(null);
-  const debouncedRefreshUnread = (fn) => {
+  const pollRef = useRef(null);
+
+  const debounced = (fn, ms = 250) => {
     clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(fn, 250);
+    debounceRef.current = setTimeout(fn, ms);
   };
 
-  // подтянуть unread с сервера
   const refreshUnreadFromServer = async () => {
     if (!uid) { setChatUnreadTotal(0); return; }
     const { data, error } = await supabase.rpc('get_unread_by_chat');
-    if (error) {
-      // тихо игнорим — у нас есть локальный счётчик
-      // console.warn('[TopNav] get_unread_by_chat error', error);
-      return;
-    }
+    if (error) return; // тихо: локальный счётчик всё равно есть
     const sum = (data || []).reduce((s, r) => s + (Number(r.unread) || 0), 0);
     setChatUnreadTotal(sum);
     try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum)); } catch {}
   };
 
-  // слушаем локальный ивент от ChatPage + realtime от БД
+  // слушаем локальный ивент от ChatPage
   useEffect(() => {
-    if (!uid) return;
-
-    // начальная загрузка
-    refreshUnreadFromServer();
-
-    // локальное событие (ChatPage его диспатчит при каждом апдейте)
     const onLocalChanged = (e) => {
       const n = e?.detail?.total;
       if (typeof n === 'number') setChatUnreadTotal(n);
     };
     window.addEventListener('chat-unread-changed', onLocalChanged);
+    return () => window.removeEventListener('chat-unread-changed', onLocalChanged);
+  }, []);
 
-    // realtime: любое новое сообщение и апдейт моего last_read_at → обновить
-    const chan = supabase
+  // Realtime подписки + страховки (focus/visibility + поллинг)
+  useEffect(() => {
+    // очистить прошлое
+    if (channelRef.current) {
+      try { supabase.removeChannel(channelRef.current); } catch {}
+      channelRef.current = null;
+    }
+    clearInterval(pollRef.current);
+
+    if (!uid) return;
+
+    // начальная загрузка
+    refreshUnreadFromServer();
+
+    // realtime подписка
+    const ch = supabase
       .channel('topnav-unread')
-      .on(
-        'postgres_changes',
+      // любое новое сообщение → пересчитать
+      .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
-        () => debouncedRefreshUnread(refreshUnreadFromServer)
+        () => debounced(refreshUnreadFromServer)
       )
-      .on(
-        'postgres_changes',
+      // мой last_read_at поменялся → пересчитать
+      .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `member_id=eq.${uid}` },
-        () => debouncedRefreshUnread(refreshUnreadFromServer)
+        () => debounced(refreshUnreadFromServer)
       )
       .subscribe();
+    channelRef.current = ch;
+
+    // обновление при возврате вкладки / при фокусе окна
+    const onFocus = () => debounced(refreshUnreadFromServer, 50);
+    const onVisibility = () => { if (document.visibilityState === 'visible') onFocus(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // лёгкий поллинг (как резерв, если вдруг websocket отвалился и переподключился без событий)
+    pollRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshUnreadFromServer();
+    }, 25000);
 
     return () => {
-      window.removeEventListener('chat-unread-changed', onLocalChanged);
-      try { supabase.removeChannel(chan); } catch {}
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearInterval(pollRef.current);
+      try { if (channelRef.current) supabase.removeChannel(channelRef.current); } catch {}
+      channelRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
-  // все хуки — до любого return
+  // остальные хуки
   const r = useMemo(() => norm(role), [role]);
 
-  // Фолбэк логотипа: /logo_invoice_header.png → /logo192.png → скрыть
   const base = process.env.PUBLIC_URL || '';
   const [logoSrc, setLogoSrc] = useState(`${base}/logo_invoice_header.png`);
   const [triedFallback, setTriedFallback] = useState(false);
   const onLogoError = () => {
-    if (!triedFallback) {
-      setLogoSrc(`${base}/logo192.png`);
-      setTriedFallback(true);
-    } else {
-      setLogoSrc(null);
-    }
+    if (!triedFallback) { setLogoSrc(`${base}/logo192.png`); setTriedFallback(true); }
+    else { setLogoSrc(null); }
   };
 
-  // Пункты меню по роли — считаем всегда (для правила хуков)
   const links = useMemo(() => {
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> }];
     if (r === 'admin' || r === 'manager') {
@@ -161,7 +177,6 @@ export default function TopNav() {
     return arr;
   }, [r]);
 
-  // Инициалы (тоже считаем всегда)
   const initials = useMemo(() => {
     const name = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || '').trim();
     if (!name) return 'U';
@@ -169,7 +184,6 @@ export default function TopNav() {
     return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase();
   }, [user]);
 
-  // ранний выход — ТОЛЬКО после всех хуков
   if (!user) return null;
 
   return (
@@ -198,7 +212,6 @@ export default function TopNav() {
               <span className="tn__icon">{l.icon}</span>
               <span className="tn__text">{l.label}</span>
 
-              {/* Бэйдж только для вкладки "Чат" */}
               {l.to === '/chat' && chatUnreadTotal > 0 && (
                 <span className="tn__badge" aria-hidden="true">
                   {chatUnreadTotal > 99 ? '99+' : chatUnreadTotal}
