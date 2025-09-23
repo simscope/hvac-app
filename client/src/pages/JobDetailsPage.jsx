@@ -683,61 +683,63 @@ export default function JobDetailsPage() {
 
   /* ---------- инвойсы ---------- */
   const loadInvoices = async () => {
-    setInvoicesLoading(true);
-    try {
-      const [stRes, dbRes] = await Promise.all([
-        invStorage().list(`${jobId}`, {
-          limit: 200,
-          sortBy: { column: 'updated_at', order: 'desc' },
-        }),
-        supabase
-          .from('invoices')
-          .select('invoice_no, created_at')
-          .eq('job_id', jobId)
-          .order('created_at', { ascending: false }),
-      ]);
+  setInvoicesLoading(true);
+  try {
+    const [stRes, dbRes] = await Promise.all([
+      invStorage().list(`${jobId}`, {
+        limit: 200,
+        sortBy: { column: 'updated_at', order: 'desc' },
+      }),
+      supabase
+        .from('invoices')
+        .select('id, invoice_no, created_at')  // ⬅ добавили id
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: false }),
+    ]);
 
-      const stData = stRes?.data || [];
-      const stor = stData
-        .filter((o) => /\.pdf$/i.test(o.name))
-        .map((o) => {
-          const full = `${jobId}/${o.name}`;
-          const { data: pub } = invStorage().getPublicUrl(full);
-          const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
-          return {
-            source: 'storage',
-            name: o.name,
-            url: pub?.publicUrl || null,
-            updated_at: o.updated_at || o.created_at || null,
-            invoice_no: m ? String(m[1]) : null,
-            hasFile: true,
-          };
-        });
-
-      const rows = dbRes?.data || [];
-      const db = rows.map((r) => ({
-        source: 'db',
-        name: `invoice_${r.invoice_no}.pdf`,
-        url: null,
-        updated_at: r.created_at,
-        invoice_no: String(r.invoice_no),
-        hasFile: stor.some((s) => s.invoice_no === String(r.invoice_no)),
-      }));
-
-      const merged = [...stor];
-      db.forEach((d) => {
-        if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d);
+    const stData = stRes?.data || [];
+    const stor = stData
+      .filter((o) => /\.pdf$/i.test(o.name))
+      .map((o) => {
+        const full = `${jobId}/${o.name}`;
+        const { data: pub } = invStorage().getPublicUrl(full);
+        const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
+        return {
+          source: 'storage',
+          name: o.name,
+          url: pub?.publicUrl || null,
+          updated_at: o.updated_at || o.created_at || null,
+          invoice_no: m ? String(m[1]) : null,
+          hasFile: true,
+        };
       });
 
-      merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
-      setInvoices(merged);
-    } catch (e) {
-      console.error('loadInvoices merge error:', e);
-      setInvoices([]);
-    } finally {
-      setInvoicesLoading(false);
-    }
-  };
+    const rows = dbRes?.data || [];
+    const db = rows.map((r) => ({
+      source: 'db',
+      name: `invoice_${r.invoice_no}.pdf`,
+      url: null,
+      updated_at: r.created_at,
+      invoice_no: String(r.invoice_no),
+      db_id: r.id,                  // ⬅ сохранили id на всякий случай
+      hasFile: stor.some((s) => s.invoice_no === String(r.invoice_no)),
+    }));
+
+    const merged = [...stor];
+    db.forEach((d) => {
+      if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d);
+    });
+
+    merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+    setInvoices(merged);
+  } catch (e) {
+    console.error('loadInvoices merge error:', e);
+    setInvoices([]);
+  } finally {
+    setInvoicesLoading(false);
+  }
+};
+
 
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) {
@@ -764,24 +766,63 @@ export default function JobDetailsPage() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.createObjectURL(url);
+    URL.revokeObjectURL(url);
   };
 
   const deleteInvoice = async (item) => {
-    if (!item?.hasFile) return;
-    if (!window.confirm('Удалить инвойс?')) return;
-    const { error } = await invStorage().remove([`${jobId}/${item.name}`]);
-    if (error) {
-      console.error('deleteInvoice', error);
-      alert('Не удалось удалить инвойс');
-      return;
-    }
-    await loadInvoices();
-  };
+  // invoice number из объекта/имени файла
+  const invNoStr =
+    item?.invoice_no ||
+    (/invoice_(\d+)\.pdf/i.exec(item?.name || '')?.[1] || null);
+  const invNo = invNoStr != null ? Number(invNoStr) : null;
 
-  const createInvoice = () => {
-    window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
-  };
+  if (!window.confirm(`Удалить инвойс${invNo ? ' #' + invNo : ''}?`)) return;
+
+  // 1) удалить PDF из Storage (если он есть)
+  const fileName = item?.name || (invNo != null ? `invoice_${invNo}.pdf` : null);
+  if (fileName) {
+    const path = `${jobId}/${fileName}`;
+    try {
+      const { error } = await invStorage().remove([path]);
+      if (error) {
+        // пробуем через Edge-функцию с сервисными правами (у тебя уже есть admin-delete-photo)
+        try {
+          await callEdge('admin-delete-photo', { bucket: INVOICES_BUCKET, path });
+        } catch (e) {
+          console.warn('Storage delete failed', error, e);
+        }
+      }
+    } catch (e) {
+      console.warn('Storage delete exception', e);
+    }
+  }
+
+  // 2) удалить запись(и) из таблицы invoices по job_id + invoice_no
+  if (invNo != null) {
+    try {
+      const { error: dbErr } = await supabase
+        .from('invoices')
+        .delete()
+        .eq('job_id', jobId)
+        .eq('invoice_no', invNo);
+      if (dbErr) console.warn('DB delete invoice failed:', dbErr);
+    } catch (e) {
+      console.warn('DB delete exception:', e);
+    }
+  }
+
+  // 3) обновить список локально (без полной перезагрузки можно так)
+  setInvoices((prev) =>
+    prev.filter(
+      (it) =>
+        String(it.invoice_no || '') !== String(invNoStr || '') &&
+        it.name !== fileName
+    )
+  );
+
+  // или — надёжно перечитать из источников:
+  await loadInvoices();
+};
 
   /* ---------- отображение ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
@@ -1240,3 +1281,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
