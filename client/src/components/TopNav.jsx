@@ -134,7 +134,7 @@ export default function TopNav() {
     // лёгкий поллинг (как резерв, если вдруг websocket отвалился и переподключился без событий)
     pollRef.current = setInterval(() => {
       if (document.visibilityState === 'visible') refreshUnreadFromServer();
-    }, 25000);
+    }, 5000);
 
     return () => {
       window.removeEventListener('focus', onFocus);
