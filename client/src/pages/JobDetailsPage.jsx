@@ -29,91 +29,54 @@ const INVOICES_BUCKET = 'invoices';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
-/* ---------- Вспомогательные: вызов Edge-функций ---------- */
+/* ---------- Edge helper ---------- */
 async function callEdge(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || '';
   const url = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/${path}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {})
   });
   const text = await res.text();
-  let json;
-  try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
-  if (!res.ok) {
-    const msg = json?.error || json?.message || `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
+  let json; try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
+  if (!res.ok) throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
   return json;
 }
 
 /* ---------- Справочники ---------- */
-const STATUS_OPTIONS = ['recall','диагностика','в работе','заказ деталей','ожидание деталей','к финишу','завершено','отменено'];
+const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено'];
 const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'check'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
+function makeFrontUrl(path) { const base = window.location.origin; const isHash = window.location.href.includes('/#/'); const clean = path.startsWith('/') ? path : `/${path}`; return isHash ? `${base}/#${clean}` : `${base}${clean}`; }
+const toLocal = (iso) => { if (!iso) return ''; const d = new Date(iso); if (Number.isNaN(d.getTime())) return ''; const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+const fromLocal = (v) => { if (!v) return null; const d = new Date(v); if (Number.isNaN(d.getTime())) return null; return d.toISOString(); };
+const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
+const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase() === 'recall' || v === 'ReCall') return 'recall'; if (v === 'выполнено') return 'завершено'; return v; };
 
-// корректный URL для HashRouter и BrowserRouter
-function makeFrontUrl(path) {
-  const base = window.location.origin;
-  const isHash = window.location.href.includes('/#/');
-  const clean = path.startsWith('/') ? path : `/${path}`;
-  return isHash ? `${base}/#${clean}` : `${base}${clean}`;
-}
-
-// datetime-local
-const toLocal = (iso) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-const fromLocal = (v) => {
-  if (!v) return null;
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-};
-
-const normalizeId = (v) => {
-  if (v === '' || v == null) return null;
-  const s = String(v);
-  return /^\d+$/.test(s) ? Number(s) : s;
-};
-const normalizeStatusForDb = (s) => {
-  if (!s) return null;
-  const v = String(s).trim();
-  if (v.toLowerCase() === 'recall' || v === 'ReCall') return 'recall';
-  if (v === 'выполнено') return 'завершено';
-  return v;
+/* Нормализация номера инвойса (оставляем цифры → число) */
+const normNo = (v) => {
+  if (v == null) return null;
+  const m = String(v).match(/\d+/);
+  return m ? Number(m[0]) : null;
 };
 
 /* ---------- Санитизация имён для Storage ---------- */
-const RU_MAP = {
-  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
-  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
-  х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
-};
+const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
 function slugifyFileName(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'bin';
   const stem = name.replace(/\.[^/.]+$/, '').toLowerCase();
-  const translit = stem
-    .split('')
-    .map((ch) => {
-      if (/[a-z0-9]/.test(ch)) return ch;
-      const m = RU_MAP[ch]; if (m) return m;
-      if (/[ \-_.]/.test(ch)) return '-';
-      return '-';
-    })
-    .join('')
-    .replace(/-+/g, '-')
-    .replace(/(^-|-$)/g, '');
+  const translit = stem.split('').map((ch) => {
+    if (/[a-z0-9]/.test(ch)) return ch;
+    const m = RU_MAP[ch]; if (m) return m;
+    if (/[ \-_.]/.test(ch)) return '-';
+    return '-';
+  }).join('').replace(/-+/g, '-').replace(/(^-|-$)/g, '');
   return `${translit || 'file'}.${ext}`;
 }
 function makeSafeStorageKey(jobId, originalName) {
@@ -122,28 +85,16 @@ function makeSafeStorageKey(jobId, originalName) {
   return `${jobId}/${stamp}_${safeName}`;
 }
 
-/* ---------- HEIC → JPEG (Web) ---------- */
-const isHeicLike = (file) =>
-  file && (
-    file.type === 'image/heic' ||
-    file.type === 'image/heif' ||
-    /\.heic$/i.test(file.name) ||
-    /\.heif$/i.test(file.name)
-  );
-
+/* ---------- HEIC → JPEG ---------- */
+const isHeicLike = (file) => file && (file.type === 'image/heic' || file.type === 'image/heif' || /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name));
 async function convertIfHeicWeb(file) {
   if (!isHeicLike(file)) return file;
-  let heic2any;
-  try {
-    const mod = await import('heic2any');
-    heic2any = mod.default || mod;
-  } catch (e) {
-    throw new Error('Пакет heic2any недоступен. Установите его в client/package.json');
-  }
+  let heic2any; try { const mod = await import('heic2any'); heic2any = mod.default || mod; } catch { throw new Error('Пакет heic2any недоступен. Установите его в client/package.json'); }
   const jpegBlob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
   const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
   return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: Date.now() });
 }
+
 /* ====================================================================== */
 
 export default function JobDetailsPage() {
@@ -178,7 +129,7 @@ export default function JobDetailsPage() {
   const [commentsLoading, setCommentsLoading] = useState(true);
 
   // Инвойсы
-  const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,path,db_id?}
+  const [invoices, setInvoices] = useState([]); // {source, name, url, updated_at, no:number, hasFile, db_id?}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
 
   /* ---------- загрузка ---------- */
@@ -192,66 +143,22 @@ export default function JobDetailsPage() {
         .in('role', ['technician', 'tech'])
         .eq('is_active', true)
         .order('name', { ascending: true });
+      if (techErr) setTechs([]); else setTechs(techData || []);
 
-      if (techErr) {
-        console.error('load techs', techErr);
-        setTechs([]);
-      } else {
-        setTechs(techData || []);
-      }
-
-      const { data: j, error: e1 } = await supabase
-        .from('jobs')
-        .select('*')
-        .eq('id', jobId)
-        .maybeSingle();
-      if (e1 || !j) {
-        alert('Заявка не найдена');
-        navigate('/jobs');
-        return;
-      }
+      const { data: j, error: e1 } = await supabase.from('jobs').select('*').eq('id', jobId).maybeSingle();
+      if (e1 || !j) { alert('Заявка не найдена'); navigate('/jobs'); return; }
       setJob(j);
 
       // клиент
       if (j.client_id) {
-        const { data: c } = await supabase
-          .from('clients')
-          .select('id, full_name, phone, email, address')
-          .eq('id', j.client_id)
-          .maybeSingle();
-        if (c) {
-          setClient({
-            id: c.id,
-            full_name: c.full_name || '',
-            phone: c.phone || '',
-            email: c.email || '',
-            address: c.address || '',
-          });
-        } else {
-          setClient({
-            id: null,
-            full_name: j.client_name || j.full_name || '',
-            phone: j.client_phone || j.phone || '',
-            email: j.client_email || j.email || '',
-            address: j.client_address || j.address || '',
-          });
-        }
+        const { data: c } = await supabase.from('clients').select('id, full_name, phone, email, address').eq('id', j.client_id).maybeSingle();
+        if (c) setClient({ id: c.id, full_name: c.full_name || '', phone: c.phone || '', email: c.email || '', address: c.address || '' });
+        else setClient({ id: null, full_name: j.client_name || j.full_name || '', phone: j.client_phone || j.phone || '', email: j.client_email || j.email || '', address: j.client_address || j.address || '' });
       } else {
-        setClient({
-          id: null,
-          full_name: j.client_name || j.full_name || '',
-          phone: j.client_phone || j.phone || '',
-          email: j.client_email || j.email || '',
-          address: j.client_address || j.address || '',
-        });
+        setClient({ id: null, full_name: j.client_name || j.full_name || '', phone: j.client_phone || j.phone || '', email: j.client_email || j.email || '', address: j.client_address || j.address || '' });
       }
 
-      // материалы
-      const { data: m } = await supabase
-        .from('materials')
-        .select('*')
-        .eq('job_id', jobId)
-        .order('id', { ascending: true });
+      const { data: m } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
       setMaterials(m || []);
 
       await loadPhotos();
@@ -265,20 +172,9 @@ export default function JobDetailsPage() {
 
   /* ---------- загрузка фото ---------- */
   const loadPhotos = async () => {
-    const { data, error } = await storage().list(`${jobId}`, {
-      limit: 200,
-      sortBy: { column: 'name', order: 'asc' },
-    });
-    if (error) {
-      console.error(error);
-      setPhotos([]);
-      return;
-    }
-    const mapped = (data || []).map((o) => {
-      const full = `${jobId}/${o.name}`;
-      const { data: pub } = storage().getPublicUrl(full);
-      return { name: o.name, url: pub.publicUrl };
-    });
+    const { data, error } = await storage().list(`${jobId}`, { limit: 200, sortBy: { column: 'name', order: 'asc' } });
+    if (error) { console.error(error); setPhotos([]); return; }
+    const mapped = (data || []).map((o) => { const full = `${jobId}/${o.name}`; const { data: pub } = storage().getPublicUrl(full); return { name: o.name, url: pub.publicUrl }; });
     setPhotos(mapped);
     setChecked({});
   };
@@ -286,43 +182,22 @@ export default function JobDetailsPage() {
   /* ---------- Комментарии ---------- */
   const loadComments = async () => {
     setCommentsLoading(true);
-
     const { data, error } = await supabase
       .from('comments')
       .select('id, job_id, text, image_url, author_user_id, created_at')
       .eq('job_id', jobId)
       .order('created_at', { ascending: true });
-
-    if (error) {
-      console.error('loadComments', error);
-      setComments([]);
-      setCommentsLoading(false);
-      return;
-    }
+    if (error) { console.error('loadComments', error); setComments([]); setCommentsLoading(false); return; }
 
     const list = data || [];
     const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
-
     const nameByUserId = {};
-    if (ids.length) {
-      const { data: techPeople } = await supabase
-        .from('technicians')
-        .select('auth_user_id, name')
-        .in('auth_user_id', ids);
-      (techPeople || []).forEach((t) => {
-        if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
-      });
 
-      const { data: profs } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', ids);
-      (profs || []).forEach((p) => {
-        if (!p?.id) return;
-        if (!nameByUserId[p.id] && p.full_name && p.full_name.trim()) {
-          nameByUserId[p.id] = p.full_name.trim();
-        }
-      });
+    if (ids.length) {
+      const { data: techPeople } = await supabase.from('technicians').select('auth_user_id, name').in('auth_user_id', ids);
+      (techPeople || []).forEach((t) => { if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name; });
+      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
+      (profs || []).forEach((p) => { if (!p?.id) return; if (!nameByUserId[p.id] && p.full_name && p.full_name.trim()) nameByUserId[p.id] = p.full_name.trim(); });
     }
 
     setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
@@ -330,25 +205,14 @@ export default function JobDetailsPage() {
   };
 
   const addComment = async () => {
-    const text = commentText.trim();
-    if (!text) return;
-
+    const text = commentText.trim(); if (!text) return;
     const payload = { job_id: jobId, text, author_user_id: user?.id ?? null };
     const { data, error } = await supabase.from('comments').insert(payload).select().single();
-
-    if (error) {
-      console.error('addComment', error);
-      alert('Не удалось сохранить комментарий');
-      return;
-    }
+    if (error) { console.error('addComment', error); alert('Не удалось сохранить комментарий'); return; }
 
     let authorName = null;
     if (user?.id) {
-      const { data: t } = await supabase
-        .from('technicians')
-        .select('name')
-        .eq('auth_user_id', user.id)
-        .maybeSingle();
+      const { data: t } = await supabase.from('technicians').select('name').eq('auth_user_id', user.id).maybeSingle();
       if (t?.name) authorName = t.name;
     }
     if (!authorName) authorName = profile?.full_name || user?.email || null;
@@ -358,14 +222,7 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- редактирование заявки ---------- */
-  const setField = (k, v) => {
-    setJob((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, [k]: v };
-      setDirty(true);
-      return next;
-    });
-  };
+  const setField = (k, v) => { setJob((prev) => { if (!prev) return prev; const next = { ...prev, [k]: v }; setDirty(true); return next; }); };
 
   const saveJob = async () => {
     const payload = {
@@ -379,48 +236,26 @@ export default function JobDetailsPage() {
       status: normalizeStatusForDb(job.status),
       job_number: stringOrNull(job.job_number),
     };
-    if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
-      payload.tech_comment = job.tech_comment || null;
-    }
+    if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) payload.tech_comment = job.tech_comment || null;
 
-    try {
-      const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
-      if (error) throw error;
-      setDirty(false);
-      alert('Сохранено');
-    } catch (e) {
-      console.error('[saveJob] update error:', e);
-      console.error('[saveJob] payload:', payload);
-      alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
-    }
+    try { const { error } = await supabase.from('jobs').update(payload).eq('id', jobId); if (error) throw error; setDirty(false); alert('Сохранено'); }
+    catch (e) { console.error('[saveJob] update error:', e, payload); alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`); }
   };
 
   /* ---------- редактирование клиента ---------- */
-  const setClientField = (k, v) => {
-    setClient((p) => ({ ...p, [k]: v }));
-    setClientDirty(true);
-  };
+  const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
   const saveClient = async () => {
     if (client.id || job?.client_id) {
       const cid = client.id || job.client_id;
-      const { error } = await supabase
-        .from('clients')
-        .update({
-          full_name: client.full_name || '',
-          phone: client.phone || '',
-          email: client.email || '',
-          address: client.address || '',
-        })
-        .eq('id', cid);
-      if (error) {
-        alert('Не удалось сохранить клиента');
-        console.error(error);
-        return;
-      }
-      setClientDirty(false);
-      alert('Клиент сохранён');
-      return;
+      const { error } = await supabase.from('clients').update({
+        full_name: client.full_name || '',
+        phone: client.phone || '',
+        email: client.email || '',
+        address: client.address || '',
+      }).eq('id', cid);
+      if (error) { alert('Не удалось сохранить клиента'); console.error(error); return; }
+      setClientDirty(false); alert('Клиент сохранён'); return;
     }
 
     const patch = {};
@@ -431,244 +266,134 @@ export default function JobDetailsPage() {
 
     if (Object.keys(patch).length) {
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
-      if (error) {
-        alert('Не удалось сохранить клиента в заявку');
-        console.error(error);
-        return;
-      }
-      setClientDirty(false);
-      alert('Клиент сохранён');
+      if (error) { alert('Не удалось сохранить клиента в заявку'); console.error(error); return; }
+      setClientDirty(false); alert('Клиент сохранён');
     } else {
       alert('Нет client_id и колонок клиента в jobs — нечего сохранять.');
     }
   };
 
   /* ---------- материалы ---------- */
-  const addMat = () => {
-    setMaterials((p) => [
-      ...p,
-      { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' },
-    ]);
-  };
-  const chMat = (idx, field, val) => {
-    setMaterials((p) => {
-      const n = [...p]; n[idx] = { ...n[idx], [field]: val }; return n;
-    });
-  };
-  const delMat = async (m) => {
-    setMaterials((p) => p.filter((x) => x !== m));
-    if (!String(m.id).startsWith('tmp-')) {
-      const { error } = await supabase.from('materials').delete().eq('id', m.id);
-      if (error) console.error('delete material', error);
-    }
-  };
+  const addMat = () => setMaterials((p) => [...p, { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' }]);
+  const chMat = (idx, field, val) => setMaterials((p) => { const n = [...p]; n[idx] = { ...n[idx], [field]: val }; return n; });
+  const delMat = async (m) => { setMaterials((p) => p.filter((x) => x !== m)); if (!String(m.id).startsWith('tmp-')) { const { error } = await supabase.from('materials').delete().eq('id', m.id); if (error) console.error('delete material', error); } };
   const saveMats = async () => {
     const news = materials.filter((m) => String(m.id).startsWith('tmp-'));
     const olds = materials.filter((m) => !String(m.id).startsWith('tmp-'));
 
     if (news.length) {
-      const payload = news.map((m) => ({
-        job_id: jobId,
-        name: m.name || '',
-        price: m.price === '' || m.price == null ? null : Number(m.price),
-        quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity),
-        supplier: m.supplier || null,
-      }));
+      const payload = news.map((m) => ({ job_id: jobId, name: m.name || '', price: m.price === '' || m.price == null ? null : Number(m.price), quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity), supplier: m.supplier || null }));
       const { error } = await supabase.from('materials').insert(payload);
-      if (error) {
-        console.error('insert materials', error);
-        alert(`Не удалось сохранить новые материалы: ${error.message || 'ошибка'}`);
-        return;
-      }
+      if (error) { console.error('insert materials', error); alert(`Не удалось сохранить новые материалы: ${error.message || 'ошибка'}`); return; }
     }
 
     for (const m of olds) {
-      const patch = {
-        name: m.name || '',
-        price: m.price === '' || m.price == null ? null : Number(m.price),
-        quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity),
-        supplier: m.supplier || null,
-      };
+      const patch = { name: m.name || '', price: m.price === '' || m.price == null ? null : Number(m.price), quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity), supplier: m.supplier || null };
       const { error } = await supabase.from('materials').update(patch).eq('id', m.id);
-      if (error) {
-        console.error('update material', error);
-        alert(`Не удалось сохранить материал: ${error.message || 'ошибка'}`);
-        return;
-      }
+      if (error) { console.error('update material', error); alert(`Не удалось сохранить материал: ${error.message || 'ошибка'}`); return; }
     }
 
-    const { data: fresh, error: reloadErr } = await supabase
-      .from('materials')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('id', { ascending: true });
-
-    if (reloadErr) {
-      console.error(reloadErr);
-    } else {
-      setMaterials(fresh || []);
-    }
+    const { data: fresh, error: reloadErr } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
+    if (!reloadErr) setMaterials(fresh || []); else console.error(reloadErr);
     alert('Материалы сохранены');
   };
 
   /* ---------- файлы ---------- */
   const onPick = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
+    const files = Array.from(e.target.files || []); if (!files.length) return;
     setUploadBusy(true);
-
     try {
       for (const original of files) {
-        const allowed =
-          /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
-          /pdf$/i.test(original.type) ||
-          /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
+        const allowed = /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) || /pdf$/i.test(original.type) || /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
+        if (!allowed) { alert(`Формат не поддерживается: ${original.name}`); continue; }
 
-        if (!allowed) {
-          alert(`Формат не поддерживается: ${original.name}`);
-          continue;
-        }
-
-        // HEIC/HEIF → JPEG (если нужно)
         let file;
-        try {
-          file = await convertIfHeicWeb(original); // вернёт original, если это не HEIC
-        } catch (convErr) {
-          console.error('HEIC convert error:', convErr);
-          if (isHeicLike(original)) {
-            alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен. Проверьте, что heic2any установлен.');
-            continue;
-          }
-          file = original;
-        }
+        try { file = await convertIfHeicWeb(original); } catch (convErr) { console.error('HEIC convert error:', convErr); if (isHeicLike(original)) { alert('Этот файл в формате HEIC/HEIF. Конвертация не сработала — файл не загружен.'); continue; } file = original; }
 
         const key = makeSafeStorageKey(jobId, file.name);
-
-        try {
-          const { error } = await storage().upload(key, file, {
-            cacheControl: '3600',
-            upsert: false,
-            contentType: file.type || 'application/octet-stream',
-          });
-          if (error) throw error;
-        } catch (upErr) {
-          console.error('upload error:', upErr, key);
-          alert(`Не удалось загрузить файл: ${file.name}`);
-        }
+        try { const { error } = await storage().upload(key, file, { cacheControl: '3600', upsert: false, contentType: file.type || 'application/octet-stream' }); if (error) throw error; }
+        catch (upErr) { console.error('upload error:', upErr, key); alert(`Не удалось загрузить файл: ${file.name}`); }
       }
     } finally {
-      await loadPhotos();
-      setUploadBusy(false);
-      if (fileRef.current) fileRef.current.value = '';
+      await loadPhotos(); setUploadBusy(false); if (fileRef.current) fileRef.current.value = '';
     }
   };
 
-  // Удаление файла через Edge-функцию с правами сервера
   const delPhoto = async (name) => {
     if (!window.confirm('Удалить файл?')) return;
-    try {
-      await callEdge('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
-      await loadPhotos();
-    } catch (e) {
+    try { await callEdge('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` }); await loadPhotos(); }
+    catch (e) {
       console.error('admin-delete-photo failed, fallback to client delete', e);
       const { error } = await storage().remove([`${jobId}/${name}`]);
-      if (error) {
-        alert(`Не удалось удалить файл: ${e.message || error.message || 'ошибка'}`);
-        return;
-      }
+      if (error) { alert(`Не удалось удалить файл: ${e.message || error.message || 'ошибка'}`); return; }
       await loadPhotos();
     }
   };
 
-  const toggleAllPhotos = (checkedAll) => {
-    if (checkedAll) {
-      const next = {}; photos.forEach((p) => { next[p.name] = true; }); setChecked(next);
-    } else { setChecked({}); }
-  };
+  const toggleAllPhotos = (checkedAll) => { if (checkedAll) { const next = {}; photos.forEach((p) => { next[p.name] = true; }); setChecked(next); } else setChecked({}); };
   const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
 
   const downloadOne = async (name) => {
     const { data, error } = await storage().download(`${jobId}/${name}`);
-    if (error || !data) {
-      console.error('downloadOne', error);
-      alert('Не удалось скачать файл');
-      return;
-    }
-    const url = URL.createObjectURL(data);
-    const a = document.createElement('a');
-    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    if (error || !data) { console.error('downloadOne', error); alert('Не удалось скачать файл'); return; }
+    const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
-  const downloadSelected = async () => {
-    const names = photos.filter((p) => checked[p.name]).map((p) => p.name);
-    if (!names.length) return;
-    for (const n of names) await downloadOne(n);
-  };
+  const downloadSelected = async () => { const names = photos.filter((p) => checked[p.name]).map((p) => p.name); if (!names.length) return; for (const n of names) await downloadOne(n); };
 
   /* ---------- инвойсы ---------- */
   const getInvoiceNo = (item) => {
     if (!item) return null;
-    if (item.invoice_no != null && item.invoice_no !== '') {
-      const n = Number(item.invoice_no);
-      return Number.isFinite(n) ? n : null;
-    }
-    const m = /invoice_(\d+)\.pdf$/i.exec(item?.name || '');
-    return m ? Number(m[1]) : null;
+    if (typeof item.no === 'number') return item.no;
+    if (item.invoice_no != null) return normNo(item.invoice_no);
+    if (item.name) return normNo(item.name);
+    return null;
   };
   const getInvoiceFileName = (item) => {
-    const n = getInvoiceNo(item);
     if (item?.name) return item.name;
-    return n != null ? `invoice_${n}.pdf` : null;
+    const no = getInvoiceNo(item);
+    return no != null ? `invoice_${no}.pdf` : null;
   };
 
   const loadInvoices = async () => {
     setInvoicesLoading(true);
     try {
       const [stRes, dbRes] = await Promise.all([
-        invStorage().list(`${jobId}`, {
-          limit: 200,
-          sortBy: { column: 'updated_at', order: 'desc' },
-        }),
-        supabase
-          .from('invoices')
-          .select('id, invoice_no, created_at')
-          .eq('job_id', jobId)
-          .order('created_at', { ascending: false }),
+        invStorage().list(`${jobId}`, { limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
+        supabase.from('invoices').select('id, invoice_no, created_at').eq('job_id', jobId).order('created_at', { ascending: false }),
       ]);
 
+      // STORAGE
       const stData = stRes?.data || [];
       const stor = stData
         .filter((o) => /\.pdf$/i.test(o.name))
         .map((o) => {
           const path = `${jobId}/${o.name}`;
           const { data: pub } = invStorage().getPublicUrl(path);
-          const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
           return {
             source: 'storage',
             name: o.name,
-            path, // удобно для логов
             url: pub?.publicUrl || null,
             updated_at: o.updated_at || o.created_at || null,
-            invoice_no: m ? String(m[1]) : null,
+            no: normNo(o.name),
             hasFile: true,
           };
         });
 
+      // DB
       const rows = dbRes?.data || [];
       const db = rows.map((r) => ({
         source: 'db',
-        name: `invoice_${r.invoice_no}.pdf`,
+        name: `invoice_${normNo(r.invoice_no)}.pdf`,
         url: null,
         updated_at: r.created_at,
-        invoice_no: String(r.invoice_no),
+        no: normNo(r.invoice_no),
         db_id: r.id,
-        hasFile: stor.some((s) => s.invoice_no === String(r.invoice_no)),
+        hasFile: stor.some((s) => s.no === normNo(r.invoice_no)),
       }));
 
+      // merge по номеру
       const merged = [...stor];
-      db.forEach((d) => {
-        if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d);
-      });
+      db.forEach((d) => { if (!merged.some((x) => x.no === d.no)) merged.push(d); });
 
       merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
       setInvoices(merged);
@@ -683,14 +408,12 @@ export default function JobDetailsPage() {
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) {
       window.open(item.url, '_blank', 'noopener,noreferrer');
-    } else if (item?.invoice_no) {
-      window.open(
-        makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`),
-        '_blank',
-        'noopener,noreferrer'
-      );
     } else {
-      window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
+      const no = getInvoiceNo(item);
+      const url = no != null
+        ? makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(no)}`)
+        : makeFrontUrl(`/invoice/${jobId}`);
+      window.open(url, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -698,40 +421,28 @@ export default function JobDetailsPage() {
     const fileName = getInvoiceFileName(item);
     if (!fileName) return;
     const { data, error } = await invStorage().download(`${jobId}/${fileName}`);
-    if (error || !data) {
-      console.error('downloadInvoice', error);
-      alert('Не удалось скачать инвойс');
-      return;
-    }
-    const url = URL.createObjectURL(data);
-    const a = document.createElement('a');
-    a.href = url; a.download = fileName; document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    if (error || !data) { console.error('downloadInvoice', error); alert('Не удалось скачать инвойс'); return; }
+    const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = fileName; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
 
   const deleteInvoice = async (item) => {
-    const invNo = getInvoiceNo(item);
+    const no = getInvoiceNo(item);
     const fileName = getInvoiceFileName(item);
     const path = fileName ? `${jobId}/${fileName}` : null;
 
-    if (!window.confirm(`Удалить инвойс${invNo ? ` #${invNo}` : ''}?`)) return;
+    if (!window.confirm(`Удалить инвойс${no != null ? ` #${no}` : ''}?`)) return;
 
-    console.log('[deleteInvoice] start', { invNo, fileName, path, raw: item });
+    console.log('[deleteInvoice] start', { no, fileName, path, raw: item });
 
-    // 1) удалить файл из Storage (если знаем путь)
+    // 1) удалить файл из Storage
     let storageOk = true;
     if (path) {
       try {
         const { error } = await invStorage().remove([path]);
         if (error) {
           console.warn('[deleteInvoice] storage.remove error:', error);
-          try {
-            await callEdge('admin-delete-photo', { bucket: INVOICES_BUCKET, path });
-            console.log('[deleteInvoice] edge remove OK');
-          } catch (ee) {
-            console.warn('[deleteInvoice] edge remove failed:', ee);
-            storageOk = false;
-          }
+          try { await callEdge('admin-delete-photo', { bucket: INVOICES_BUCKET, path }); console.log('[deleteInvoice] edge remove OK'); }
+          catch (ee) { console.warn('[deleteInvoice] edge remove failed:', ee); storageOk = false; }
         } else {
           console.log('[deleteInvoice] storage.remove OK');
         }
@@ -741,35 +452,37 @@ export default function JobDetailsPage() {
       }
     }
 
-    // 2) удалить запись из БД по job_id + invoice_no
+    // 2) удалить все строки в БД с тем же номером для этого job_id
     let dbOk = true;
-    if (invNo != null) {
+    if (no != null) {
       try {
-        const { error: dbErr } = await supabase
+        const { data: rows, error: selErr } = await supabase
           .from('invoices')
-          .delete()
-          .eq('job_id', jobId)
-          .eq('invoice_no', invNo);
-        if (dbErr) {
-          console.warn('[deleteInvoice] db delete error:', dbErr);
-          dbOk = false;
-        } else {
+          .select('id, invoice_no')
+          .eq('job_id', jobId);
+        if (selErr) throw selErr;
+
+        const ids = (rows || [])
+          .filter((r) => normNo(r.invoice_no) === no)
+          .map((r) => r.id);
+
+        console.log('[deleteInvoice] rows to delete by id:', ids);
+
+        if (ids.length) {
+          const { error: dbErr } = await supabase.from('invoices').delete().in('id', ids);
+          if (dbErr) throw dbErr;
           console.log('[deleteInvoice] db delete OK');
+        } else {
+          console.log('[deleteInvoice] db: nothing to delete (no matching ids)');
         }
       } catch (e) {
-        console.warn('[deleteInvoice] db delete exception:', e);
+        console.warn('[deleteInvoice] db delete failed:', e);
         dbOk = false;
       }
     }
 
-    // 3) оптимистично убрать из списка и перечитать
-    setInvoices((prev) =>
-      prev.filter((it) => {
-        const n = getInvoiceNo(it);
-        const fn = getInvoiceFileName(it);
-        return n !== invNo && fn !== fileName;
-      })
-    );
+    // 3) обновить список
+    setInvoices((prev) => prev.filter((it) => getInvoiceNo(it) !== no && getInvoiceFileName(it) !== fileName));
     await loadInvoices();
 
     if (!storageOk || !dbOk) {
@@ -782,7 +495,6 @@ export default function JobDetailsPage() {
     }
   };
 
-  // создать новый инвойс
   const createInvoice = () => {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
@@ -818,38 +530,22 @@ export default function JobDetailsPage() {
                 <select
                   style={SELECT}
                   value={job.technician_id == null ? '' : String(job.technician_id)}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setField('technician_id', v === '' ? null : normalizeId(v));
-                  }}
+                  onChange={(e) => { const v = e.target.value; setField('technician_id', v === '' ? null : normalizeId(v)); }}
                 >
                   <option value="">—</option>
-                  {techs.map((t) => (
-                    <option key={t.id} value={String(t.id)}>{t.name}</option>
-                  ))}
+                  {techs.map((t) => (<option key={t.id} value={String(t.id)}>{t.name}</option>))}
                 </select>
               </div>
 
               <div style={ROW}>
                 <div>Дата визита</div>
-                <input
-                  style={INPUT}
-                  type="datetime-local"
-                  value={toLocal(job.appointment_time)}
-                  onChange={(e) => setField('appointment_time', fromLocal(e.target.value))}
-                />
+                <input style={INPUT} type="datetime-local" value={toLocal(job.appointment_time)} onChange={(e) => setField('appointment_time', fromLocal(e.target.value))} />
               </div>
 
               <div style={ROW}>
                 <div>Тип системы</div>
-                <select
-                  style={SELECT}
-                  value={job.system_type || ''}
-                  onChange={(e) => setField('system_type', e.target.value)}
-                >
-                  {SYSTEM_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
+                <select style={SELECT} value={job.system_type || ''} onChange={(e) => setField('system_type', e.target.value)}>
+                  {SYSTEM_OPTIONS.map((s) => (<option key={s} value={s}>{s}</option>))}
                 </select>
               </div>
 
@@ -860,45 +556,25 @@ export default function JobDetailsPage() {
 
               <div style={ROW}>
                 <div>SCF ($)</div>
-                <input
-                  style={INPUT}
-                  type="number"
-                  value={job.scf ?? ''}
-                  onChange={(e) => setField('scf', toNum(e.target.value))}
-                />
+                <input style={INPUT} type="number" value={job.scf ?? ''} onChange={(e) => setField('scf', toNum(e.target.value))} />
               </div>
 
               <div style={ROW}>
                 <div>Стоимость работы ($)</div>
-                <input
-                  style={INPUT}
-                  type="number"
-                  value={job.labor_price ?? ''}
-                  onChange={(e) => setField('labor_price', toNum(e.target.value))}
-                />
+                <input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e) => setField('labor_price', toNum(e.target.value))} />
               </div>
 
               <div style={ROW}>
                 <div>Оплата работы</div>
                 <div>
                   <select
-                    style={{
-                      ...SELECT,
-                      border: `1px solid ${isUnpaid ? '#ef4444' : '#e5e7eb'}`,
-                      background: isUnpaid ? '#fef2f2' : '#fff',
-                    }}
+                    style={{ ...SELECT, border: `1px solid ${isUnpaid ? '#ef4444' : '#e5e7eb'}`, background: isUnpaid ? '#fef2f2' : '#fff' }}
                     value={job.payment_method ?? '—'}
                     onChange={(e) => setField('payment_method', e.target.value === '—' ? null : e.target.value)}
                   >
-                    {PAYMENT_OPTIONS.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
+                    {PAYMENT_OPTIONS.map((p) => (<option key={p} value={p}>{p}</option>))}
                   </select>
-                  {isUnpaid && (
-                    <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>
-                      Не оплачено — выбери способ оплаты
-                    </div>
-                  )}
+                  {isUnpaid && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Не оплачено — выбери способ оплаты</div>}
                 </div>
               </div>
 
@@ -906,11 +582,7 @@ export default function JobDetailsPage() {
                 <div>Статус</div>
                 <div>
                   <select
-                    style={{
-                      ...SELECT,
-                      border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`,
-                      background: isRecall ? '#fef2f2' : '#fff',
-                    }}
+                    style={{ ...SELECT, border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`, background: isRecall ? '#fef2f2' : '#fff' }}
                     value={job.status || STATUS_OPTIONS[0]}
                     onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
                   >
@@ -970,17 +642,8 @@ export default function JobDetailsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Инвойсы (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
-                  {invoicesLoading ? '...' : 'Обновить'}
-                </button>
-                <button
-                  type="button"
-                  style={PRIMARY}
-                  onClick={createInvoice}
-                  title="Создать новый инвойс для этой заявки"
-                >
-                  + Создать инвойс
-                </button>
+                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>{invoicesLoading ? '...' : 'Обновить'}</button>
+                <button type="button" style={PRIMARY} onClick={createInvoice} title="Создать новый инвойс для этой заявки">+ Создать инвойс</button>
               </div>
             </div>
 
@@ -990,46 +653,20 @@ export default function JobDetailsPage() {
               <div style={{ display: 'grid', gap: 8 }}>
                 {invoices.map((inv) => (
                   <div
-                    key={`${inv.source}-${inv.invoice_no || inv.name}`}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      border: '1px solid #eef2f7',
-                      borderRadius: 8,
-                    }}
+                    key={`${inv.source}-${inv.no ?? inv.name}`}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid #eef2f7', borderRadius: 8 }}
                   >
                     <div>
                       <div style={{ fontWeight: 600 }}>
-                        {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                        {!inv.hasFile && (
-                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>
-                            (PDF ещё не в хранилище)
-                          </span>
-                        )}
+                        {inv.no != null ? `Invoice #${inv.no}` : inv.name}
+                        {!inv.hasFile && <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF ещё не в хранилище)</span>}
                       </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>
-                        {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
-                      </div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" style={BTN} onClick={() => openInvoice(inv)}>Открыть PDF</button>
-                      <button
-                        type="button"
-                        style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
-                        onClick={() => inv.hasFile && downloadInvoice(inv)}
-                        disabled={!inv.hasFile}
-                      >
-                        Скачать
-                      </button>
-                      <button
-                        type="button"
-                        style={DANGER}
-                        onClick={() => deleteInvoice(inv)}
-                      >
-                        Удалить
-                      </button>
+                      <button type="button" style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && downloadInvoice(inv)} disabled={!inv.hasFile}>Скачать</button>
+                      <button type="button" style={DANGER} onClick={() => deleteInvoice(inv)}>Удалить</button>
                     </div>
                   </div>
                 ))}
@@ -1056,26 +693,11 @@ export default function JobDetailsPage() {
             <tbody>
               {materials.map((m, i) => (
                 <tr key={m.id}>
-                  <Td>
-                    <input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
-                  </Td>
-                  <Td>
-                    <input style={INPUT} type="number" value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} />
-                  </Td>
-                  <Td>
-                    <input
-                      style={INPUT}
-                      type="number"
-                      value={m.quantity ?? 1}
-                      onChange={(e) => chMat(i, 'quantity', e.target.value)}
-                    />
-                  </Td>
-                  <Td>
-                    <input style={INPUT} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} />
-                  </Td>
-                  <Td center>
-                    <button style={DANGER} onClick={() => delMat(m)}>🗑</button>
-                  </Td>
+                  <Td><input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} /></Td>
+                  <Td><input style={INPUT} type="number" value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} /></Td>
+                  <Td><input style={INPUT} type="number" value={m.quantity ?? 1} onChange={(e) => chMat(i, 'quantity', e.target.value)} /></Td>
+                  <Td><input style={INPUT} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} /></Td>
+                  <Td center><button style={DANGER} onClick={() => delMat(m)}>🗑</button></Td>
                 </tr>
               ))}
             </tbody>
@@ -1095,16 +717,7 @@ export default function JobDetailsPage() {
           <div style={MUTED}>Загрузка…</div>
         ) : (
           <>
-            <div
-              style={{
-                maxHeight: 260,
-                overflowY: 'auto',
-                border: '1px solid #e5e7eb',
-                borderRadius: 8,
-                padding: 10,
-                marginBottom: 8,
-              }}
-            >
+            <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, marginBottom: 8 }}>
               {comments.length === 0 ? (
                 <div style={MUTED}>Пока нет комментариев</div>
               ) : (
@@ -1122,13 +735,7 @@ export default function JobDetailsPage() {
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <textarea
-                rows={2}
-                style={{ ...TA, minHeight: 60 }}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="Написать комментарий…"
-              />
+              <textarea rows={2} style={{ ...TA, minHeight: 60 }} value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Написать комментарий…" />
               <button style={PRIMARY} onClick={addComment}>Отправить</button>
             </div>
           </>
@@ -1143,20 +750,12 @@ export default function JobDetailsPage() {
             <label style={{ userSelect: 'none', cursor: 'pointer' }}>
               <input type="checkbox" checked={allChecked} onChange={(e) => toggleAllPhotos(e.target.checked)} /> Выбрать всё
             </label>
-            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>
-              Скачать выбранные
-            </button>
+            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>Скачать выбранные</button>
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf"
-            onChange={onPick}
-          />
+          <input ref={fileRef} type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf" onChange={onPick} />
           {uploadBusy && <span style={MUTED}>Загрузка…</span>}
         </div>
 
@@ -1171,15 +770,9 @@ export default function JobDetailsPage() {
               </label>
 
               {/\.(pdf)$/i.test(p.name) ? (
-                <div style={{ height: 120, display: 'grid', placeItems: 'center', background: '#f1f5f9', borderRadius: 8, marginBottom: 6 }}>
-                  📄 PDF
-                </div>
+                <div style={{ height: 120, display: 'grid', placeItems: 'center', background: '#f1f5f9', borderRadius: 8, marginBottom: 6 }}>📄 PDF</div>
               ) : (
-                <img
-                  src={p.url}
-                  alt={p.name}
-                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }}
-                />
+                <img src={p.url} alt={p.name} style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }} />
               )}
 
               <div style={{ display: 'flex', gap: 6 }}>
@@ -1205,14 +798,7 @@ function Row({ label, value, onChange }) {
 }
 function Th({ children, center }) {
   return (
-    <th
-      style={{
-        textAlign: center ? 'center' : 'left',
-        borderBottom: '1px solid #e5e7eb',
-        background: '#f9fafb',
-        padding: 8,
-      }}
-    >
+    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 }}>
       {children}
     </th>
   );
