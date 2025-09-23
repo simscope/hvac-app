@@ -228,14 +228,15 @@ export default function InvoicePage() {
       } catch {}
 
       // Right column: Date + Balance Due + Bill To
-      const rightColX = pageW - marginX - 240;
+      const rightColW = 200;             // ← было 240. Меньше = правее.
+      const rightColX = pageW - marginX - rightColW;
       let rightY = 110;
       doc.setFont(undefined, 'bold'); doc.setTextColor(80);
       doc.text('Date:', rightColX, rightY); doc.setFont(undefined,'normal'); doc.setTextColor(0);
       doc.text(human(invoiceDate), rightColX + 40, rightY); rightY += 16;
 
       // Capsule
-      const pillW = 240, pillH = 40;
+      const pillW = 200, pillH = 40;     // ← держим вровень с колонкой
       doc.setDrawColor(229,231,235); doc.setFillColor(246,247,251);
       doc.roundedRect(pageW - marginX - pillW, rightY, pillW, pillH, 8, 8, 'FD');
       doc.setFont(undefined,'bold'); doc.setTextColor(70);
@@ -393,7 +394,7 @@ export default function InvoicePage() {
 
           <div />
 
-          <div style={{ textAlign: 'right' }}>
+          <div style={{ textAlign: 'right', justifySelf: 'end', width: 300 }}>
             <div style={S.invoiceTitle}>INVOICE</div>
             <div style={S.invoiceNo}># {invoiceNo || '—'}</div>
 
@@ -486,3 +487,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
