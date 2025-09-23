@@ -334,8 +334,8 @@ export default function InvoicePage() {
 
       // Bill To (справа) — плотные интервалы
       const billX = PAGE_W - MARGIN - PILL_W;
-      const GAP_AFTER_TITLE = 12;
-      const LINE = 10;
+      const GAP_AFTER_TITLE = 13;
+      const LINE = 11;
 
       doc.setFont(undefined, 'bold');
       doc.text('Bill To:', billX, rightY);
@@ -593,4 +593,5 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
