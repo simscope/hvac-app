@@ -1022,8 +1022,15 @@ export default function JobDetailsPage() {
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
                   {invoicesLoading ? '...' : 'Обновить'}
                 </button>
-                <button type="button" style={PRIMARY} onClick={createInvoice} title="Создать новый инвойс для этой заявки">
-                  + Создать инвойс
+                <button
+                   type="button"
+                   style={PRIMARY}
+                   onClick={() =>
+                    window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer')
+                   }
+                   title="Создать новый инвойс для этой заявки"
+                  >
+                   + Создать инвойс
                 </button>
               </div>
             </div>
@@ -1281,4 +1288,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
