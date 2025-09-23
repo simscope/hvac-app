@@ -285,22 +285,11 @@ export default function InvoicePage() {
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
         if (logo) {
-          doc.addImage(logo, 'PNG', marginX, 24, 90, 90);
+          doc.addImage(logo, 'PNG', marginX, 24, 120, 120);
           logoBottom = 24 + 90;
         }
       } catch {}
-      // Company under logo
-      let compTop = logoBottom + 8;
-      doc.setTextColor(0);
-      doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', marginX, compTop);
-      compTop += 14;
-      doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((t) => {
-        doc.text(t, marginX, compTop);
-        compTop += 12;
-      });
-
+    
       // 3) Справа — ДАТА (над капсулой), затем капсула Balance Due, ниже Bill To
       // Дата
       const rightColX = pageW - marginX - 240; // выравниваем по капсуле
@@ -325,6 +314,19 @@ export default function InvoicePage() {
       doc.setTextColor(0);
       doc.text(`$${N(total).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
       rightY += pillH + 18;
+      
+      // --- Company block LEFT aligned with Bill To ---
+      const alignY = rightY; // хотим ровно на уровне заголовка "Bill To:"
+      let compTop = Math.max(logoBottom + 8, alignY); // не даём налезть на логотип
+      doc.setTextColor(0);
+      doc.setFont(undefined, 'bold');
+      doc.text('Sim Scope Inc.', marginX, compTop);
+      compTop += 14;
+      doc.setFont(undefined, 'normal');
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((t) => {
+      doc.text(t, marginX, compTop);
+      compTop += 12;
+      });
 
       // Bill To (справа, напротив инфы о компании)
       doc.setFont(undefined, 'bold');
@@ -578,3 +580,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
