@@ -21,15 +21,15 @@ const MUTED = { color: '#6b7280' };
 const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' };
 const PRIMARY = { ...BTN, background: '#2563eb', color: '#fff', borderColor: '#2563eb' };
 const DANGER = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
-const GHOST = { ...BTN, background: '#f8fafc' };
+const GHOST  = { ...BTN, background: '#f8fafc' };
 
 /* ---------- Storage ---------- */
-const PHOTOS_BUCKET = 'job-photos';
+const PHOTOS_BUCKET   = 'job-photos';
 const INVOICES_BUCKET = 'invoices';
-const storage = () => supabase.storage.from(PHOTOS_BUCKET);
+const storage    = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
-/* ---------- Edge call ---------- */
+/* ---------- Edge helper ---------- */
 async function callEdge(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || '';
@@ -40,16 +40,15 @@ async function callEdge(path, body) {
     body: JSON.stringify(body ?? {})
   });
   const text = await res.text();
-  let json;
-  try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
+  let json; try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
   if (!res.ok) throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
   return json;
 }
 
 /* ---------- Справочники ---------- */
-const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено'];
+const STATUS_OPTIONS  = ['recall','диагностика','в работе','заказ деталей','ожидание деталей','к финишу','завершено','отменено'];
 const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'check'];
-const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
+const SYSTEM_OPTIONS  = ['HVAC', 'Appliance'];
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -62,71 +61,46 @@ function makeFrontUrl(path) {
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
 
+// datetime-local
 const toLocal = (iso) => {
   if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  const d = new Date(iso); if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
-const fromLocal = (v) => {
-  if (!v) return null;
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
-};
+const fromLocal = (v) => { if (!v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
 
-const normalizeId = (v) => {
-  if (v === '' || v == null) return null;
-  const s = String(v);
-  return /^\d+$/.test(s) ? Number(s) : s;
-};
-
-const normalizeStatusForDb = (s) => {
-  if (!s) return null;
-  const v = String(s).trim();
-  if (v.toLowerCase() === 'recall' || v === 'ReCall') return 'recall';
-  if (v === 'выполнено') return 'завершено';
-  return v;
-};
+const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
+const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
 
 /* ---------- Санитизация имён для Storage ---------- */
-const RU_MAP = {
-  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
-  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
-  х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
-};
+const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya' };
 function slugifyFileName(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'bin';
   const stem = name.replace(/\.[^/.]+$/, '').toLowerCase();
-  const translit = stem.split('').map((ch) => {
+  const translit = stem.split('').map((ch)=>{
     if (/[a-z0-9]/.test(ch)) return ch;
-    const m = RU_MAP[ch];
-    if (m) return m;
+    const m = RU_MAP[ch]; if (m) return m;
     if (/[ \-_.]/.test(ch)) return '-';
     return '-';
-  }).join('').replace(/-+/g, '-').replace(/(^-|-$)/g, '');
+  }).join('').replace(/-+/g,'-').replace(/(^-|-$)/g,'');
   return `${translit || 'file'}.${ext}`;
 }
 function makeSafeStorageKey(jobId, originalName) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
   const safeName = slugifyFileName(originalName);
   return `${jobId}/${stamp}_${safeName}`;
 }
 
-/* ---------- HEIC → JPEG (Web) ---------- */
-const isHeicLike = (file) =>
-  file && (file.type === 'image/heic' || file.type === 'image/heif' || /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name));
-
+/* ---------- HEIC → JPEG ---------- */
+const isHeicLike = (file) => file && (
+  file.type === 'image/heic' || file.type === 'image/heif' ||
+  /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name)
+);
 async function convertIfHeicWeb(file) {
   if (!isHeicLike(file)) return file;
-  let heic2any;
-  try {
-    const mod = await import('heic2any');
-    heic2any = mod.default || mod;
-  } catch (e) {
-    throw new Error('Пакет heic2any недоступен. Установите его в client/package.json');
-  }
+  let heic2any; try { const mod = await import('heic2any'); heic2any = mod.default || mod; } 
+  catch { throw new Error('heic2any не установлен'); }
   const jpegBlob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
   const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
   return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: Date.now() });
@@ -166,89 +140,38 @@ export default function JobDetailsPage() {
   const [commentsLoading, setCommentsLoading] = useState(true);
 
   // Инвойсы
-  const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,db_id}
+  const [invoices, setInvoices] = useState([]); // отображаемые
   const [invoicesLoading, setInvoicesLoading] = useState(true);
-
-  // Tombstones (чтобы скрывать «призраков» при eventual consistency)
-  const [deletedInvKeys, setDeletedInvKeys] = useState([]); // массив строк "no:23" / "name:invoice_23.pdf"
-  const addTombstone = (no, name) => {
-    const keys = [];
-    if (no != null) keys.push(`no:${Number(no)}`);
-    if (name) keys.push(`name:${name}`);
-    setDeletedInvKeys((prev) => Array.from(new Set([...prev, ...keys])));
-  };
+  const [deletingInvKey, setDeletingInvKey] = useState(null); // защита от двойного клика
 
   /* ---------- загрузка ---------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
 
+      // техи
       const { data: techData, error: techErr } = await supabase
-        .from('technicians')
-        .select('id,name,role,is_active')
-        .in('role', ['technician', 'tech'])
-        .eq('is_active', true)
+        .from('technicians').select('id,name,role,is_active')
+        .in('role', ['technician','tech']).eq('is_active', true)
         .order('name', { ascending: true });
+      if (techErr) { console.error('load techs', techErr); setTechs([]); } else { setTechs(techData || []); }
 
-      if (techErr) {
-        console.error('load techs', techErr);
-        setTechs([]);
-      } else {
-        setTechs(techData || []);
-      }
-
-      const { data: j, error: e1 } = await supabase
-        .from('jobs')
-        .select('*')
-        .eq('id', jobId)
-        .maybeSingle();
-      if (e1 || !j) {
-        alert('Заявка не найдена');
-        navigate('/jobs');
-        return;
-      }
+      // заявка
+      const { data: j, error: e1 } = await supabase.from('jobs').select('*').eq('id', jobId).maybeSingle();
+      if (e1 || !j) { alert('Заявка не найдена'); navigate('/jobs'); return; }
       setJob(j);
 
       // клиент
       if (j.client_id) {
-        const { data: c } = await supabase
-          .from('clients')
-          .select('id, full_name, phone, email, address')
-          .eq('id', j.client_id)
-          .maybeSingle();
-        if (c) {
-          setClient({
-            id: c.id,
-            full_name: c.full_name || '',
-            phone: c.phone || '',
-            email: c.email || '',
-            address: c.address || '',
-          });
-        } else {
-          setClient({
-            id: null,
-            full_name: j.client_name || j.full_name || '',
-            phone: j.client_phone || j.phone || '',
-            email: j.client_email || j.email || '',
-            address: j.client_address || j.address || '',
-          });
-        }
+        const { data: c } = await supabase.from('clients').select('id, full_name, phone, email, address').eq('id', j.client_id).maybeSingle();
+        if (c) setClient({ id: c.id, full_name: c.full_name || '', phone: c.phone || '', email: c.email || '', address: c.address || '' });
+        else    setClient({ id: null, full_name: j.client_name || j.full_name || '', phone: j.client_phone || j.phone || '', email: j.client_email || j.email || '', address: j.client_address || j.address || '' });
       } else {
-        setClient({
-          id: null,
-          full_name: j.client_name || j.full_name || '',
-          phone: j.client_phone || j.phone || '',
-          email: j.client_email || j.email || '',
-          address: j.client_address || j.address || '',
-        });
+        setClient({ id: null, full_name: j.client_name || j.full_name || '', phone: j.client_phone || j.phone || '', email: j.client_email || j.email || '', address: j.client_address || j.address || '' });
       }
 
       // материалы
-      const { data: m } = await supabase
-        .from('materials')
-        .select('*')
-        .eq('job_id', jobId)
-        .order('id', { ascending: true });
+      const { data: m } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
       setMaterials(m || []);
 
       await loadPhotos();
@@ -262,67 +185,37 @@ export default function JobDetailsPage() {
 
   /* ---------- загрузка фото ---------- */
   const loadPhotos = async () => {
-    const { data, error } = await storage().list(`${jobId}`, {
-      limit: 200,
-      sortBy: { column: 'name', order: 'asc' },
-    });
-    if (error) {
-      console.error(error);
-      setPhotos([]);
-      return;
-    }
+    const { data, error } = await storage().list(`${jobId}`, { limit: 200, sortBy: { column: 'name', order: 'asc' } });
+    if (error) { console.error(error); setPhotos([]); return; }
     const mapped = (data || []).map((o) => {
       const full = `${jobId}/${o.name}`;
       const { data: pub } = storage().getPublicUrl(full);
       return { name: o.name, url: pub.publicUrl };
     });
-    setPhotos(mapped);
-    setChecked({});
+    setPhotos(mapped); setChecked({});
   };
 
   /* ---------- Комментарии ---------- */
   const loadComments = async () => {
     setCommentsLoading(true);
-
     const { data, error } = await supabase
       .from('comments')
       .select('id, job_id, text, image_url, author_user_id, created_at')
       .eq('job_id', jobId)
       .order('created_at', { ascending: true });
 
-    if (error) {
-      console.error('loadComments', error);
-      setComments([]);
-      setCommentsLoading(false);
-      return;
-    }
+    if (error) { console.error('loadComments', error); setComments([]); setCommentsLoading(false); return; }
 
     const list = data || [];
-    const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
-
+    const ids  = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
     const nameByUserId = {};
 
     if (ids.length) {
-      const { data: techPeople } = await supabase
-        .from('technicians')
-        .select('auth_user_id, name')
-        .in('auth_user_id', ids);
+      const { data: techPeople } = await supabase.from('technicians').select('auth_user_id, name').in('auth_user_id', ids);
+      (techPeople || []).forEach((t) => { if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name; });
 
-      (techPeople || []).forEach((t) => {
-        if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
-      });
-
-      const { data: profs } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', ids);
-
-      (profs || []).forEach((p) => {
-        if (!p?.id) return;
-        if (!nameByUserId[p.id] && p.full_name && p.full_name.trim()) {
-          nameByUserId[p.id] = p.full_name.trim();
-        }
-      });
+      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
+      (profs || []).forEach((p) => { if (!p?.id) return; if (!nameByUserId[p.id] && p.full_name && p.full_name.trim()) nameByUserId[p.id] = p.full_name.trim(); });
     }
 
     setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
@@ -330,19 +223,11 @@ export default function JobDetailsPage() {
   };
 
   const addComment = async () => {
-    const text = commentText.trim();
-    if (!text) return;
-
+    const text = commentText.trim(); if (!text) return;
     const payload = { job_id: jobId, text, author_user_id: user?.id ?? null };
     const { data, error } = await supabase.from('comments').insert(payload).select().single();
+    if (error) { console.error('addComment', error); alert('Не удалось сохранить комментарий'); return; }
 
-    if (error) {
-      console.error('addComment', error);
-      alert('Не удалось сохранить комментарий');
-      return;
-    }
-
-    // имя автора
     let authorName = null;
     if (user?.id) {
       const { data: t } = await supabase.from('technicians').select('name').eq('auth_user_id', user.id).maybeSingle();
@@ -355,14 +240,7 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- редактирование заявки ---------- */
-  const setField = (k, v) => {
-    setJob((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, [k]: v };
-      setDirty(true);
-      return next;
-    });
-  };
+  const setField = (k, v) => setJob((prev) => { if (!prev) return prev; const next = { ...prev, [k]: v }; setDirty(true); return next; });
 
   const saveJob = async () => {
     const payload = {
@@ -376,9 +254,7 @@ export default function JobDetailsPage() {
       status: normalizeStatusForDb(job.status),
       job_number: stringOrNull(job.job_number),
     };
-    if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
-      payload.tech_comment = job.tech_comment || null;
-    }
+    if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) payload.tech_comment = job.tech_comment || null;
 
     try {
       const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
@@ -392,69 +268,38 @@ export default function JobDetailsPage() {
     }
   };
 
-  /* ---------- редактирование клиента ---------- */
-  const setClientField = (k, v) => {
-    setClient((p) => ({ ...p, [k]: v }));
-    setClientDirty(true);
-  };
+  /* ---------- клиент ---------- */
+  const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
   const saveClient = async () => {
     if (client.id || job?.client_id) {
       const cid = client.id || job.client_id;
-      const { error } = await supabase
-        .from('clients')
-        .update({
-          full_name: client.full_name || '',
-          phone: client.phone || '',
-          email: client.email || '',
-          address: client.address || '',
-        })
-        .eq('id', cid);
-      if (error) {
-        alert('Не удалось сохранить клиента');
-        console.error(error);
-        return;
-      }
-      setClientDirty(false);
-      alert('Клиент сохранён');
-      return;
+      const { error } = await supabase.from('clients').update({
+        full_name: client.full_name || '', phone: client.phone || '',
+        email: client.email || '', address: client.address || ''
+      }).eq('id', cid);
+      if (error) { alert('Не удалось сохранить клиента'); console.error(error); return; }
+      setClientDirty(false); alert('Клиент сохранён'); return;
     }
 
     const patch = {};
-    if ('client_name' in (job || {})) patch.client_name = client.full_name || '';
-    if ('client_phone' in (job || {})) patch.client_phone = client.phone || '';
-    if ('client_email' in (job || {})) patch.client_email = client.email || '';
+    if ('client_name'    in (job || {})) patch.client_name    = client.full_name || '';
+    if ('client_phone'   in (job || {})) patch.client_phone   = client.phone || '';
+    if ('client_email'   in (job || {})) patch.client_email   = client.email || '';
     if ('client_address' in (job || {})) patch.client_address = client.address || '';
 
     if (Object.keys(patch).length) {
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
-      if (error) {
-        alert('Не удалось сохранить клиента в заявку');
-        console.error(error);
-        return;
-      }
-      setClientDirty(false);
-      alert('Клиент сохранён');
+      if (error) { alert('Не удалось сохранить клиента в заявку'); console.error(error); return; }
+      setClientDirty(false); alert('Клиент сохранён');
     } else {
       alert('Нет client_id и колонок клиента в jobs — нечего сохранять.');
     }
   };
 
   /* ---------- материалы ---------- */
-  const addMat = () => {
-    setMaterials((p) => [
-      ...p,
-      { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' },
-    ]);
-  };
-
-  const chMat = (idx, field, val) => {
-    setMaterials((p) => {
-      const n = [...p];
-      n[idx] = { ...n[idx], [field]: val };
-      return n;
-    });
-  };
+  const addMat = () => setMaterials((p) => [...p, { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' }]);
+  const chMat  = (idx, field, val) => setMaterials((p) => { const n = [...p]; n[idx] = { ...n[idx], [field]: val }; return n; });
 
   const delMat = async (m) => {
     setMaterials((p) => p.filter((x) => x !== m));
@@ -477,11 +322,7 @@ export default function JobDetailsPage() {
         supplier: m.supplier || null,
       }));
       const { error } = await supabase.from('materials').insert(payload);
-      if (error) {
-        console.error('insert materials', error);
-        alert(`Не удалось сохранить новые материалы: ${error.message || 'ошибка'}`);
-        return;
-      }
+      if (error) { console.error('insert materials', error); alert(`Не удалось сохранить новые материалы: ${error.message || 'ошибка'}`); return; }
     }
 
     for (const m of olds) {
@@ -492,65 +333,36 @@ export default function JobDetailsPage() {
         supplier: m.supplier || null,
       };
       const { error } = await supabase.from('materials').update(patch).eq('id', m.id);
-      if (error) {
-        console.error('update material', error);
-        alert(`Не удалось сохранить материал: ${error.message || 'ошибка'}`);
-        return;
-      }
+      if (error) { console.error('update material', error); alert(`Не удалось сохранить материал: ${error.message || 'ошибка'}`); return; }
     }
 
-    const { data: fresh, error: reloadErr } = await supabase
-      .from('materials')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('id', { ascending: true });
-
-    if (reloadErr) {
-      console.error(reloadErr);
-    } else {
-      setMaterials(fresh || []);
-    }
+    const { data: fresh, error: reloadErr } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
+    if (reloadErr) console.error(reloadErr); else setMaterials(fresh || []);
     alert('Материалы сохранены');
   };
 
   /* ---------- файлы ---------- */
   const onPick = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
+    const files = Array.from(e.target.files || []); if (!files.length) return;
     setUploadBusy(true);
-
     try {
       for (const original of files) {
         const allowed =
           /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
           /pdf$/i.test(original.type) ||
           /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
-
-        if (!allowed) {
-          alert(`Формат не поддерживается: ${original.name}`);
-          continue;
-        }
+        if (!allowed) { alert(`Формат не поддерживается: ${original.name}`); continue; }
 
         let file;
-        try {
-          file = await convertIfHeicWeb(original);
-        } catch (convErr) {
+        try { file = await convertIfHeicWeb(original); }
+        catch (convErr) {
           console.error('HEIC convert error:', convErr);
-          if (isHeicLike(original)) {
-            alert('Файл HEIC/HEIF. Конвертация не сработала — файл не загружен (проверьте, что heic2any установлен).');
-            continue;
-          }
+          if (isHeicLike(original)) { alert('HEIC/HEIF. Конвертация не сработала — файл не загружен.'); continue; }
           file = original;
         }
-
         const key = makeSafeStorageKey(jobId, file.name);
-
         try {
-          const { error } = await storage().upload(key, file, {
-            cacheControl: '3600',
-            upsert: false,
-            contentType: file.type || 'application/octet-stream',
-          });
+          const { error } = await storage().upload(key, file, { cacheControl: '3600', upsert: false, contentType: file.type || 'application/octet-stream' });
           if (error) throw error;
         } catch (upErr) {
           console.error('upload error:', upErr, key);
@@ -572,71 +384,45 @@ export default function JobDetailsPage() {
     } catch (e) {
       console.error('admin-delete-photo failed, fallback to client delete', e);
       const { error } = await storage().remove([`${jobId}/${name}`]);
-      if (error) {
-        alert(`Не удалось удалить файл: ${e.message || error.message || 'ошибка'}`);
-        return;
-      }
+      if (error) { alert(`Не удалось удалить файл: ${e.message || error.message || 'ошибка'}`); return; }
       await loadPhotos();
     }
   };
 
-  const toggleAllPhotos = (checkedAll) => {
-    if (checkedAll) {
-      const next = {};
-      photos.forEach((p) => { next[p.name] = true; });
-      setChecked(next);
-    } else {
-      setChecked({});
-    }
-  };
-
+  const toggleAllPhotos = (checkedAll) => { if (checkedAll) { const next = {}; photos.forEach((p) => { next[p.name] = true; }); setChecked(next); } else { setChecked({}); } };
   const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
 
   const downloadOne = async (name) => {
     const { data, error } = await storage().download(`${jobId}/${name}`);
-    if (error || !data) {
-      console.error('downloadOne', error);
-      alert('Не удалось скачать файл');
-      return;
-    }
+    if (error || !data) { console.error('downloadOne', error); alert('Не удалось скачать файл'); return; }
     const url = URL.createObjectURL(data);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };
 
   const downloadSelected = async () => {
-    const names = photos.filter((p) => checked[p.name]).map((p) => p.name);
-    if (!names.length) return;
+    const names = photos.filter((p) => checked[p.name]).map((p) => p.name); if (!names.length) return;
     for (const n of names) await downloadOne(n);
   };
 
   /* ---------- инвойсы ---------- */
 
-  // helpers
+  // утилиты для имён/номеров
   const getInvoiceNo = (item) => {
-    const fromProp = item?.invoice_no != null ? Number(item.invoice_no) : NaN;
-    if (!Number.isNaN(fromProp)) return fromProp;
-    const m = /invoice_(\d+)\.pdf/i.exec(item?.name || '');
+    if (!item) return null;
+    if (item.invoice_no != null) return Number(item.invoice_no);
+    const m = /invoice_(\d+)\.pdf$/i.exec(item.name || '');
     return m ? Number(m[1]) : null;
   };
-  const getInvoiceFileName = (no) => (no != null ? `invoice_${Number(no)}.pdf` : null);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const getInvoiceFileName = (no) => (no != null ? `invoice_${no}.pdf` : null);
 
+  // подгружаем инвойсы (Storage + DB, но DB только если файл существует)
   const loadInvoices = async () => {
     setInvoicesLoading(true);
     try {
       const [stRes, dbRes] = await Promise.all([
         invStorage().list(`${jobId}`, { limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
-        supabase
-          .from('invoices')
-          .select('id, invoice_no, created_at')
-          .eq('job_id', jobId)
-          .order('created_at', { ascending: false }),
+        supabase.from('invoices').select('id, invoice_no, created_at').eq('job_id', jobId).order('created_at', { ascending: false }),
       ]);
 
       const stData = stRes?.data || [];
@@ -657,34 +443,24 @@ export default function JobDetailsPage() {
         });
 
       const rows = dbRes?.data || [];
-      const db = rows.map((r) => ({
-        source: 'db',
-        name: `invoice_${r.invoice_no}.pdf`,
-        url: null,
-        updated_at: r.created_at,
-        invoice_no: String(r.invoice_no),
-        db_id: r.id,
-        hasFile: stor.some((s) => s.invoice_no === String(r.invoice_no)),
-      }));
+      const dbWithFile = rows
+        .filter((r) => stor.some((s) => s.invoice_no === String(r.invoice_no))) // показываем из БД только те, что реально есть в Storage
+        .map((r) => ({
+          source: 'db',
+          name: `invoice_${r.invoice_no}.pdf`,
+          url: null,
+          updated_at: r.created_at,
+          invoice_no: String(r.invoice_no),
+          hasFile: true,
+        }));
 
       const merged = [...stor];
-      db.forEach((d) => {
-        if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d);
-      });
+      dbWithFile.forEach((d) => { if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d); });
 
-      // фильтр tombstone'ов (если что-то упорно «висит» из-за репликации — скрываем локально)
-      const filtered = merged.filter((it) => {
-        const invNoKey = it.invoice_no ? `no:${Number(it.invoice_no)}` : null;
-        const nameKey = it.name ? `name:${it.name}` : null;
-        if (invNoKey && deletedInvKeys.includes(invNoKey)) return false;
-        if (nameKey && deletedInvKeys.includes(nameKey)) return false;
-        return true;
-      });
-
-      filtered.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
-      setInvoices(filtered);
+      merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+      setInvoices(merged);
     } catch (e) {
-      console.error('loadInvoices merge error:', e);
+      console.error('loadInvoices error:', e);
       setInvoices([]);
     } finally {
       setInvoicesLoading(false);
@@ -704,18 +480,9 @@ export default function JobDetailsPage() {
   const downloadInvoice = async (item) => {
     if (!item?.hasFile) return;
     const { data, error } = await invStorage().download(`${jobId}/${item.name}`);
-    if (error || !data) {
-      console.error('downloadInvoice', error);
-      alert('Не удалось скачать инвойс');
-      return;
-    }
+    if (error || !data) { console.error('downloadInvoice', error); alert('Не удалось скачать инвойс'); return; }
     const url = URL.createObjectURL(data);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = item.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const a = document.createElement('a'); a.href = url; a.download = item.name; document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };
 
@@ -723,62 +490,35 @@ export default function JobDetailsPage() {
     const invNo = getInvoiceNo(item);
     const fileName = item?.name || getInvoiceFileName(invNo);
     const path = fileName ? `${jobId}/${fileName}` : null;
+    const opKey = fileName || `no:${invNo}`;
 
     if (!window.confirm(`Удалить инвойс${invNo ? ' #' + invNo : ''}?`)) return;
 
-    console.log('[deleteInvoice] start', { invNo, fileName, path, raw: item });
+    setDeletingInvKey(opKey);
 
-    // 0) Оптимистично скрываем из UI и добавляем tombstone
-    addTombstone(invNo, fileName);
-    setInvoices((prev) =>
-      prev.filter(
-        (it) =>
-          String(it.invoice_no || '') !== String(invNo || '') &&
-          it.name !== fileName
-      )
-    );
-
-    // 1) Удаляем PDF из Storage
-    if (path) {
-      try {
+    try {
+      // 1) Удаляем файл из Storage (с серверным fallback)
+      if (path) {
         const { error } = await invStorage().remove([path]);
-        if (!error) {
-          console.log('[deleteInvoice] storage.remove OK');
-        } else {
-          console.warn('[deleteInvoice] storage.remove error, try edge', error);
+        if (error) {
+          // fallback через Edge (как у фото)
           await callEdge('admin-delete-photo', { bucket: INVOICES_BUCKET, path });
         }
-      } catch (e) {
-        console.warn('[deleteInvoice] storage remove exception', e);
       }
-    }
 
-    // 2) Удаляем из БД ВСЕ строки с этим job_id + invoice_no (на случай дублей)
-    if (invNo != null) {
-      try {
-        const idsRes = await supabase
-          .from('invoices')
-          .select('id')
-          .eq('job_id', jobId)
-          .eq('invoice_no', invNo);
-        const idList = (idsRes.data || []).map((r) => r.id);
-        console.log('[deleteInvoice] rows to delete by id:', idList);
-        if (idList.length) {
-          await supabase.from('invoices').delete().in('id', idList);
-        } else {
-          // fallback (если по каким-то причинам select ничего не вернул)
-          await supabase.from('invoices').delete().eq('job_id', jobId).eq('invoice_no', invNo);
-        }
-        console.log('[deleteInvoice] db delete OK');
-      } catch (e) {
-        console.warn('[deleteInvoice] db delete exception', e);
+      // 2) Удаляем запись из БД через Edge (обходит RLS)
+      if (invNo != null) {
+        await callEdge('admin-delete-invoice', { job_id: jobId, invoice_no: invNo });
       }
-    }
 
-    // 3) Перечитываем список (двойной рефреш против eventual consistency)
-    await loadInvoices();
-    await sleep(700);
-    await loadInvoices();
+      // 3) Обновляем список
+      await loadInvoices();
+    } catch (e) {
+      console.error('[deleteInvoice] failed:', e);
+      alert(`Не удалось удалить инвойс: ${e.message || e}`);
+    } finally {
+      setDeletingInvKey(null);
+    }
   };
 
   const createInvoice = () => {
@@ -823,7 +563,9 @@ export default function JobDetailsPage() {
                 >
                   <option value="">—</option>
                   {techs.map((t) => (
-                    <option key={t.id} value={String(t.id)}>{t.name}</option>
+                    <option key={t.id} value={String(t.id)}>
+                      {t.name}
+                    </option>
                   ))}
                 </select>
               </div>
@@ -922,10 +664,10 @@ export default function JobDetailsPage() {
           <div style={BOX}>
             <div style={H2}>Клиент</div>
             <div style={{ display: 'grid', gap: 10 }}>
-              <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
-              <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
-              <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
-              <Row label="Адрес" value={client.address} onChange={(v) => setClientField('address', v)} />
+              <Row label="ФИО"    value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
+              <Row label="Телефон" value={client.phone}     onChange={(v) => setClientField('phone', v)} />
+              <Row label="Email"   value={client.email}     onChange={(v) => setClientField('email', v)} />
+              <Row label="Адрес"   value={client.address}   onChange={(v) => setClientField('address', v)} />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
                 {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
@@ -951,54 +693,45 @@ export default function JobDetailsPage() {
               <div style={MUTED}>Пока нет инвойсов для этой заявки</div>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
-                {invoices.map((inv) => (
-                  <div
-                    key={`${inv.source}-${inv.invoice_no || inv.name}`}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      border: '1px solid #eef2f7',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600 }}>
-                        {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                        {!inv.hasFile && (
-                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>
-                            (PDF ещё не в хранилище)
-                          </span>
-                        )}
+                {invoices.map((inv) => {
+                  const opKey = inv.name || `no:${inv.invoice_no}`;
+                  return (
+                    <div
+                      key={`${inv.source}-${inv.invoice_no || inv.name}`}
+                      style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid #eef2f7', borderRadius: 8 }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600 }}>
+                          {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>
+                          {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>
-                        {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
+                          Открыть PDF
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                          onClick={() => inv.hasFile && downloadInvoice(inv)}
+                          disabled={!inv.hasFile}
+                        >
+                          Скачать
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...DANGER, opacity: deletingInvKey === opKey ? 0.6 : 1 }}
+                          onClick={() => deleteInvoice(inv)}
+                          disabled={!!deletingInvKey}
+                        >
+                          {deletingInvKey === opKey ? 'Удаление…' : 'Удалить'}
+                        </button>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
-                        Открыть PDF
-                      </button>
-                      <button
-                        type="button"
-                        style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
-                        onClick={() => inv.hasFile && downloadInvoice(inv)}
-                        disabled={!inv.hasFile}
-                      >
-                        Скачать
-                      </button>
-                      <button
-                        type="button"
-                        style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
-                        onClick={() => inv.hasFile && deleteInvoice(inv)}
-                        disabled={!inv.hasFile}
-                      >
-                        Удалить
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1026,9 +759,7 @@ export default function JobDetailsPage() {
                   <Td><input style={INPUT} type="number" value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} /></Td>
                   <Td><input style={INPUT} type="number" value={m.quantity ?? 1} onChange={(e) => chMat(i, 'quantity', e.target.value)} /></Td>
                   <Td><input style={INPUT} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} /></Td>
-                  <Td center>
-                    <button style={DANGER} onClick={() => delMat(m)}>🗑</button>
-                  </Td>
+                  <Td center><button style={DANGER} onClick={() => delMat(m)}>🗑</button></Td>
                 </tr>
               ))}
             </tbody>
@@ -1043,27 +774,17 @@ export default function JobDetailsPage() {
       {/* Комментарии */}
       <div style={BOX}>
         <div style={H2}>Комментарии</div>
-
         {commentsLoading ? (
           <div style={MUTED}>Загрузка…</div>
         ) : (
           <>
-            <div
-              style={{
-                maxHeight: 260,
-                overflowY: 'auto',
-                border: '1px solid #e5e7eb',
-                borderRadius: 8,
-                padding: 10,
-                marginBottom: 8,
-              }}
-            >
+            <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, marginBottom: 8 }}>
               {comments.length === 0 ? (
                 <div style={MUTED}>Пока нет комментариев</div>
               ) : (
                 comments.map((c) => {
                   const when = new Date(c.created_at).toLocaleString();
-                  const who = c.author_name || '—';
+                  const who  = c.author_name || '—';
                   return (
                     <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
                       <div style={{ fontSize: 12, color: '#64748b' }}>{when} • {who}</div>
@@ -1075,13 +796,7 @@ export default function JobDetailsPage() {
             </div>
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <textarea
-                rows={2}
-                style={{ ...TA, minHeight: 60 }}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="Написать комментарий…"
-              />
+              <textarea rows={2} style={{ ...TA, minHeight: 60 }} value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Написать комментарий…" />
               <button style={PRIMARY} onClick={addComment}>Отправить</button>
             </div>
           </>
@@ -1128,15 +843,11 @@ export default function JobDetailsPage() {
                   📄 PDF
                 </div>
               ) : (
-                <img
-                  src={p.url}
-                  alt={p.name}
-                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }}
-                />
+                <img src={p.url} alt={p.name} style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }} />
               )}
 
               <div style={{ display: 'flex', gap: 6 }}>
-                <button style={BTN} onClick={() => downloadOne(p.name)}>Скачать</button>
+                <button style={BTN}    onClick={() => downloadOne(p.name)}>Скачать</button>
                 <button style={DANGER} onClick={() => delPhoto(p.name)}>Удалить</button>
               </div>
             </div>
@@ -1165,6 +876,8 @@ function Th({ children, center }) {
 }
 function Td({ children, center }) {
   return (
-    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
+    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>
+      {children}
+    </td>
   );
 }
