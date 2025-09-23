@@ -268,32 +268,35 @@ export default function InvoicePage() {
       // PDF
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
 
-      const pageW = 612;
-      const marginX = 40;
+      const PAGE_W = 612;
+      const MARGIN = 40;
 
       // 1) Заголовок справа
       doc.setFontSize(30);
       doc.setFont(undefined, 'bold');
-      doc.text('INVOICE', pageW - marginX, 48, { align: 'right' });
+      doc.text('INVOICE', PAGE_W - MARGIN, 48, { align: 'right' });
       doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
       doc.setTextColor(100);
-      doc.text(`# ${thisInvoiceNo}`, pageW - marginX, 66, { align: 'right' });
+      doc.text(`# ${thisInvoiceNo}`, PAGE_W - MARGIN, 66, { align: 'right' });
 
-      // 2) Логотип слева + реквизиты компании ПОД логотипом
+      // 2) Логотип слева
       let logoBottom = 24;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
         if (logo) {
-          doc.addImage(logo, 'PNG', marginX, 24, 120, 120);
-          logoBottom = 24 + 90;
+          const LOGO_W = 120, LOGO_H = 120;
+          doc.addImage(logo, 'PNG', MARGIN, 24, LOGO_W, LOGO_H);
+          logoBottom = 24 + LOGO_H;             // <-- корректно считаем низ логотипа
         }
       } catch {}
-    
-      // 3) Справа — ДАТА (над капсулой), затем капсула Balance Due, ниже Bill To
-      // Дата
-      const rightColX = pageW - marginX - 240; // выравниваем по капсуле
+
+      // 3) Справа — ДАТА (над капсулой), затем капсула Balance Due
+      const PILL_W = 240, PILL_H = 40;
+      const rightColX = PAGE_W - MARGIN - PILL_W;
       let rightY = 110;
+
+      // Дата
       doc.setFont(undefined, 'bold');
       doc.setTextColor(80);
       doc.text('Date:', rightColX, rightY);
@@ -302,44 +305,54 @@ export default function InvoicePage() {
       doc.text(human(invoiceDate), rightColX + 40, rightY);
       rightY += 16;
 
-      // Капсула Balance Due
-      const pillW = 240, pillH = 40;
+      // Капсула
       doc.setDrawColor(229, 231, 235);
       doc.setFillColor(246, 247, 251);
-      doc.roundedRect(pageW - marginX - pillW, rightY, pillW, pillH, 8, 8, 'FD');
-
+      doc.roundedRect(PAGE_W - MARGIN - PILL_W, rightY, PILL_W, PILL_H, 8, 8, 'FD');
       doc.setFont(undefined, 'bold');
       doc.setTextColor(70);
-      doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
+      doc.text('Balance Due:', PAGE_W - MARGIN - PILL_W + 12, rightY + 26);
       doc.setTextColor(0);
-      doc.text(`$${N(total).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
-      rightY += pillH + 18;
-      
-      // --- Company block LEFT aligned with Bill To ---
-      const alignY = rightY; // хотим ровно на уровне заголовка "Bill To:"
-      let compTop = Math.max(logoBottom + 8, alignY); // не даём налезть на логотип
+      doc.text(`$${N(total).toFixed(2)}`, PAGE_W - MARGIN - 12, rightY + 26, { align: 'right' });
+      rightY += PILL_H + 18;
+
+      // 4) ВЫРАВНИВАНИЕ: компания слева и Bill To справа – на ОДНОЙ линии
+      const yAligned = Math.max(logoBottom + 8, rightY); // не залезаем на логотип
+      let compY = yAligned; // левый блок = компания
+      rightY = yAligned;    // правый блок = Bill To
+
+      // Company (слева)
       doc.setTextColor(0);
       doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', marginX, compTop);
-      compTop += 14;
+      doc.text('Sim Scope Inc.', MARGIN, compY);
+      compY += 14;
       doc.setFont(undefined, 'normal');
       ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((t) => {
-      doc.text(t, marginX, compTop);
-      compTop += 12;
+        doc.text(t, MARGIN, compY);
+        compY += 12;
       });
 
-      // Bill To (справа, напротив инфы о компании)
+      // Bill To (справа) — плотные интервалы
+      const billX = PAGE_W - MARGIN - PILL_W;
+      const GAP_AFTER_TITLE = 8;
+      const LINE = 12;
+
       doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', pageW - marginX - pillW, rightY);
-      rightY += 16;
-      doc.setFont(undefined, 'normal');
-      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), pageW - marginX - pillW, rightY);
-        rightY += 14;
-      });
+      doc.text('Bill To:', billX, rightY);
+      rightY += GAP_AFTER_TITLE;
 
-      // 4) Таблица
-      const tableStartY = Math.max(compTop, rightY) + 16;
+      doc.setFont(undefined, 'normal');
+      const billLines = [billName, billAddress, billPhone, billEmail]
+        .map(v => (v ?? '').toString().trim())
+        .filter(v => v.length > 0);
+
+      billLines.forEach((line, idx) => {
+        doc.text(line, billX, rightY + idx * LINE);
+      });
+      rightY += billLines.length * LINE;
+
+      // 5) Таблица
+      const tableStartY = Math.max(compY, rightY) + 16;
       const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
         String(N(r.qty)),
@@ -354,7 +367,7 @@ export default function InvoicePage() {
         styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1, textColor: [60, 60, 60] },
         headStyles: { fillColor: [60, 60, 60], textColor: 255, fontStyle: 'bold' },
         alternateRowStyles: { fillColor: [249, 250, 251] },
-        margin: { left: marginX, right: marginX },
+        margin: { left: MARGIN, right: MARGIN },
         columnStyles: {
           0: { cellWidth: 360 },
           1: { cellWidth: 40, halign: 'center' },
@@ -363,9 +376,9 @@ export default function InvoicePage() {
         },
       });
 
-      // 5) Итоги справа
+      // 6) Итоги справа
       let endY = doc.lastAutoTable.finalY + 10;
-      const totalsRightX = pageW - marginX;
+      const totalsRightX = PAGE_W - MARGIN;
       doc.setFont(undefined, 'bold');
       doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
       endY += 16;
@@ -375,12 +388,12 @@ export default function InvoicePage() {
       doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
       endY += 22;
 
-      // 6) Warranty
+      // 7) Warranty
       if (includeWarranty && Number(warrantyDays) > 0) {
-        const maxW = pageW - marginX * 2;
+        const maxW = PAGE_W - MARGIN * 2;
         doc.setFontSize(10);
         doc.setFont(undefined, 'bold');
-        doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY);
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, MARGIN, endY);
         endY += 12;
 
         doc.setFont(undefined, 'normal');
@@ -392,12 +405,12 @@ export default function InvoicePage() {
           + `damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. `
           + `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
         const lines = doc.splitTextToSize(txt, maxW);
-        doc.text(lines, marginX, endY + 2);
+        doc.text(lines, MARGIN, endY + 2);
       }
 
       // Низ страницы
       doc.setFontSize(10);
-      doc.text('Thank you for your business!', pageW - marginX, 760, { align: 'right' });
+      doc.text('Thank you for your business!', PAGE_W - MARGIN, 760, { align: 'right' });
 
       const filename = `invoice_${thisInvoiceNo}.pdf`;
       doc.save(filename);
@@ -468,7 +481,7 @@ export default function InvoicePage() {
       </div>
 
       <div style={S.card}>
-        {/* Превью совпадает по структуре с PDF: слева компания, справа дата/баланс/BillTo */}
+        {/* Превью совпадает по структуре с PDF */}
         <div style={S.header}>
           <div>
             {logoDataURL ? (
@@ -580,4 +593,3 @@ export default function InvoicePage() {
     </div>
   );
 }
-
