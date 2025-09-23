@@ -1,7 +1,8 @@
 // client/src/components/TopNav.jsx
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { supabase } from '../supabaseClient';
 
 const norm = (r) => {
   if (!r) return null;
@@ -55,6 +56,73 @@ const Icon = {
 
 export default function TopNav() {
   const { user, role, logout } = useAuth();
+  const uid = user?.id || null;
+
+  // unread total for Chat badge (init из localStorage, чтобы быстро отрисовать)
+  const [chatUnreadTotal, setChatUnreadTotal] = useState(() => {
+    try {
+      const raw = localStorage.getItem('CHAT_UNREAD_TOTAL');
+      const n = raw ? parseInt(raw, 10) : 0;
+      return Number.isFinite(n) ? n : 0;
+    } catch { return 0; }
+  });
+
+  // лёгкий debounce для частых realtime-событий
+  const debounceRef = useRef(null);
+  const debouncedRefreshUnread = (fn) => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(fn, 250);
+  };
+
+  // подтянуть unread с сервера
+  const refreshUnreadFromServer = async () => {
+    if (!uid) { setChatUnreadTotal(0); return; }
+    const { data, error } = await supabase.rpc('get_unread_by_chat');
+    if (error) {
+      // тихо игнорим — у нас есть локальный счётчик
+      // console.warn('[TopNav] get_unread_by_chat error', error);
+      return;
+    }
+    const sum = (data || []).reduce((s, r) => s + (Number(r.unread) || 0), 0);
+    setChatUnreadTotal(sum);
+    try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum)); } catch {}
+  };
+
+  // слушаем локальный ивент от ChatPage + realtime от БД
+  useEffect(() => {
+    if (!uid) return;
+
+    // начальная загрузка
+    refreshUnreadFromServer();
+
+    // локальное событие (ChatPage его диспатчит при каждом апдейте)
+    const onLocalChanged = (e) => {
+      const n = e?.detail?.total;
+      if (typeof n === 'number') setChatUnreadTotal(n);
+    };
+    window.addEventListener('chat-unread-changed', onLocalChanged);
+
+    // realtime: любое новое сообщение и апдейт моего last_read_at → обновить
+    const chan = supabase
+      .channel('topnav-unread')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'chat_messages' },
+        () => debouncedRefreshUnread(refreshUnreadFromServer)
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `member_id=eq.${uid}` },
+        () => debouncedRefreshUnread(refreshUnreadFromServer)
+      )
+      .subscribe();
+
+    return () => {
+      window.removeEventListener('chat-unread-changed', onLocalChanged);
+      try { supabase.removeChannel(chan); } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid]);
 
   // все хуки — до любого return
   const r = useMemo(() => norm(role), [role]);
@@ -121,9 +189,21 @@ export default function TopNav() {
 
         <nav className="tn__nav">
           {links.map((l) => (
-            <NavLink key={l.to} to={l.to} className={({ isActive }) => 'tn__link' + (isActive ? ' is-active' : '')}>
+            <NavLink
+              key={l.to}
+              to={l.to}
+              className={({ isActive }) => 'tn__link' + (isActive ? ' is-active' : '')}
+              aria-label={`${l.label}${l.to === '/chat' && chatUnreadTotal ? `, ${chatUnreadTotal} непрочитанных` : ''}`}
+            >
               <span className="tn__icon">{l.icon}</span>
               <span className="tn__text">{l.label}</span>
+
+              {/* Бэйдж только для вкладки "Чат" */}
+              {l.to === '/chat' && chatUnreadTotal > 0 && (
+                <span className="tn__badge" aria-hidden="true">
+                  {chatUnreadTotal > 99 ? '99+' : chatUnreadTotal}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -168,6 +248,24 @@ export default function TopNav() {
         .tn__link.is-active { background: var(--tn-pill-active); border-color: rgba(96,165,250,.35); }
         .tn__icon { display:grid; place-items:center; color: var(--tn-accent); }
         .tn__text { font-size: 14px; }
+
+        .tn__badge {
+          background: #ef4444;
+          color: #fff;
+          border-radius: 9999px;
+          padding: 0 8px;
+          min-width: 20px;
+          height: 20px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 20px;
+          user-select: none;
+          margin-left: 6px;
+          box-shadow: 0 1px 2px rgba(0,0,0,.25);
+        }
 
         .tn__right { display:flex; align-items:center; gap: 10px; }
         .tn__role {
