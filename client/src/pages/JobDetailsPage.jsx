@@ -464,7 +464,7 @@ export default function JobDetailsPage() {
     if (!window.confirm(`Удалить инвойс${item?.invoice_no ? ' #' + item.invoice_no : ''}?`)) return;
 
     try {
-      await callEdgePublic('admin-delete-invoice-bundle', {
+      await callEdgeAuth('admin-delete-invoice-bundle', {
         bucket: INVOICES_BUCKET,
         key,              // точный ключ файла в Storage
         db_id: item?.db_id || null,
@@ -766,3 +766,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
