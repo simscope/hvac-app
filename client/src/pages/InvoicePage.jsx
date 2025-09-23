@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/* ---------------- helpers (оставил твоими) ---------------- */
+/* ---------------- helpers ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
 const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fromInputDate = (s) => {
@@ -46,7 +46,7 @@ async function loadLogoDataURL(timeoutMs = 2500) {
   }
 }
 
-/* ---------------- ВНЕШНИЙ ВИД ---------------- */
+/* ---------------- styles (для UI страницы) ---------------- */
 const S = {
   page: { maxWidth: 1000, margin: '24px auto 80px', padding: '0 16px' },
   bar: { display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 },
@@ -59,7 +59,6 @@ const S = {
     background: '#f8fafc', cursor: 'pointer',
   },
 
-  // «Открытка» инвойса
   card: {
     background: '#fff',
     border: '1px solid #e5e7eb',
@@ -67,7 +66,6 @@ const S = {
     padding: 24,
     boxShadow: '0 2px 24px rgba(0,0,0,0.04)',
   },
-
   header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 16 },
   brandStack: { display: 'flex', flexDirection: 'column' },
   brandName: { fontWeight: 700, fontSize: 16 },
@@ -79,16 +77,8 @@ const S = {
   metaRow: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 16, alignItems: 'center' },
   metaLabel: { color: '#6b7280', fontWeight: 600 },
   pillWrap: { width: 280, justifySelf: 'end' },
-  pill: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    border: '1px solid #e5e7eb',
-  },
-  pillRow: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    background: '#f6f7fb',
-  },
+  pill: { borderRadius: 12, overflow: 'hidden', border: '1px solid #e5e7eb' },
+  pillRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#f6f7fb' },
   pillCellLeft: { padding: '10px 12px', fontWeight: 700, color: '#333', textAlign: 'right' },
   pillCellRight: { padding: '10px 12px', fontWeight: 700, textAlign: 'right' },
 
@@ -97,7 +87,6 @@ const S = {
   subTitle: { fontWeight: 700, marginBottom: 8 },
   muted: { color: '#6b7280' },
 
-  // Таблица
   tableWrap: { marginTop: 16, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { background: '#3c3c3c', color: '#fff', textAlign: 'left', padding: '10px 12px', fontWeight: 700 },
@@ -112,18 +101,11 @@ const S = {
     width: '100%', height: 36, boxSizing: 'border-box',
   },
 
-  // Итоги справа
   totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, marginTop: 18 },
   totalsCard: { border: '1px solid #eef2f7', borderRadius: 12, padding: 14 },
   totalsLine: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' },
   totalsStrong: { fontWeight: 800, fontSize: 18 },
 
-  badge: {
-    display: 'inline-flex', alignItems: 'center', gap: 8,
-    padding: '6px 10px', borderRadius: 999, background: '#eef2ff', color: '#1d4ed8', fontWeight: 600,
-  },
-
-  // Выравнивание чисел
   taCenter: { textAlign: 'center' },
   taRight: { textAlign: 'right' },
 };
@@ -143,14 +125,14 @@ export default function InvoicePage() {
   const [billPhone, setBillPhone] = useState('');
   const [billEmail, setBillEmail] = useState('');
 
-  // строки таблицы
+  // строки
   const [rows, setRows] = useState([
     { type: 'service', name: 'Labor', qty: 1, price: 0 },
     { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
   ]);
   const [discount, setDiscount] = useState(0);
 
-  // инвойс meta
+  // мета
   const [invoiceNo, setInvoiceNo] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date());
   const [includeWarranty, setIncludeWarranty] = useState(true);
@@ -161,7 +143,7 @@ export default function InvoicePage() {
   /* ----------- load logo ----------- */
   useEffect(() => { loadLogoDataURL().then((d) => setLogoDataURL(d || null)); }, []);
 
-  /* ----------- load job + client + materials + suggest next invoice no ----------- */
+  /* ----------- load job + client + materials + next invoice no ----------- */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -254,11 +236,12 @@ export default function InvoicePage() {
   const addRow = () => setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
   const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
 
-  /* ----------- save + pdf (твоя логика, без изменений) ----------- */
+  /* ----------- PDF (новая верстка) ----------- */
   async function saveAndDownload() {
     if (saving) return;
     setSaving(true);
     try {
+      // 1) анти-дубль + номер
       let thisInvoiceNo = null;
       const recentFrom = nowMinusSecISO(45);
       const recentQ = await supabase
@@ -284,83 +267,147 @@ export default function InvoicePage() {
         thisInvoiceNo = Number(inserted.invoice_no);
       }
 
-      // PDF
+      // 2) PDF
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
-      doc.setFontSize(14); doc.setFont(undefined, 'bold');
-      doc.text(`INVOICE #${thisInvoiceNo}`, 306, 52, { align: 'center' });
-      doc.setFontSize(10); doc.setFont(undefined, 'normal');
-      doc.text(`Date: ${human(invoiceDate)}`, 306, 68, { align: 'center' });
 
-      const rightX = 612 - 80;
-      let rightY = 100;
+      // --- Шапка: логотип слева, INVOICE справа ---
+      const pageW = 612; // letter width pt
+      const marginX = 40;
+
       let logoBottom = 0;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
         if (logo) {
-          const top = 24; const w = 130, h = 130;
-          doc.addImage(logo, 'PNG', rightX - w, top, w, h);
-          logoBottom = top + h;
+          doc.addImage(logo, 'PNG', marginX, 24, 90, 90); // ЛОГО слева
+          logoBottom = 24 + 90;
         }
       } catch {}
-      const PAD = 18; const LEFT_TOP = 170; const RIGHT_SHIFT = 0;
-      const rightStartY = Math.max(logoBottom + PAD, LEFT_TOP + RIGHT_SHIFT);
-      rightY = rightStartY;
 
+      // INVOICE справа
+      doc.setFontSize(30);
       doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', rightX, rightY, { align: 'right' });
-      rightY += 14;
+      doc.text('INVOICE', pageW - marginX, 48, { align: 'right' });
+
+      doc.setFontSize(10);
       doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((line) => {
-        doc.text(line, rightX, rightY, { align: 'right' }); rightY += 12;
-      });
+      doc.setTextColor(100);
+      doc.text(`# ${thisInvoiceNo}`, pageW - marginX, 66, { align: 'right' });
 
-      const leftX = 40; let leftY = LEFT_TOP;
-      doc.setFont(undefined, 'bold'); doc.text('Bill To:', leftX, leftY);
-      leftY += 14; doc.setFont(undefined, 'normal');
+      // Дата
+      doc.setTextColor(80);
+      doc.setFont(undefined, 'bold');
+      doc.text('Date:', marginX, 140);
+      doc.setFont(undefined, 'normal');
+      doc.text(human(invoiceDate), marginX + 40, 140);
+
+      // Капсула Balance Due (справа)
+      const pillX = pageW - marginX - 240;
+      const pillY = 110;
+      // рамка
+      doc.setDrawColor(229, 231, 235);
+      doc.setFillColor(246, 247, 251);
+      doc.roundedRect(pillX, pillY, 240, 40, 8, 8, 'FD');
+      // текст
+      doc.setTextColor(51);
+      doc.setFont(undefined, 'bold');
+      doc.text('Balance Due:', pillX + 10, pillY + 26);
+      doc.setTextColor(0);
+      const dueText = `$${N(total).toFixed(2)}`;
+      doc.text(dueText, pillX + 230, pillY + 26, { align: 'right' });
+
+      // --- Bill To слева ---
+      const billTop = Math.max(logoBottom, pillY + 40) + 20;
+      doc.setTextColor(0);
+      doc.setFont(undefined, 'bold');
+      doc.text('Bill To:', marginX, billTop);
+      doc.setFont(undefined, 'normal');
+      let lineY = billTop + 16;
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), leftX, leftY); leftY += 12;
+        doc.text(String(line), marginX, lineY);
+        lineY += 14;
       });
 
-      const headerBottom = Math.max(leftY, rightY, logoBottom) + 16;
+      // --- Company реквизиты справа (под логотипом) ---
+      let compTop = Math.max(logoBottom, 100);
+      doc.setFont(undefined, 'bold');
+      doc.text('Sim Scope Inc.', pageW - marginX, compTop, { align: 'right' });
+      compTop += 14;
+      doc.setFont(undefined, 'normal');
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042', 'simscopeinc@gmail.com'].forEach((t) => {
+        doc.text(t, pageW - marginX, compTop, { align: 'right' });
+        compTop += 12;
+      });
+
+      // --- Таблица позиций (тёмная шапка) ---
+      const tableStartY = Math.max(lineY, compTop) + 16;
+
       const body = rows.map((r) => [
         r.name || (r.type === 'service' ? 'Service' : 'Item'),
         String(N(r.qty)),
         `$${N(r.price).toFixed(2)}`,
         `$${(N(r.qty) * N(r.price)).toFixed(2)}`,
       ]);
+
       autoTable(doc, {
-        startY: headerBottom,
+        startY: tableStartY,
         head: [['Description', 'Qty', 'Unit Price', 'Amount']],
         body,
-        styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1 },
-        headStyles: { fillColor: [245, 245, 245], textColor: 0, fontStyle: 'bold' },
-        margin: { left: 40, right: 40 },
-        columnStyles: { 0: { cellWidth: 372 }, 1: { cellWidth: 40, halign: 'center' }, 2: { cellWidth: 60, halign: 'right' }, 3: { cellWidth: 60, halign: 'right' } },
+        styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1, textColor: [60, 60, 60] },
+        headStyles: { fillColor: [60, 60, 60], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [249, 250, 251] },
+        margin: { left: marginX, right: marginX },
+        columnStyles: {
+          0: { cellWidth: 360 },
+          1: { cellWidth: 40, halign: 'center' },
+          2: { cellWidth: 80, halign: 'right' },
+          3: { cellWidth: 80, halign: 'right' },
+        },
       });
 
+      // --- Итоги справа под таблицей ---
       let endY = doc.lastAutoTable.finalY + 10;
+      const totalsRightX = pageW - marginX;
+
       doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${N(rows.reduce((s,r)=>s+N(r.qty)*N(r.price),0)).toFixed(2)}`, rightX, endY, { align: 'right' });
-      endY += 14;
-      doc.text(`Discount: -$${N(discount).toFixed(2)}`, rightX, endY, { align: 'right' });
-      endY += 14;
-      doc.text(`Total Due: $${N(Math.max(0, rows.reduce((s,r)=>s+N(r.qty)*N(r.price),0)-N(discount))).toFixed(2)}`, rightX, endY, { align: 'right' });
+      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
+      endY += 16;
+      doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
       endY += 18;
 
+      doc.setFontSize(12);
+      doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
+      endY += 22;
+
+      // --- Warranty (как на твоём скрине) ---
       if (includeWarranty && Number(warrantyDays) > 0) {
-        doc.setFont(undefined, 'bold'); doc.text(`Warranty (${Number(warrantyDays)} days):`, 40, endY);
-        endY += 12; doc.setFont(undefined, 'normal'); doc.setFontSize(9);
+        const maxW = pageW - marginX * 2;
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'bold');
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY);
+        endY += 12;
+
+        doc.setFont(undefined, 'normal');
         const txt =
-          `A ${Number(warrantyDays)}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
-          `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. ` +
-          `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
-        const lines = doc.splitTextToSize(txt, 612 - 80); doc.text(lines, 40, endY);
+          `A ${Number(
+            warrantyDays
+          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. `
+          + `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, `
+          + `damage caused by external factors (impacts, moisture, power surges, etc.), or any third-party tampering. `
+          + `The warranty starts on the job completion date and is valid only when the invoice is paid in full.`;
+        const lines = doc.splitTextToSize(txt, maxW);
+        doc.text(lines, marginX, endY + 2);
       }
-      doc.setFontSize(10); doc.text('Thank you for your business!', rightX, 760, { align: 'right' });
+
+      // благодарность в самом низу
+      doc.setFontSize(10);
+      doc.text('Thank you for your business!', pageW - marginX, 760, { align: 'right' });
 
       const filename = `invoice_${thisInvoiceNo}.pdf`;
+
+      // 3) Сохранение локально
       doc.save(filename);
 
+      // 4) Загрузка PDF в Storage
       try {
         const pdfBlob = doc.output('blob');
         const storageKey = `${id}/${filename}`;
@@ -368,16 +415,21 @@ export default function InvoicePage() {
           cacheControl: '3600', contentType: 'application/pdf', upsert: true,
         });
         if (up.error) console.warn('Upload invoice PDF failed:', up.error);
-      } catch (e) { console.warn('PDF upload error:', e); }
+      } catch (e) {
+        console.warn('PDF upload error:', e);
+      }
 
+      // 5) визуально показать следующий номер
       setInvoiceNo(String((Number(thisInvoiceNo) || 0) + 1));
     } catch (e) {
       console.error('saveAndDownload error:', e);
       alert(`Failed to save or download invoice: ${e.message || e}`);
-    } finally { setSaving(false); }
+    } finally {
+      setSaving(false);
+    }
   }
 
-  /* ---------------- таблица (только UI обновлён) ---------------- */
+  /* ---------------- таблица UI ---------------- */
   const tableRow = (r, i) => (
     <tr key={i}>
       <td style={S.td}>
@@ -419,13 +471,12 @@ export default function InvoicePage() {
         <button onClick={saveAndDownload} disabled={saving} style={S.primary}>
           {saving ? 'Please wait…' : 'Сохранить и скачать PDF'}
         </button>
-        <span style={S.badge}>Editor • Live preview</span>
       </div>
 
       <div style={S.card}>
-        {/* ШАПКА */}
+        {/* ШАПКА предпросмотра (совпадает со стилем PDF) */}
         <div style={S.header}>
-          <div className="logo">
+          <div>
             {logoDataURL ? (
               <img src={logoDataURL} alt="logo" style={{ width: 80, height: 80, objectFit: 'contain' }} />
             ) : (
@@ -435,7 +486,7 @@ export default function InvoicePage() {
 
           <div style={S.brandStack}>
             <div style={S.brandName}>Sim HVAC & Appliance repair</div>
-            <div style={{ ...S.muted, marginTop: 4 }}>
+            <div style={{ color: '#6b7280', marginTop: 4 }}>
               1587 E 19th St, Brooklyn, NY 11230 · (929) 412-9042 · simscopeinc@gmail.com
             </div>
           </div>
@@ -459,7 +510,6 @@ export default function InvoicePage() {
               onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
             />
           </div>
-
           <div style={S.pillWrap}>
             <div style={S.pill}>
               <div style={S.pillRow}>
@@ -552,6 +602,7 @@ export default function InvoicePage() {
             </div>
           </div>
         </div>
+
       </div>
     </div>
   );
