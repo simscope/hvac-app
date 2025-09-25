@@ -68,12 +68,14 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Справочники ---------- */
-const STATUS_OPTIONS = [
-  'recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено',
-];
-const PAYMENT_OPTIONS = ['—', 'cash', 'card', 'zelle', 'check'];
+const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено',];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
-
+const normalizePM = (v) => {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (!s || s === '—' || s === '-') return null;
+  return ['—','cash', 'zelle', 'card', 'check'].includes(s) ? s : null;
+};
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
@@ -780,5 +782,6 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
