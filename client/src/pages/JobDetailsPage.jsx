@@ -1,3 +1,4 @@
+// client/src/pages/JobDetailsPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -30,12 +31,9 @@ const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
 /* ---------- Edge helpers ---------- */
-// База для вызова функций (CORS-домен functions)
 function functionsBase() {
   return supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
 }
-
-// Вызов функции БЕЗ JWT (для функций с --no-verify-jwt)
 async function callEdgePublic(path, body) {
   const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
   const res = await fetch(url, {
@@ -49,10 +47,8 @@ async function callEdgePublic(path, body) {
   if (!res.ok) throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
   return json;
 }
-
-// Вызов функции С JWT (оставил для admin-delete-photo, если он проверяет токен)
 async function callEdgeAuth(path, body) {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session} } = await supabase.auth.getSession();
   const token = session?.access_token || '';
   const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
   const res = await fetch(url, {
@@ -72,14 +68,11 @@ const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', '
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Оплата ---------- */
-// допущенные значения; '-' = не оплачено
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
-// значение из БД в значение для селекта
 const pmToSelect = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
 };
-// значение из селекта в значение для сохранения в БД
 const pmToSave = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
@@ -286,7 +279,7 @@ export default function JobDetailsPage() {
       job_number: stringOrNull(job.job_number),
     };
 
-    // методы оплаты: сохраняем всегда, нормализуя; '-' = не оплачено
+    // методы оплаты
     payload.labor_payment_method = pmToSave(job.labor_payment_method);
     payload.scf_payment_method   = pmToSave(job.scf_payment_method);
 
@@ -307,28 +300,57 @@ export default function JobDetailsPage() {
   /* ---------- редактирование клиента ---------- */
   const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
-  const saveClient = async () => {
-    if (client.id || job?.client_id) {
-      const cid = client.id || job.client_id;
-      const { error } = await supabase.from('clients').update({
-        full_name: client.full_name || '', phone: client.phone || '', email: client.email || '', address: client.address || '',
-      }).eq('id', cid);
-      if (error) { alert('Не удалось сохранить клиента'); return; }
-      setClientDirty(false); alert('Клиент сохранён'); return;
-    }
-
+  const syncJobClientFields = async (cid, c) => {
+    // безопасно обновляем дубли в jobs, если такие колонки существуют
     const patch = {};
-    if ('client_name' in (job || {})) patch.client_name = client.full_name || '';
-    if ('client_phone' in (job || {})) patch.client_phone = client.phone || '';
-    if ('client_email' in (job || {})) patch.client_email = client.email || '';
-    if ('client_address' in (job || {})) patch.client_address = client.address || '';
-
+    if ('client_id' in (job || {})) patch.client_id = cid;
+    if ('client_name' in (job || {})) patch.client_name = c.full_name || '';
+    if ('client_phone' in (job || {})) patch.client_phone = c.phone || '';
+    if ('client_email' in (job || {})) patch.client_email = c.email || '';
+    if ('client_address' in (job || {})) patch.client_address = c.address || '';
     if (Object.keys(patch).length) {
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
-      if (error) { alert('Не удалось сохранить клиента в заявку'); return; }
-      setClientDirty(false); alert('Клиент сохранён');
-    } else {
-      alert('Нет client_id и колонок клиента в jobs — нечего сохранять.');
+      if (error) throw error;
+      setJob((prev) => ({ ...(prev || {}), ...patch }));
+    }
+  };
+
+  const saveClient = async () => {
+    const payload = {
+      full_name: client.full_name || '',
+      phone: client.phone || '',
+      email: client.email || '',
+      address: client.address || '',
+    };
+
+    try {
+      // 1) update существующего клиента
+      if (client.id || job?.client_id) {
+        const cid = client.id || job.client_id;
+        const { error } = await supabase.from('clients').update(payload).eq('id', cid);
+        if (error) throw error;
+        await syncJobClientFields(cid, payload);
+        setClient((p) => ({ ...p, id: cid }));
+        setClientDirty(false);
+        alert('Клиент сохранён');
+        return;
+      }
+
+      // 2) клиента нет — создаём и привязываем к заявке
+      const { data: created, error: insErr } = await supabase
+        .from('clients')
+        .insert(payload)
+        .select('id')
+        .single();
+      if (insErr) throw insErr;
+
+      const newId = created.id;
+      await syncJobClientFields(newId, payload);
+      setClient((p) => ({ ...p, id: newId }));
+      setClientDirty(false);
+      alert('Клиент создан и привязан к заявке');
+    } catch (e) {
+      alert(`Не удалось сохранить клиента: ${e.message || 'ошибка'}`);
     }
   };
 
@@ -404,7 +426,7 @@ export default function JobDetailsPage() {
     }
   };
 
-  // Удаление файла (функция auth + fallback)
+  // Удаление файла
   const delPhoto = async (name) => {
     if (!window.confirm('Удалить файл?')) return;
     try {
@@ -490,7 +512,7 @@ export default function JobDetailsPage() {
     try {
       await callEdgeAuth('admin-delete-invoice-bundle', {
         bucket: INVOICES_BUCKET,
-        key,              // точный ключ файла в Storage
+        key,
         db_id: item?.db_id || null,
         job_id: jobId,
         invoice_no: item?.invoice_no != null ? Number(item.invoice_no) : null,
@@ -507,7 +529,8 @@ export default function JobDetailsPage() {
 
   /* ---------- отображение ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
-  const isUnpaid = pmToSelect(job?.labor_payment_method) === '-';
+  const isUnpaidLabor = pmToSelect(job?.labor_payment_method) === '-';
+  const isUnpaidSCF   = (toNum(job?.scf) || 0) > 0 && pmToSelect(job?.scf_payment_method) === '-';
   const isRecall = String(job?.status || '').toLowerCase().trim() === 'recall';
 
   if (loading) {
@@ -556,19 +579,33 @@ export default function JobDetailsPage() {
 
               <div style={ROW}><div>SCF ($)</div><input style={INPUT} type="number" value={job.scf ?? ''} onChange={(e)=>setField('scf', toNum(e.target.value))} /></div>
 
+              <div style={ROW}>
+                <div>Оплата SCF</div>
+                <div>
+                  <select
+                    style={{ ...SELECT, border: `1px solid ${isUnpaidSCF ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidSCF ? '#fef2f2' : '#fff' }}
+                    value={pmToSelect(job.scf_payment_method)}
+                    onChange={(e) => setField('scf_payment_method', pmToSave(e.target.value))}
+                  >
+                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
+                  </select>
+                  {isUnpaidSCF && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>SCF не оплачено — выбери способ оплаты</div>}
+                </div>
+              </div>
+
               <div style={ROW}><div>Стоимость работы ($)</div><input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e)=>setField('labor_price', toNum(e.target.value))} /></div>
 
               <div style={ROW}>
                 <div>Оплата работы</div>
                 <div>
                   <select
-                    style={{ ...SELECT, border: `1px solid ${isUnpaid ? '#ef4444' : '#e5e7eb'}`, background: isUnpaid ? '#fef2f2' : '#fff' }}
+                    style={{ ...SELECT, border: `1px solid ${isUnpaidLabor ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidLabor ? '#fef2f2' : '#fff' }}
                     value={pmToSelect(job.labor_payment_method)}
                     onChange={(e) => setField('labor_payment_method', pmToSave(e.target.value))}
                   >
                     {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
                   </select>
-                  {isUnpaid && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Не оплачено — выбери способ оплаты</div>}
+                  {isUnpaidLabor && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Не оплачено — выбери способ оплаты</div>}
                 </div>
               </div>
 
@@ -622,6 +659,7 @@ export default function JobDetailsPage() {
                 <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
                 {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
               </div>
+              {job?.client_id && <div style={{ ...MUTED, fontSize: 12 }}>Привязан client_id: {String(job.client_id)}</div>}
             </div>
           </div>
 
