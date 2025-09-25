@@ -48,7 +48,7 @@ async function callEdgePublic(path, body) {
   return json;
 }
 async function callEdgeAuth(path, body) {
-  const { data: { session} } = await supabase.auth.getSession();
+  const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || '';
   const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
   const res = await fetch(url, {
@@ -68,6 +68,7 @@ const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', '
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Оплата ---------- */
+// допущенные значения; '-' = не оплачено
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
 const pmToSelect = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
@@ -88,7 +89,8 @@ const stringOrNull = (v) => {
 const normalizeEmail = (v) => {
   const s = (v ?? '').toString().trim();
   return s === '' ? null : s.toLowerCase();
-};function makeFrontUrl(path) {
+};
+function makeFrontUrl(path) {
   const base = window.location.origin;
   const isHash = window.location.href.includes('/#/');
   const clean = path.startsWith('/') ? path : `/${path}`;
@@ -286,7 +288,7 @@ export default function JobDetailsPage() {
       job_number: stringOrNull(job.job_number),
     };
 
-    // методы оплаты
+    // методы оплаты: '-' = не оплачено
     payload.labor_payment_method = pmToSave(job.labor_payment_method);
     payload.scf_payment_method   = pmToSave(job.scf_payment_method);
 
@@ -308,7 +310,6 @@ export default function JobDetailsPage() {
   const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
   const syncJobClientFields = async (cid, c) => {
-    // безопасно обновляем дубли в jobs, если такие колонки существуют
     const patch = {};
     if ('client_id' in (job || {})) patch.client_id = cid;
     if ('client_name' in (job || {})) patch.client_name = c.full_name || '';
@@ -323,41 +324,72 @@ export default function JobDetailsPage() {
   };
 
   const saveClient = async () => {
-     const payload = {
+    const payload = {
       full_name: stringOrNull(client.full_name) ?? '',
       phone: stringOrNull(client.phone) ?? '',
-      email: normalizeEmail(client.email),          // <-- ключевая правка
+      email: normalizeEmail(client.email),
       address: stringOrNull(client.address) ?? '',
     };
 
     try {
-      // 1) update существующего клиента
-     if (client.id || job?.client_id) {
+      // ===== 1) обновление существующего клиента
+      if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
-        const { data: updated, error } = await supabase
+
+        let updated = null;
+        const { data, error, status } = await supabase
           .from('clients')
           .update(payload)
           .eq('id', cid)
           .select('id, full_name, phone, email, address')
-          .single();
-        if (error) throw error;
+          .maybeSingle();
+
+        if (error && status !== 406) throw error;
+        updated = data;
+
+        // фолбэк на случай RLS/RETURNING=0
+        if (!updated) {
+          const r = await supabase
+            .from('clients')
+            .select('id, full_name, phone, email, address')
+            .eq('id', cid)
+            .maybeSingle();
+          updated = r.data ?? { id: cid, ...payload };
+        }
+
         await syncJobClientFields(cid, updated);
-        setClient({ id: cid, ...updated });
+        setClient({ id: cid, full_name: updated.full_name || '', phone: updated.phone || '', email: updated.email || null, address: updated.address || '' });
         setClientDirty(false);
         alert('Клиент сохранён');
         return;
       }
 
-      // 2) клиента нет — создаём и привязываем к заявке
-      const { data: created, error: insErr } = await supabase
+      // ===== 2) клиента нет — создаём и привязываем к заявке
+      const ins = await supabase
         .from('clients')
         .insert(payload)
         .select('id, full_name, phone, email, address')
-        .single();
-      if (insErr) throw insErr;
+        .maybeSingle();
+
+      let created = ins.data;
+
+      // если из-за RLS после insert ничего не вернулось — пытаемся найти по совпадению полей
+      if (!created) {
+        const find = await supabase
+          .from('clients')
+          .select('id, full_name, phone, email, address, created_at')
+          .eq('full_name', payload.full_name)
+          .eq('phone', payload.phone)
+          .eq('address', payload.address)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        created = find.data;
+      }
+      if (!created?.id) throw new Error('Создали клиента, но не удалось получить его id (RLS?)');
 
       const newId = created.id;
-       await syncJobClientFields(newId, created);
+      await syncJobClientFields(newId, created);
       setClient({ id: newId, full_name: created.full_name || '', phone: created.phone || '', email: created.email || null, address: created.address || '' });
       setClientDirty(false);
       alert('Клиент создан и привязан к заявке');
@@ -438,7 +470,7 @@ export default function JobDetailsPage() {
     }
   };
 
-  // Удаление файла
+  // Удаление файла (функция auth + fallback)
   const delPhoto = async (name) => {
     if (!window.confirm('Удалить файл?')) return;
     try {
@@ -524,7 +556,7 @@ export default function JobDetailsPage() {
     try {
       await callEdgeAuth('admin-delete-invoice-bundle', {
         bucket: INVOICES_BUCKET,
-        key,
+        key,              // точный ключ файла в Storage
         db_id: item?.db_id || null,
         job_id: jobId,
         invoice_no: item?.invoice_no != null ? Number(item.invoice_no) : null,
@@ -677,7 +709,7 @@ export default function JobDetailsPage() {
 
           {/* Инвойсы */}
           <div style={BOX}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between,', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Инвойсы (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>{invoicesLoading ? '...' : 'Обновить'}</button>
@@ -840,5 +872,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
