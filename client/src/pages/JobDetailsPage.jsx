@@ -80,8 +80,15 @@ const pmToSave = (v) => {
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
-const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
-function makeFrontUrl(path) {
+const stringOrNull = (v) => {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+};
+const normalizeEmail = (v) => {
+  const s = (v ?? '').toString().trim();
+  return s === '' ? null : s.toLowerCase();
+};function makeFrontUrl(path) {
   const base = window.location.origin;
   const isHash = window.location.href.includes('/#/');
   const clean = path.startsWith('/') ? path : `/${path}`;
@@ -316,21 +323,26 @@ export default function JobDetailsPage() {
   };
 
   const saveClient = async () => {
-    const payload = {
-      full_name: client.full_name || '',
-      phone: client.phone || '',
-      email: client.email || '',
-      address: client.address || '',
+     const payload = {
+      full_name: stringOrNull(client.full_name) ?? '',
+      phone: stringOrNull(client.phone) ?? '',
+      email: normalizeEmail(client.email),          // <-- ключевая правка
+      address: stringOrNull(client.address) ?? '',
     };
 
     try {
       // 1) update существующего клиента
-      if (client.id || job?.client_id) {
+     if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
-        const { error } = await supabase.from('clients').update(payload).eq('id', cid);
+        const { data: updated, error } = await supabase
+          .from('clients')
+          .update(payload)
+          .eq('id', cid)
+          .select('id, full_name, phone, email, address')
+          .single();
         if (error) throw error;
-        await syncJobClientFields(cid, payload);
-        setClient((p) => ({ ...p, id: cid }));
+        await syncJobClientFields(cid, updated);
+        setClient({ id: cid, ...updated });
         setClientDirty(false);
         alert('Клиент сохранён');
         return;
@@ -340,13 +352,13 @@ export default function JobDetailsPage() {
       const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
-        .select('id')
+        .select('id, full_name, phone, email, address')
         .single();
       if (insErr) throw insErr;
 
       const newId = created.id;
-      await syncJobClientFields(newId, payload);
-      setClient((p) => ({ ...p, id: newId }));
+       await syncJobClientFields(newId, created);
+      setClient({ id: newId, full_name: created.full_name || '', phone: created.phone || '', email: created.email || null, address: created.address || '' });
       setClientDirty(false);
       alert('Клиент создан и привязан к заявке');
     } catch (e) {
@@ -653,7 +665,7 @@ export default function JobDetailsPage() {
             <div style={{ display: 'grid', gap: 10 }}>
               <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
               <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
-              <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
+              Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
               <Row label="Адрес" value={client.address} onChange={(v) => setClientField('address', v)} />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
@@ -828,3 +840,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
