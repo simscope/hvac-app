@@ -1,4 +1,5 @@
 // client/src/pages/CalendarPage.jsx
+/* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import FullCalendar from '@fullcalendar/react';
@@ -7,6 +8,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
+/* ========== helpers ========== */
 // ''|null=>null; '123'=>123; иначе — строка (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
@@ -146,7 +148,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time,
+        start: j.appointment_time, // хранится в UTC → FullCalendar сам покажет в America/New_York
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -169,6 +171,8 @@ export default function CalendarPage() {
 
   /* ---------- обработчики DnD/клика ---------- */
   const handleEventDrop = async (info) => {
+    // ВАЖНО: timeZone календаря = America/New_York, FullCalendar отдаёт реальный UTC-инстант.
+    // toISOString() сохранит в БД корректный UTC, соответствующий NY-времени визуально.
     const id = info.event.id;
     const newStart = info.event.start?.toISOString() ?? null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
@@ -227,6 +231,9 @@ export default function CalendarPage() {
 
   const eventDidMount = (info) => {
     const { unpaid, isRecall } = info.event.extendedProps || {};
+    info.el.style.borderRadius = '10px';
+    info.el.style.boxShadow = '0 1px 0 rgba(0,0,0,0.04), 0 1px 8px rgba(0,0,0,0.06)';
+    info.el.style.padding = '2px 4px';
     if (unpaid) {
       info.el.style.borderStyle = 'dashed';
       info.el.style.borderWidth = '2px';
@@ -239,11 +246,27 @@ export default function CalendarPage() {
 
   /* ---------- UI ---------- */
   return (
-    <div style={{ padding: 16 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 12 }}>🗓 Календарь</h1>
+    <div style={{
+      padding: 16,
+      background: 'linear-gradient(180deg, #f7faff 0%, #ffffff 40%)'
+    }}>
+      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12, letterSpacing: 0.3 }}>🗓 Календарь</h1>
 
       {/* панель управления */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          marginBottom: 12,
+          flexWrap: 'wrap',
+          background: '#fff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
+          padding: 10,
+          boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 6px 16px rgba(0,0,0,0.04)'
+        }}
+      >
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Tab active={activeTech === 'all'} onClick={() => setActiveTech('all')}>Все техники</Tab>
           {techs.map((t) => (
@@ -258,7 +281,14 @@ export default function CalendarPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Поиск: клиент/адрес/№"
-            style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 10px', minWidth: 220 }}
+            style={{
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              padding: '8px 12px',
+              minWidth: 240,
+              outline: 'none',
+              boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03)'
+            }}
           />
           <select
             value={view}
@@ -267,7 +297,13 @@ export default function CalendarPage() {
               const api = calRef.current?.getApi?.();
               if (api) api.changeView(e.target.value);
             }}
-            style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 10px' }}
+            style={{
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              padding: '8px 12px',
+              background: '#fff',
+              outline: 'none'
+            }}
           >
             <option value="dayGridMonth">Месяц</option>
             <option value="timeGridWeek">Неделя</option>
@@ -278,17 +314,19 @@ export default function CalendarPage() {
 
       {/* без мастера */}
       <div style={{ marginBottom: 12 }}>
-        <div style={{ marginBottom: 6, fontWeight: 600 }}>Без мастера (перетащите на календарь выбранной вкладки мастера):</div>
+        <div style={{ marginBottom: 6, fontWeight: 700, color: '#111827' }}>
+          Без мастера <span style={{ color: '#6b7280', fontWeight: 500 }}>(перетащите на календарь выбранной вкладки мастера)</span>:
+        </div>
         <div
           ref={extRef}
           style={{
             display: 'flex',
             gap: 8,
             flexWrap: 'wrap',
-            padding: 8,
+            padding: 10,
             border: '1px dashed #e5e7eb',
-            borderRadius: 8,
-            background: '#fafafa',
+            borderRadius: 12,
+            background: '#fafafa'
           }}
         >
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— нет заявок —</div>}
@@ -310,14 +348,15 @@ export default function CalendarPage() {
                   minWidth: 280,
                   maxWidth: 420,
                   border: '1px solid #e5e7eb',
-                  borderRadius: 8,
+                  borderRadius: 12,
                   background: '#fff',
                   padding: '8px 10px',
                   cursor: 'grab',
+                  boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
                 }}
               >
-                <div style={{ fontWeight: 700 }}>#{j.job_number || j.id}</div>
-                <div style={{ color: '#111827', fontWeight: 600 }}>{getClientName(j)}</div>
+                <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
+                <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
                 {addr && (
                   <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
                 )}
@@ -330,45 +369,87 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      <FullCalendar
-        ref={calRef}
-        plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-        initialView={view}
-        headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
-        locale="ru"
-        height="72vh"
-        editable
-        eventStartEditable
-        eventDurationEditable={false}
-        droppable
-        dragScroll
-        longPressDelay={150}
-        allDaySlot={false}
-        events={events}
-        eventDrop={handleEventDrop}
-        eventReceive={handleEventReceive}
-        eventClick={handleEventClick}
-        eventContent={renderEventContent}
-        eventDidMount={eventDidMount}
-      />
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 12,
+          padding: 8,
+          boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 10px 20px rgba(0,0,0,0.04)'
+        }}
+      >
+        <FullCalendar
+          ref={calRef}
+          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+          initialView={view}
+          headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
+          locale="ru"
+
+          /* ===== ключевые настройки времени ===== */
+          timeZone="America/New_York"         // ВСЕГДА показывать в часовом поясе Нью-Йорка
+          slotMinTime="08:00:00"              // рабочий день с 08:00
+          slotMaxTime="20:00:00"              // до 20:00
+          businessHours={{
+            daysOfWeek: [0,1,2,3,4,5,6],     // все дни
+            startTime: '08:00',
+            endTime: '20:00',
+          }}
+          allDaySlot={false}
+          nowIndicator={true}
+          expandRows={true}
+          slotDuration="01:00:00"
+          slotLabelInterval="01:00"
+          slotLabelFormat={{ hour: '2-digit', minute: '2-digit' }}
+          dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
+          stickyHeaderDates={true}
+
+          /* ===== визуальные мелочи ===== */
+          height="72vh"
+          eventDisplay="block"
+          eventTimeFormat={{ hour: '2-digit', minute: '2-digit' }}
+          dragScroll
+          longPressDelay={150}
+          eventOverlap={true}
+          slotEventOverlap={false}
+
+          /* ===== DnD/редактирование ===== */
+          editable
+          eventStartEditable
+          eventDurationEditable={false}
+          droppable
+
+          /* ===== данные ===== */
+          events={events}
+
+          /* ===== колбэки ===== */
+          eventDrop={handleEventDrop}
+          eventReceive={handleEventReceive}
+          eventClick={handleEventClick}
+          eventContent={renderEventContent}
+          eventDidMount={eventDidMount}
+        />
+      </div>
 
       <Legend />
     </div>
   );
 }
 
+/* ========== small UI components ========== */
 function Tab({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
       style={{
-        padding: '6px 10px',
-        borderRadius: 8,
-        border: '1px solid #e5e7eb',
-        background: active ? '#2563eb' : '#fff',
+        padding: '8px 12px',
+        borderRadius: 999,
+        border: active ? '1px solid #1d4ed8' : '1px solid #e5e7eb',
+        background: active ? 'linear-gradient(180deg,#2563eb,#1d4ed8)' : '#fff',
         color: active ? '#fff' : '#111827',
-        fontWeight: 600,
+        fontWeight: 700,
         cursor: 'pointer',
+        boxShadow: active ? '0 6px 16px rgba(29,78,216,0.25)' : '0 1px 0 rgba(0,0,0,0.02)',
+        transition: 'all .15s ease',
       }}
     >
       {children}
@@ -383,19 +464,21 @@ function Legend() {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        padding: '2px 8px',
+        padding: '4px 10px',
         borderRadius: 999,
         background: bg,
         color: text,
         fontSize: 12,
         marginRight: 8,
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6)',
+        border: '1px solid rgba(0,0,0,0.04)'
       }}
     >
       ● {label}
     </span>
   );
   return (
-    <div style={{ marginTop: 8, color: '#6b7280', fontSize: 13 }}>
+    <div style={{ marginTop: 10, color: '#6b7280', fontSize: 13 }}>
       {item('#fee2e2', '#7f1d1d', 'ReCall')}
       {item('#fef9c3', '#854d0e', 'Диагностика')}
       {item('#e0f2fe', '#075985', 'В работе')}
