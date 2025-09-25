@@ -558,7 +558,7 @@ const saveJob = async () => {
                     value={job.payment_method ?? '—'}
                     onChange={(e) => setField('payment_method', e.target.value === '—' ? null : e.target.value)}
                   >
-                    {PAYMENT_OPTIONS.map((p) => (<option key={p} value={p}>{p}</option>))}
+                    {['—', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
                   </select>
                   {isUnpaid && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Не оплачено — выбери способ оплаты</div>}
                 </div>
@@ -782,6 +782,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
