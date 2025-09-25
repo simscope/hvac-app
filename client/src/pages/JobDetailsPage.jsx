@@ -68,7 +68,6 @@ const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', '
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Оплата ---------- */
-// допущенные значения; '-' = не оплачено
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
 const pmToSelect = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
@@ -288,7 +287,6 @@ export default function JobDetailsPage() {
       job_number: stringOrNull(job.job_number),
     };
 
-    // методы оплаты: '-' = не оплачено
     payload.labor_payment_method = pmToSave(job.labor_payment_method);
     payload.scf_payment_method   = pmToSave(job.scf_payment_method);
 
@@ -332,33 +330,26 @@ export default function JobDetailsPage() {
     };
 
     try {
-      // ===== 1) обновление существующего клиента
+      // ===== 1) update существующего клиента (без return=representation -> нет 406)
       if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
 
-        let updated = null;
-        const { data, error, status } = await supabase
+        const { error: upErr } = await supabase
           .from('clients')
           .update(payload)
-          .eq('id', cid)
+          .eq('id', cid);
+        if (upErr) throw upErr;
+
+        // дочитываем отдельным запросом (если RLS разрешает)
+        let q = supabase.from('clients')
           .select('id, full_name, phone, email, address')
-          .maybeSingle();
+          .eq('id', cid)
+          .limit(1);
+        const { data: updated } = await q.maybeSingle();
 
-        if (error && status !== 406) throw error;
-        updated = data;
-
-        // фолбэк на случай RLS/RETURNING=0
-        if (!updated) {
-          const r = await supabase
-            .from('clients')
-            .select('id, full_name, phone, email, address')
-            .eq('id', cid)
-            .maybeSingle();
-          updated = r.data ?? { id: cid, ...payload };
-        }
-
-        await syncJobClientFields(cid, updated);
-        setClient({ id: cid, full_name: updated.full_name || '', phone: updated.phone || '', email: updated.email || null, address: updated.address || '' });
+        const merged = updated ?? { id: cid, ...payload };
+        await syncJobClientFields(cid, merged);
+        setClient({ id: cid, full_name: merged.full_name || '', phone: merged.phone || '', email: merged.email || null, address: merged.address || '' });
         setClientDirty(false);
         alert('Клиент сохранён');
         return;
@@ -373,19 +364,23 @@ export default function JobDetailsPage() {
 
       let created = ins.data;
 
-      // если из-за RLS после insert ничего не вернулось — пытаемся найти по совпадению полей
+      // фолбэк: если RLS не вернул строку после insert, попробуем найти по полям
       if (!created) {
-        const find = await supabase
+        let qb = supabase
           .from('clients')
           .select('id, full_name, phone, email, address, created_at')
-          .eq('full_name', payload.full_name)
-          .eq('phone', payload.phone)
-          .eq('address', payload.address)
           .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        created = find.data;
+          .limit(1);
+
+        if (payload.email) qb = qb.eq('email', payload.email);
+        if (payload.phone) qb = qb.eq('phone', payload.phone);
+        if (payload.full_name) qb = qb.eq('full_name', payload.full_name);
+        if (payload.address) qb = qb.eq('address', payload.address);
+
+        const found = await qb.maybeSingle();
+        created = found.data || null;
       }
+
       if (!created?.id) throw new Error('Создали клиента, но не удалось получить его id (RLS?)');
 
       const newId = created.id;
@@ -556,7 +551,7 @@ export default function JobDetailsPage() {
     try {
       await callEdgeAuth('admin-delete-invoice-bundle', {
         bucket: INVOICES_BUCKET,
-        key,              // точный ключ файла в Storage
+        key,
         db_id: item?.db_id || null,
         job_id: jobId,
         invoice_no: item?.invoice_no != null ? Number(item.invoice_no) : null,
@@ -709,7 +704,7 @@ export default function JobDetailsPage() {
 
           {/* Инвойсы */}
           <div style={BOX}>
-            <div style={{ display: 'flex', justifyContent: 'space-between,', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Инвойсы (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>{invoicesLoading ? '...' : 'Обновить'}</button>
