@@ -68,14 +68,23 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Справочники ---------- */
-const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено',];
+const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
-const normalizePM = (v) => {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  if (!s || s === '—' || s === '-') return null;
-  return ['—','cash', 'zelle', 'card', 'check'].includes(s) ? s : null;
+
+/* ---------- Оплата ---------- */
+// допущенные значения; '-' = не оплачено
+const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
+// значение из БД в значение для селекта
+const pmToSelect = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  return PM_ALLOWED.includes(s) ? s : '-';
 };
+// значение из селекта в значение для сохранения в БД
+const pmToSave = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  return PM_ALLOWED.includes(s) ? s : '-';
+};
+
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
 const stringOrNull = (v) => (v === '' || v == null ? null : String(v));
@@ -257,45 +266,44 @@ export default function JobDetailsPage() {
 
   /* ---------- редактирование заявки ---------- */
   const setField = (k, v) => {
-  setJob((prev) => {
-    if (!prev) return prev;
-    const next = { ...prev, [k]: v };
-    setDirty(true);
-    return next;
-  });
-};
-
-const saveJob = async () => {
-  const payload = {
-    technician_id: normalizeId(job.technician_id),
-    appointment_time: job.appointment_time ?? null,
-    system_type: job.system_type || null,
-    issue: job.issue || null,
-    scf: toNum(job.scf),
-    labor_price: toNum(job.labor_price),
-    status: normalizeStatusForDb(job.status),
-    job_number: stringOrNull(job.job_number),
+    setJob((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [k]: v };
+      setDirty(true);
+      return next;
+    });
   };
 
-  // методы оплаты: пишем только если выбран валидный вариант
-  const laborPM = normalizePM(job.labor_payment_method);
-  const scfPM   = normalizePM(job.scf_payment_method);
-  if (laborPM) payload.labor_payment_method = laborPM;
-  if (scfPM)   payload.scf_payment_method   = scfPM;
+  const saveJob = async () => {
+    const payload = {
+      technician_id: normalizeId(job.technician_id),
+      appointment_time: job.appointment_time ?? null,
+      system_type: job.system_type || null,
+      issue: job.issue || null,
+      scf: toNum(job.scf),
+      labor_price: toNum(job.labor_price),
+      status: normalizeStatusForDb(job.status),
+      job_number: stringOrNull(job.job_number),
+    };
 
-  if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
-    payload.tech_comment = job.tech_comment || null;
-  }
+    // методы оплаты: сохраняем всегда, нормализуя; '-' = не оплачено
+    payload.labor_payment_method = pmToSave(job.labor_payment_method);
+    payload.scf_payment_method   = pmToSave(job.scf_payment_method);
 
-  try {
-    const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
-    if (error) throw error;
-    setDirty(false);
-    alert('Сохранено');
-  } catch (e) {
-    alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
-  }
-};
+    if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
+      payload.tech_comment = job.tech_comment || null;
+    }
+
+    try {
+      const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
+      if (error) throw error;
+      setDirty(false);
+      alert('Сохранено');
+    } catch (e) {
+      alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
+    }
+  };
+
   /* ---------- редактирование клиента ---------- */
   const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
@@ -499,7 +507,7 @@ const saveJob = async () => {
 
   /* ---------- отображение ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
-  const isUnpaid = !job?.payment_method || job.payment_method === '—';
+  const isUnpaid = pmToSelect(job?.labor_payment_method) === '-';
   const isRecall = String(job?.status || '').toLowerCase().trim() === 'recall';
 
   if (loading) {
@@ -555,10 +563,10 @@ const saveJob = async () => {
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isUnpaid ? '#ef4444' : '#e5e7eb'}`, background: isUnpaid ? '#fef2f2' : '#fff' }}
-                    value={job.payment_method ?? '—'}
-                    onChange={(e) => setField('payment_method', e.target.value === '—' ? null : e.target.value)}
+                    value={pmToSelect(job.labor_payment_method)}
+                    onChange={(e) => setField('labor_payment_method', pmToSave(e.target.value))}
                   >
-                    {['—', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
+                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
                   </select>
                   {isUnpaid && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Не оплачено — выбери способ оплаты</div>}
                 </div>
@@ -782,7 +790,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
-
-
