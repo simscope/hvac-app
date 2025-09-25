@@ -665,7 +665,7 @@ export default function JobDetailsPage() {
             <div style={{ display: 'grid', gap: 10 }}>
               <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
               <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
-              Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
+              <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
               <Row label="Адрес" value={client.address} onChange={(v) => setClientField('address', v)} />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
@@ -840,4 +840,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
