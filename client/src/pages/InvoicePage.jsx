@@ -41,8 +41,6 @@ const S = {
   invoiceTitle: { fontWeight: 800, fontSize: 30, color: '#444', letterSpacing: 1 },
   invoiceNo: { textAlign: 'right', color: '#6b7280' },
   sep: { height: 1, background: '#eef2f7', margin: '16px 0' },
-  metaRow: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 16, alignItems: 'center' },
-  metaLabel: { color: '#6b7280', fontWeight: 600 },
   pill: { borderRadius: 12, overflow: 'hidden', border: '1px solid #e5e7eb' },
   pillRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#f6f7fb' },
   pillCellLeft: { padding: '10px 12px', fontWeight: 700, color: '#333', textAlign: 'right' },
@@ -228,15 +226,14 @@ export default function InvoicePage() {
       } catch {}
 
       // Right column: Date + Balance Due + Bill To
-      const rightColW = 200;             // ← было 240. Меньше = правее.
-      const rightColX = pageW - marginX - rightColW;
+      const rightColW = 200;
       let rightY = 110;
       doc.setFont(undefined, 'bold'); doc.setTextColor(80);
-      doc.text('Date:', rightColX, rightY); doc.setFont(undefined,'normal'); doc.setTextColor(0);
-      doc.text(human(invoiceDate), rightColX + 40, rightY); rightY += 16;
+      doc.text('Date:', pageW - marginX - rightColW, rightY); doc.setFont(undefined,'normal'); doc.setTextColor(0);
+      doc.text(human(invoiceDate), pageW - marginX - rightColW + 40, rightY); rightY += 16;
 
       // Capsule
-      const pillW = 200, pillH = 40;     // ← держим вровень с колонкой
+      const pillW = 200, pillH = 40;
       doc.setDrawColor(229,231,235); doc.setFillColor(246,247,251);
       doc.roundedRect(pageW - marginX - pillW, rightY, pillW, pillH, 8, 8, 'FD');
       doc.setFont(undefined,'bold'); doc.setTextColor(70);
@@ -257,12 +254,22 @@ export default function InvoicePage() {
 
       // Table
       const tableStartY = Math.max(compTop, rightY) + 16;
-      const body = rows.map((r) => [
-        r.name || (r.type === 'service' ? 'Service' : 'Item'),
-        String(N(r.qty)),
-        `$${N(r.price).toFixed(2)}`,
-        `$${(N(r.qty) * N(r.price)).toFixed(2)}`,
-      ]);
+
+      // hide zeros in Qty/Price/Amount cells
+      const body = rows.map((r) => {
+        const qtyNum = N(r.qty);
+        const priceNum = N(r.price);
+        const qtyCell = qtyNum === 0 ? '' : String(qtyNum);
+        const priceCell = priceNum === 0 ? '' : `$${priceNum.toFixed(2)}`;
+        const amountCell = qtyNum === 0 || priceNum === 0 ? '' : `$${(qtyNum * priceNum).toFixed(2)}`;
+        return [
+          r.name || (r.type === 'service' ? 'Service' : 'Item'),
+          qtyCell,
+          priceCell,
+          amountCell,
+        ];
+      });
+
       autoTable(doc, {
         startY: tableStartY,
         head: [['Description','Qty','Unit Price','Amount']],
@@ -279,7 +286,13 @@ export default function InvoicePage() {
       const totalsRightX = pageW - marginX;
       doc.setFont(undefined,'bold');
       doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 16;
-      doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 18;
+
+      // show Discount only if > 0
+      if (N(discount) > 0) {
+        doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
+        endY += 18;
+      }
+
       doc.setFontSize(12);
       doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 22;
 
@@ -312,7 +325,6 @@ export default function InvoicePage() {
         });
         if (up.error) console.warn('Upload invoice PDF failed:', up.error);
 
-        // сохранение ключа в DB (если добавишь колонку file_key text)
         await supabase
           .from('invoices')
           .update({ file_key: storageKey })
@@ -487,4 +499,3 @@ export default function InvoicePage() {
     </div>
   );
 }
-
