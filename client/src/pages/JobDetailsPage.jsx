@@ -71,7 +71,7 @@ async function callEdgeAuth(path, body) {
 const STATUS_OPTIONS = [
   'recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено',
 ];
-const PAYMENT_OPTIONS = ['—', 'Наличные', 'cash', 'card', 'zelle', 'check'];
+const PAYMENT_OPTIONS = ['—', 'cash', 'card', 'zelle', 'check'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Хелперы ---------- */
@@ -254,32 +254,46 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- редактирование заявки ---------- */
-  const setField = (k, v) => { setJob((prev) => { if (!prev) return prev; const next = { ...prev, [k]: v }; setDirty(true); return next; }); };
+  const setField = (k, v) => {
+  setJob((prev) => {
+    if (!prev) return prev;
+    const next = { ...prev, [k]: v };
+    setDirty(true);
+    return next;
+  });
+};
 
-  const saveJob = async () => {
-    const payload = {
-      technician_id: normalizeId(job.technician_id),
-      appointment_time: job.appointment_time ?? null,
-      system_type: job.system_type || null,
-      issue: job.issue || null,
-      scf: toNum(job.scf),
-      labor_price: toNum(job.labor_price),
-      payment_method: !job.payment_method || job.payment_method === '—' ? null : String(job.payment_method),
-      status: normalizeStatusForDb(job.status),
-      job_number: stringOrNull(job.job_number),
-    };
-    if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) payload.tech_comment = job.tech_comment || null;
-
-    try {
-      const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
-      if (error) throw error;
-      setDirty(false);
-      alert('Сохранено');
-    } catch (e) {
-      alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
-    }
+const saveJob = async () => {
+  const payload = {
+    technician_id: normalizeId(job.technician_id),
+    appointment_time: job.appointment_time ?? null,
+    system_type: job.system_type || null,
+    issue: job.issue || null,
+    scf: toNum(job.scf),
+    labor_price: toNum(job.labor_price),
+    status: normalizeStatusForDb(job.status),
+    job_number: stringOrNull(job.job_number),
   };
 
+  // методы оплаты: пишем только если выбран валидный вариант
+  const laborPM = normalizePM(job.labor_payment_method);
+  const scfPM   = normalizePM(job.scf_payment_method);
+  if (laborPM) payload.labor_payment_method = laborPM;
+  if (scfPM)   payload.scf_payment_method   = scfPM;
+
+  if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
+    payload.tech_comment = job.tech_comment || null;
+  }
+
+  try {
+    const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
+    if (error) throw error;
+    setDirty(false);
+    alert('Сохранено');
+  } catch (e) {
+    alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
+  }
+};
   /* ---------- редактирование клиента ---------- */
   const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
@@ -766,4 +780,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
