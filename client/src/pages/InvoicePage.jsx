@@ -36,7 +36,6 @@ const S = {
   ghost: { padding: '9px 14px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#f8fafc', cursor: 'pointer' },
   card: { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 16, padding: 24, boxShadow: '0 2px 24px rgba(0,0,0,0.04)' },
   header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 16 },
-  brandStack: { display: 'flex', flexDirection: 'column' },
   brandName: { fontWeight: 700, fontSize: 16 },
   invoiceTitle: { fontWeight: 800, fontSize: 30, color: '#444', letterSpacing: 1 },
   invoiceNo: { textAlign: 'right', color: '#6b7280' },
@@ -255,8 +254,8 @@ export default function InvoicePage() {
       // Table
       const tableStartY = Math.max(compTop, rightY) + 16;
 
-      // hide zeros in Qty/Price/Amount cells
-      const body = rows.map((r) => {
+      // helper: форматирование одной строки с подавлением нулей
+      const toPdfRow = (r) => {
         const qtyNum = N(r.qty);
         const priceNum = N(r.price);
         const qtyCell = qtyNum === 0 ? '' : String(qtyNum);
@@ -268,7 +267,21 @@ export default function InvoicePage() {
           priceCell,
           amountCell,
         ];
-      });
+      };
+
+      const services = rows.filter(r => r.type === 'service');
+      const materials = rows.filter(r => r.type === 'material');
+
+      const body = [];
+      if (services.length) {
+        body.push([{ content: 'Services', colSpan: 4, styles: { fillColor: [238,242,247], fontStyle: 'bold', halign: 'left' } }]);
+        services.forEach(r => body.push(toPdfRow(r)));
+      }
+      if (materials.length) {
+        if (services.length) body.push([{ content: ' ', colSpan: 4, styles: { fillColor: [255,255,255], lineWidth: 0 } }]); // небольшой пустой разделитель
+        body.push([{ content: 'Materials', colSpan: 4, styles: { fillColor: [238,242,247], fontStyle: 'bold', halign: 'left' } }]);
+        materials.forEach(r => body.push(toPdfRow(r)));
+      }
 
       autoTable(doc, {
         startY: tableStartY,
@@ -287,8 +300,7 @@ export default function InvoicePage() {
       doc.setFont(undefined,'bold');
       doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 16;
 
-      // show Discount only if > 0
-      if (N(discount) > 0) {
+      if (N(discount) > 0) { // Discount только если > 0
         doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
         endY += 18;
       }
