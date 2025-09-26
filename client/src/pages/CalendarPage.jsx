@@ -106,7 +106,8 @@ export default function CalendarPage() {
     job?.address ||
     '';
 
-  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.payment_method;
+  // FIX: корректные проверки неоплаты
+  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
   const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
   const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
 
@@ -148,7 +149,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // хранится в UTC → FullCalendar сам покажет в America/New_York
+        start: j.appointment_time, // ISO-UTC из БД; FullCalendar (timeZone="America/New_York") сам отрисует корректно
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -171,8 +172,7 @@ export default function CalendarPage() {
 
   /* ---------- обработчики DnD/клика ---------- */
   const handleEventDrop = async (info) => {
-    // ВАЖНО: timeZone календаря = America/New_York, FullCalendar отдаёт реальный UTC-инстант.
-    // toISOString() сохранит в БД корректный UTC, соответствующий NY-времени визуально.
+    // timeZone календаря = America/New_York → start — реальный local NY, .toISOString() = UTC для БД
     const id = info.event.id;
     const newStart = info.event.start?.toISOString() ?? null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
@@ -386,11 +386,11 @@ export default function CalendarPage() {
           locale="ru"
 
           /* ===== ключевые настройки времени ===== */
-          timeZone="America/New_York"         // ВСЕГДА показывать в часовом поясе Нью-Йорка
+          timeZone="America/New_York"         // ВСЕГДА показывать и редактировать в часовом поясе Нью-Йорка
           slotMinTime="08:00:00"              // рабочий день с 08:00
           slotMaxTime="20:00:00"              // до 20:00
           businessHours={{
-            daysOfWeek: [0,1,2,3,4,5,6],     // все дни
+            daysOfWeek: [0,1,2,3,4,5,6],
             startTime: '08:00',
             endTime: '20:00',
           }}
