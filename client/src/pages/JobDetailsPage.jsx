@@ -5,6 +5,17 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
+// --- TZ: New York (all UI works in NY, DB stores UTC) ---
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
+dayjs.extend(utc);
+dayjs.extend(timezone);
+const NY_TZ = 'America/New_York';
+const toNYInput = (iso) => (iso ? dayjs(iso).tz(NY_TZ).format('YYYY-MM-DDTHH:mm') : '');
+const fromNYInput = (v) => (v ? dayjs.tz(v, 'YYYY-MM-DDTHH:mm', NY_TZ).utc().toISOString() : null);
+const formatNY = (iso, mask = 'DD.MM.YYYY HH:mm') => (iso ? dayjs(iso).tz(NY_TZ).format(mask) : '');
+
 /* ---------- UI ---------- */
 const PAGE = { padding: 16, display: 'grid', gap: 12 };
 const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
@@ -78,13 +89,7 @@ function makeFrontUrl(path) {
   const clean = path.startsWith('/') ? path : `/${path}`;
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
-const toLocal = (iso) => {
-  if (!iso) return '';
-  const d = new Date(iso); if (Number.isNaN(d.getTime())) return '';
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-};
-const fromLocal = (v) => { if (!v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
+// (старые локальные функции удалены, используем NY-варианты)
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
 
@@ -314,14 +319,13 @@ export default function JobDetailsPage() {
     };
 
     try {
-      // === UPDATE существующего клиента (никаких .select() после update!)
+      // === UPDATE существующего клиента
       if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
 
         const { error: upErr } = await supabase.from('clients').update(payload).eq('id', cid);
         if (upErr) throw upErr;
 
-        // дочитать свежие данные отдельным запросом
         const { data: fresh, error: selErr } = await supabase
           .from('clients')
           .select('id, full_name, phone, email, address')
@@ -344,7 +348,7 @@ export default function JobDetailsPage() {
         return;
       }
 
-      // === INSERT нового клиента (здесь .select().single() ОК)
+      // === INSERT нового клиента
       const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
@@ -579,7 +583,12 @@ export default function JobDetailsPage() {
 
               <div style={ROW}>
                 <div>Дата визита</div>
-                <input style={INPUT} type="datetime-local" value={toLocal(job.appointment_time)} onChange={(e)=>setField('appointment_time', fromLocal(e.target.value))}/>
+                <input
+                  style={INPUT}
+                  type="datetime-local"
+                  value={toNYInput(job.appointment_time)}
+                  onChange={(e) => setField('appointment_time', fromNYInput(e.target.value))}
+                />
               </div>
 
               <div style={ROW}>
@@ -701,7 +710,7 @@ export default function JobDetailsPage() {
                         {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
                         {!inv.hasFile && (<span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF ещё не в хранилище)</span>)}
                       </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? formatNY(inv.updated_at) : ''}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" style={BTN} onClick={() => openInvoice(inv)}>Открыть PDF</button>
@@ -757,7 +766,7 @@ export default function JobDetailsPage() {
                 <div style={MUTED}>Пока нет комментариев</div>
               ) : (
                 comments.map((c) => {
-                  const when = new Date(c.created_at).toLocaleString();
+                  const when = formatNY(c.created_at);
                   const who = c.author_name || '—';
                   return (
                     <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
