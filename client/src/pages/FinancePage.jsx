@@ -141,25 +141,27 @@ const FinancePage = () => {
   }, [jobs, filterTech, filterPeriod, filterPaid]);
 
  // ===== row math =====
-// Зарплата = 0.5*payLabor + (payLabor>0 ? payScf : (payScf>0 ? 50 : 0)) - materials
+// Учитываем только суммы с выбранным способом оплаты.
+// Зарплата =
+//   если payLabor == 0 и payScf > 0 -> 50
+//   иначе 50% * max(0, (payLabor + payScf - materials))
 const calcRow = (j) => {
   const scf = Number(j.scf || 0);
   const labor = Number(j.labor_price || 0);
   const materials = Number(materialsSum[j.id] || 0);
 
-  // учитываем только если выбран способ оплаты
   const payLabor = String(j.labor_payment_method || '').trim() ? labor : 0;
   const payScf   = String(j.scf_payment_method || '').trim()   ? scf   : 0;
 
-  // часть SCF для зарплаты: если оплата работы не выбрана/0, но есть оплаченный SCF — фикс $50
-  const scfPart = payLabor > 0 ? payScf : (payScf > 0 ? 50 : 0);
+  const onlyScf = payLabor === 0 && payScf > 0;
 
-  // итог по строке «для денег» (тоже только оплаченные компоненты)
+  const base = payLabor + payScf - materials;
+  const salary = onlyScf ? 50 : 0.5 * Math.max(0, base);
+
+  // "Итого (только с оплатой)" по строке — без деталей
   const totalCounted = payLabor + payScf;
 
-  const salary = 0.5 * payLabor + scfPart - materials;
-
-  return { scf, labor, materials, total: totalCounted, salary, scfPart };
+  return { scf, labor, materials, total: totalCounted, salary, scfPart: onlyScf ? 50 : payScf };
 };
 
   // ===== money report =====
@@ -552,3 +554,4 @@ const calcRow = (j) => {
 };
 
 export default FinancePage;
+
