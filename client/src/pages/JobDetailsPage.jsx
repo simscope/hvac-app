@@ -5,17 +5,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-// --- TZ: New York (all UI works in NY, DB stores UTC) ---
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import timezone from 'dayjs/plugin/timezone';
-dayjs.extend(utc);
-dayjs.extend(timezone);
-const NY_TZ = 'America/New_York';
-const toNYInput = (iso) => (iso ? dayjs(iso).tz(NY_TZ).format('YYYY-MM-DDTHH:mm') : '');
-const fromNYInput = (v) => (v ? dayjs.tz(v, 'YYYY-MM-DDTHH:mm', NY_TZ).utc().toISOString() : null);
-const formatNY = (iso, mask = 'DD.MM.YYYY HH:mm') => (iso ? dayjs(iso).tz(NY_TZ).format(mask) : '');
-
 /* ---------- UI ---------- */
 const PAGE = { padding: 16, display: 'grid', gap: 12 };
 const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
@@ -89,9 +78,57 @@ function makeFrontUrl(path) {
   const clean = path.startsWith('/') ? path : `/${path}`;
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
-// (старые локальные функции удалены, используем NY-варианты)
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
+
+/* ---------- NYC time helpers (вместо старых toLocal/fromLocal) ---------- */
+const NY_TZ = 'America/New_York';
+
+// ISO (UTC) из БД → значение для <input type="datetime-local"> в часовом поясе Нью-Йорка
+function nyInputFromIso(isoUtc) {
+  if (!isoUtc) return '';
+  const d = new Date(isoUtc);
+  if (Number.isNaN(d.getTime())) return '';
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: NY_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(d).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+// строка из <input type="datetime-local"> как НЬЮ-ЙОРКСКОЕ локальное время → ISO UTC для БД
+function isoFromNyInput(input) {
+  if (!input) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(input).trim());
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]), h = Number(m[4]), mi = Number(m[5]);
+
+  // первичная UTC-гипотеза
+  let utcMs = Date.UTC(y, mo - 1, d, h, mi, 0, 0);
+
+  const offsetMinAt = (whenMs) => {
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: NY_TZ, timeZoneName: 'shortOffset' });
+    const tz = fmt.formatToParts(new Date(whenMs)).find(p => p.type === 'timeZoneName')?.value || 'GMT+0';
+    const mm = /GMT([+-]\d{1,2})(?::?(\d{2}))?/.exec(tz);
+    if (!mm) return 0;
+    const sign = mm[1].startsWith('-') ? -1 : 1;
+    const hh = Math.abs(parseInt(mm[1], 10));
+    const m2 = mm[2] ? parseInt(mm[2], 10) : 0;
+    return sign * (hh * 60 + m2);
+  };
+
+  // учитываем смещение (DST)
+  let off1 = offsetMinAt(utcMs);
+  utcMs = Date.UTC(y, mo - 1, d, h, mi) - off1 * 60_000;
+  const off2 = offsetMinAt(utcMs);
+  if (off2 !== off1) {
+    utcMs = Date.UTC(y, mo - 1, d, h, mi) - off2 * 60_000;
+  }
+
+  return new Date(utcMs).toISOString();
+}
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
@@ -267,7 +304,7 @@ export default function JobDetailsPage() {
   const saveJob = async () => {
     const payload = {
       technician_id: normalizeId(job.technician_id),
-      appointment_time: job.appointment_time ?? null,
+      appointment_time: job.appointment_time ?? null, // уже ISO (UTC) из isoFromNyInput
       system_type: job.system_type || null,
       issue: job.issue || null,
       scf: toNum(job.scf),
@@ -319,13 +356,14 @@ export default function JobDetailsPage() {
     };
 
     try {
-      // === UPDATE существующего клиента
+      // === UPDATE существующего клиента (никаких .select() после update!)
       if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
 
         const { error: upErr } = await supabase.from('clients').update(payload).eq('id', cid);
         if (upErr) throw upErr;
 
+        // дочитать свежие данные отдельным запросом
         const { data: fresh, error: selErr } = await supabase
           .from('clients')
           .select('id, full_name, phone, email, address')
@@ -348,7 +386,7 @@ export default function JobDetailsPage() {
         return;
       }
 
-      // === INSERT нового клиента
+      // === INSERT нового клиента (здесь .select().single() ОК)
       const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
@@ -586,8 +624,8 @@ export default function JobDetailsPage() {
                 <input
                   style={INPUT}
                   type="datetime-local"
-                  value={toNYInput(job.appointment_time)}
-                  onChange={(e) => setField('appointment_time', fromNYInput(e.target.value))}
+                  value={nyInputFromIso(job.appointment_time)}
+                  onChange={(e) => setField('appointment_time', isoFromNyInput(e.target.value))}
                 />
               </div>
 
@@ -710,7 +748,7 @@ export default function JobDetailsPage() {
                         {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
                         {!inv.hasFile && (<span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF ещё не в хранилище)</span>)}
                       </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? formatNY(inv.updated_at) : ''}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" style={BTN} onClick={() => openInvoice(inv)}>Открыть PDF</button>
@@ -766,7 +804,7 @@ export default function JobDetailsPage() {
                 <div style={MUTED}>Пока нет комментариев</div>
               ) : (
                 comments.map((c) => {
-                  const when = formatNY(c.created_at);
+                  const when = new Date(c.created_at).toLocaleString();
                   const who = c.author_name || '—';
                   return (
                     <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
