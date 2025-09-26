@@ -5,26 +5,57 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-/* ===== Timezone (NY) via dayjs ===== */
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import tz from 'dayjs/plugin/timezone';
-dayjs.extend(utc);
-dayjs.extend(tz);
+/* ===== Timezone helpers (America/New_York) ===== */
 const NY_TZ = 'America/New_York';
-const nyInputFromIso = (iso) => {
+
+// ISO (UTC) → строка для <input type="datetime-local"> в NY: "YYYY-MM-DDTHH:mm"
+function nyInputFromIso(iso) {
   if (!iso) return '';
-  const d = dayjs(iso);
-  if (!d.isValid()) return '';
-  // Для <input type="datetime-local">
-  return d.tz(NY_TZ).format('YYYY-MM-DDTHH:mm');
-};
-const isoFromNyInput = (val) => {
-  if (!val) return null;
-  // val — локальное NY время из инпута → конвертим в UTC ISO для timestamptz
-  const d = dayjs.tz(val, 'YYYY-MM-DDTHH:mm', NY_TZ);
-  return d.isValid() ? d.utc().toISOString() : null;
-};
+  const date = new Date(iso);
+  if (isNaN(date)) return '';
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: NY_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+// строка из <input type="datetime-local"> (NY) → UTC ISO для timestamptz
+function isoFromNyInput(val) {
+  if (!val) return null; // "YYYY-MM-DDTHH:mm"
+  const [datePart, timePart] = val.split('T');
+  if (!datePart || !timePart) return null;
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [H, M]   = timePart.split(':').map(Number);
+  if ([y,m,d,H,M].some(n => Number.isNaN(n))) return null;
+
+  // 1) "Фейковое" UTC время с теми же компонентами
+  const fakeUtcMs = Date.UTC(y, (m - 1), d, H, M, 0, 0);
+
+  // 2) Узнаём смещение зоны NY для этого момента (в минутах), парся "GMT-4"/"GMT-5"
+  const tzName = new Intl.DateTimeFormat('en-US', {
+    timeZone: NY_TZ,
+    timeZoneName: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(fakeUtcMs)).find(p => p.type === 'timeZoneName')?.value || 'GMT-0';
+
+  const mOffset = (() => {
+    const m = tzName.match(/GMT([+-]\d{1,2})(?::?(\d{2}))?/i);
+    if (!m) return 0;
+    const sign = m[1].startsWith('-') ? -1 : 1;
+    const hh = Math.abs(parseInt(m[1], 10));
+    const mm = m[2] ? parseInt(m[2], 10) : 0;
+    return sign * (hh * 60 + mm);
+  })();
+
+  // 3) Реальное UTC: "NY wall time" минус смещение зоны
+  const realUtcMs = fakeUtcMs - (mOffset * 60 * 1000);
+  return new Date(realUtcMs).toISOString();
+}
 
 /* ---------- UI ---------- */
 const PAGE = { padding: 16, display: 'grid', gap: 12 };
@@ -58,8 +89,7 @@ async function callEdgeAuth(path, body) {
   const token = session?.access_token || '';
   const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
   const res = await fetch(url, {
-    method: 'POST',
-    mode: 'cors',
+    method: 'POST', mode: 'cors',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body ?? {}),
   });
@@ -75,14 +105,8 @@ const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Оплата ---------- */
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
-const pmToSelect = (v) => {
-  const s = String(v ?? '').trim().toLowerCase();
-  return PM_ALLOWED.includes(s) ? s : '-';
-};
-const pmToSave = (v) => {
-  const s = String(v ?? '').trim().toLowerCase();
-  return PM_ALLOWED.includes(s) ? s : '-';
-};
+const pmToSelect = (v) => { const s = String(v ?? '').trim().toLowerCase(); return PM_ALLOWED.includes(s) ? s : '-'; };
+const pmToSave   = (v) => { const s = String(v ?? '').trim().toLowerCase(); return PM_ALLOWED.includes(s) ? s : '-'; };
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
