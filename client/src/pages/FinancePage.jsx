@@ -29,7 +29,7 @@ const FinancePage = () => {
     LABOR_PAY: 120,
     MATERIALS: 100,
     TOTAL: 120,
-    SALARY: 170,
+    SALARY: 190,
     PAID: 130,
     ACTION: 150,
   };
@@ -69,17 +69,15 @@ const FinancePage = () => {
     if (['zelle'].includes(v)) return 'Zelle';
     if (['card', 'карта'].includes(v)) return 'Карта';
     if (['check', 'чек'].includes(v)) return 'Чек';
-    // любые другие значения показываем как есть
     return String(raw);
   };
-  const methodChosen = (raw) => String(raw ?? '').trim() !== ''; // выбран ли способ оплаты
+  const methodChosen = (raw) => String(raw ?? '').trim() !== '';
   const formatMoney = (n) => `$${(Number.isFinite(Number(n)) ? Number(n) : 0).toFixed(2)}`;
   const getTechnicianName = (id) => {
     const tech = technicians.find((t) => String(t.id) === String(id));
     return tech ? tech.name : '—';
   };
   const collectStatuses = (j) => {
-    // показываем любые найденные статусные поля, но ничего не меняем
     const keys = ['status', 'job_status', 'state', 'stage', 'payment_status', 'warranty_status'];
     const vals = keys.map((k) => (j?.[k] ? String(j[k]).trim() : '')).filter(Boolean);
     return vals.length ? [...new Set(vals)].join(' • ') : '—';
@@ -142,22 +140,30 @@ const FinancePage = () => {
     });
   }, [jobs, filterTech, filterPeriod, filterPaid]);
 
-  // ===== row math =====
-  // Новая формула: 0.5*labor + SCF; если labor = 0 и SCF > 0 -> вместо SCF берём $50.
-  const calcRow = (j) => {
-    const scf = Number(j.scf || 0);
-    const labor = Number(j.labor_price || 0);
-    const materials = Number(materialsSum[j.id] || 0);
-    const total = scf + labor;
+ // ===== row math =====
+// Зарплата = 0.5*payLabor + (payLabor>0 ? payScf : (payScf>0 ? 50 : 0)) - materials
+const calcRow = (j) => {
+  const scf = Number(j.scf || 0);
+  const labor = Number(j.labor_price || 0);
+  const materials = Number(materialsSum[j.id] || 0);
 
-    const scfPart = labor > 0 ? scf : (scf > 0 ? 50 : 0);
-    const salary = 0.5 * labor + scfPart; // материалы НЕ вычитаем по новому ТЗ
+  // учитываем только если выбран способ оплаты
+  const payLabor = String(j.labor_payment_method || '').trim() ? labor : 0;
+  const payScf   = String(j.scf_payment_method || '').trim()   ? scf   : 0;
 
-    return { scf, labor, materials, total, salary, scfPart };
-  };
+  // часть SCF для зарплаты: если оплата работы не выбрана/0, но есть оплаченный SCF — фикс $50
+  const scfPart = payLabor > 0 ? payScf : (payScf > 0 ? 50 : 0);
+
+  // итог по строке «для денег» (тоже только оплаченные компоненты)
+  const totalCounted = payLabor + payScf;
+
+  const salary = 0.5 * payLabor + scfPart - materials;
+
+  return { scf, labor, materials, total: totalCounted, salary, scfPart };
+};
 
   // ===== money report =====
-  // Если не выбран способ оплаты — эту сумму не считаем (её "денег нет").
+  // Учитываем только суммы, где выбран способ оплаты.
   const moneyReport = useMemo(() => {
     const buckets = { 'Наличные': 0, 'Zelle': 0, 'Чек': 0, 'Карта': 0, 'Другое': 0 };
     filteredJobs.forEach((j) => {
@@ -189,7 +195,7 @@ const FinancePage = () => {
         'Оплата работы': normalizePaymentLabel(j.labor_payment_method),
         'Детали (сумма)': materials,
         'Итого (SCF+Работа)': total,
-        'Зарплата (0.5*Раб + SCF|50)': salary,
+        'Зарплата (0.5*Раб + SCF|50 - Детали)': salary,
         'Счётная часть SCF для ЗП': scfPart,
         'Выплачено': j.salary_paid ? 'Да' : 'Нет',
         'Дата выплаты': j.salary_paid_at || '',
@@ -303,7 +309,7 @@ const FinancePage = () => {
   };
 
   // ===== totals =====
-  // Общая сумма «денег» тоже учитывает способы оплаты
+  // Общая сумма «денег» учитывает только строки с выбранным способом оплаты
   const overallTotal = useMemo(() => {
     return filteredJobs.reduce((acc, j) => {
       const { scf, labor } = calcRow(j);
@@ -377,16 +383,6 @@ const FinancePage = () => {
           >
             Выплатить выбранным
           </button>
-          <button
-            onClick={() => bulkUnpay(selected)}
-            disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
-            style={{ ...btn, background: '#ef4444', color: '#fff' }}
-          >
-            Отменить выплату выбранным
-          </button>
-          <span style={{ color: '#6b7280', fontSize: 13 }}>
-            Выбрано: {selectedPaidCount.total} (выплаченных: {selectedPaidCount.paid}, невыплаченных: {selectedPaidCount.unpaid})
-          </span>
         </div>
 
         <button onClick={handleExport} style={{ ...btn, background: '#16a34a', color: '#fff' }}>
@@ -418,9 +414,18 @@ const FinancePage = () => {
               <th style={thStyle(COL.SEL, 'center')}>
                 <input
                   type="checkbox"
-                  checked={allVisibleSelected}
-                  onChange={toggleSelectAllVisible}
-                  title={allVisibleSelected ? 'Снять выделение со всех' : 'Выделить все на странице'}
+                  checked={filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id))}
+                  onChange={() => {
+                    if (filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id))) {
+                      const next = new Set(selected);
+                      filteredJobs.forEach((j) => next.delete(j.id));
+                      setSelected(next);
+                    } else {
+                      const next = new Set(selected);
+                      filteredJobs.forEach((j) => next.add(j.id));
+                      setSelected(next);
+                    }
+                  }}
                 />
               </th>
               <th style={thStyle(COL.JOB)}>Job #</th>
@@ -432,7 +437,7 @@ const FinancePage = () => {
               <th style={thStyle(COL.LABOR_PAY)}>Оплата работы</th>
               <th style={thStyle(COL.MATERIALS, 'right')}>Детали</th>
               <th style={thStyle(COL.TOTAL, 'right')}>Итого (только с оплатой)</th>
-              <th style={thStyle(COL.SALARY, 'right')}>Зарплата (0.5*Раб + SCF|50)</th>
+              <th style={thStyle(COL.SALARY, 'right')}>Зарплата (0.5*Раб + SCF|50 − Детали)</th>
               <th style={thStyle(COL.PAID, 'center')}>Выплачено</th>
               <th style={thStyle(COL.ACTION, 'center')}>Действие</th>
             </tr>
@@ -443,12 +448,6 @@ const FinancePage = () => {
               const { scf, labor, materials, salary } = calcRow(j);
               const paid = !!j.salary_paid;
 
-              const scfShown = formatMoney(scf);
-              const laborShown = formatMoney(labor);
-              const scfPM = normalizePaymentLabel(j.scf_payment_method);
-              const laborPM = normalizePaymentLabel(j.labor_payment_method);
-
-              // Итого по строке: только суммы, где выбран метод оплаты
               const totalCounted =
                 (methodChosen(j.scf_payment_method) ? scf : 0) +
                 (methodChosen(j.labor_payment_method) ? labor : 0);
@@ -456,30 +455,31 @@ const FinancePage = () => {
               return (
                 <tr key={j.id} style={{ background: paid ? '#ecfdf5' : 'transparent' }}>
                   <td style={{ ...tdStyle(COL.SEL, 'center') }}>
-                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleRow(j.id)} />
+                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => {
+                      const next = new Set(selected);
+                      if (next.has(j.id)) next.delete(j.id); else next.add(j.id);
+                      setSelected(next);
+                    }} />
                   </td>
                   <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
                   <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
                   <td style={tdStyle(COL.STATUS)}>{collectStatuses(j)}</td>
 
-                  <td style={tdStyle(COL.SCF, 'right')}>{scfShown}</td>
-                  <td style={tdStyle(COL.SCF_PAY)}>{scfPM}</td>
+                  <td style={tdStyle(COL.SCF, 'right')}>{formatMoney(scf)}</td>
+                  <td style={tdStyle(COL.SCF_PAY)}>{normalizePaymentLabel(j.scf_payment_method)}</td>
 
-                  <td style={tdStyle(COL.LABOR, 'right')}>{laborShown}</td>
-                  <td style={tdStyle(COL.LABOR_PAY)}>{laborPM}</td>
+                  <td style={tdStyle(COL.LABOR, 'right')}>{formatMoney(labor)}</td>
+                  <td style={tdStyle(COL.LABOR_PAY)}>{normalizePaymentLabel(j.labor_payment_method)}</td>
 
                   <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
-
                   <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>
                     {formatMoney(totalCounted)}
                   </td>
-
                   <td style={tdStyle(COL.SALARY, 'right')}>
                     {paid && Number(j.salary_paid_amount) > 0
                       ? `${formatMoney(j.salary_paid_amount)} (снапшот)`
                       : formatMoney(salary)}
                   </td>
-
                   <td style={{ ...tdStyle(COL.PAID, 'center') }}>
                     {paid ? (
                       <div style={{ display: 'grid', gap: 2 }}>
@@ -495,13 +495,11 @@ const FinancePage = () => {
                       'Нет'
                     )}
                   </td>
-
                   <td style={{ ...tdStyle(COL.ACTION, 'center') }}>
                     {!paid ? (
                       <button
                         onClick={() => markPaid(j)}
                         style={{ ...btn, background: '#2563eb', color: '#fff' }}
-                        title="Пометить как выплаченное с фиксацией суммы"
                       >
                         Выплатил зарплату
                       </button>
@@ -509,7 +507,6 @@ const FinancePage = () => {
                       <button
                         onClick={() => unmarkPaid(j)}
                         style={{ ...btn, background: '#f59e0b', color: '#111827' }}
-                        title="Отменить пометку выплаты"
                       >
                         Отменить выплату
                       </button>
@@ -544,10 +541,6 @@ const FinancePage = () => {
 
       <div style={{ textAlign: 'right', maxWidth: TABLE_WIDTH, fontSize: 18, fontWeight: 700, marginTop: 8 }}>
         Общая сумма (SCF + Работа, только где выбран способ оплаты): {formatMoney(moneyReport.total)}
-      </div>
-
-      <div style={{ textAlign: 'right', maxWidth: TABLE_WIDTH, fontSize: 16, marginTop: 4, color: '#6b7280' }}>
-        Контрольная сумма (пересчёт): {formatMoney(overallTotal)}
       </div>
 
       {/* Сумма зарплат по отмеченным */}
