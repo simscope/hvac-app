@@ -1,17 +1,32 @@
 // client/src/pages/MaterialsPage.jsx
-// Таблица материалов + inline-смена статуса заявки в самой таблице
-import React, { useEffect, useState } from 'react';
+// Таблица материалов + inline-смена статуса и техника в самой таблице
+import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-// Справочник статусов (добавили ReCall)
-const statusOptions = [
-  'ReCall',
+/* ---------- Статусы: храним в БД нормализованные значения ---------- */
+const STATUS_VALUES = [
+  'recall',
   'заказ деталей',
   'ожидание деталей',
   'в работе',
   'к финишу',
   'завершено',
 ];
+
+// отображаемые лейблы для селекта
+const STATUS_LABEL = (v) => (v === 'recall' ? 'ReCall' : v);
+
+// нормализация входящего значения в формат БД
+const normalizeStatusForDb = (s) => {
+  if (!s) return null;
+  const v = String(s).trim();
+  if (v.toLowerCase() === 'recall' || v === 'ReCall') return 'recall';
+  if (v === 'выполнено') return 'завершено';
+  return v;
+};
+
+/* ---------- Показываем строки только для этих статусов ---------- */
+const SHOW_STATUSES = new Set(['recall', 'заказ деталей', 'ожидание деталей']);
 
 const MaterialsPage = () => {
   const [jobs, setJobs] = useState([]);
@@ -91,7 +106,13 @@ const MaterialsPage = () => {
     const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
       supabase.from('jobs').select('*'),
       supabase.from('materials').select('*'),
-      supabase.from('technicians').select('id, name, role').eq('role', 'tech'),
+      // ВАЖНО: берём и 'technician', и 'tech', и только активных
+      supabase
+        .from('technicians')
+        .select('id, name, role, is_active')
+        .in('role', ['technician', 'tech'])
+        .eq('is_active', true)
+        .order('name', { ascending: true }),
       supabase.from('comments').select('*'),
     ]);
     setJobs(j || []);
@@ -102,8 +123,10 @@ const MaterialsPage = () => {
 
   const openModal = (job) => {
     const existingRows = materials.filter((m) => m.job_id === job.id);
-    setModalTechnician(job.technician_id || '');
-    setModalStatus(job.status || '');
+    // нормализуем статус для UI
+    const st = normalizeStatusForDb(job.status) || '';
+    setModalTechnician(job.technician_id ?? '');
+    setModalStatus(st);
     setModalRows(
       existingRows.length
         ? existingRows
@@ -133,12 +156,17 @@ const MaterialsPage = () => {
   const handleModalSave = async () => {
     if (!modalJob) return;
 
-    // Сохраняем технику и статус
+    // Сохраняем технику и статус заявки
     await supabase
       .from('jobs')
       .update({
-        technician_id: modalTechnician ? parseInt(modalTechnician) : null,
-        status: modalStatus || null,
+        technician_id:
+          modalTechnician === '' || modalTechnician == null
+            ? null
+            : Number.isNaN(Number(modalTechnician))
+            ? modalTechnician
+            : parseInt(modalTechnician, 10),
+        status: normalizeStatusForDb(modalStatus) || null,
       })
       .eq('id', modalJob.id);
 
@@ -149,7 +177,7 @@ const MaterialsPage = () => {
         job_id: modalJob.id,
         name: r.name,
         price: r.price !== '' && r.price != null ? parseFloat(r.price) : null,
-        quantity: r.quantity !== '' && r.quantity != null ? parseInt(r.quantity) : null,
+        quantity: r.quantity !== '' && r.quantity != null ? parseInt(r.quantity, 10) : null,
         supplier: r.supplier || null,
       }));
 
@@ -161,7 +189,7 @@ const MaterialsPage = () => {
         .update({
           name: u.name,
           price: u.price !== '' && u.price != null ? parseFloat(u.price) : null,
-          quantity: u.quantity !== '' && u.quantity != null ? parseInt(u.quantity) : null,
+          quantity: u.quantity !== '' && u.quantity != null ? parseInt(u.quantity, 10) : null,
           supplier: u.supplier || null,
         })
         .eq('id', u.id);
@@ -175,18 +203,15 @@ const MaterialsPage = () => {
     await fetchAll();
   };
 
-  // Показываем строки для этих статусов (добавлен ReCall)
-  const SHOW_STATUSES = new Set(['заказ деталей', 'ожидание деталей', 'ReCall']);
+  /* ---------- Вспомогательные ---------- */
+  const techById = useMemo(() => {
+    const m = new Map();
+    (technicians || []).forEach((t) => m.set(String(t.id), t));
+    return m;
+  }, [technicians]);
 
-  // заявки без деталей (для SHOW_STATUSES)
-  const jobsWithoutMaterials = jobs.filter(
-    (j) => SHOW_STATUSES.has(j.status) && !materials.find((m) => m.job_id === j.id)
-  );
+  const techName = (id) => techById.get(String(id))?.name || '';
 
-  const techName = (id) =>
-    technicians.find((t) => String(t.id) === String(id))?.name || '';
-
-  // Стили
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
     role: 'button',
@@ -207,7 +232,10 @@ const MaterialsPage = () => {
   });
 
   // смена статуса прямо в таблице
-  const handleInlineStatusChange = async (job, newStatus) => {
+  const handleInlineStatusChange = async (job, newVal) => {
+    const newStatus = normalizeStatusForDb(newVal);
+    const prevStatus = normalizeStatusForDb(job.status);
+
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: newStatus } : j)));
 
     const { error } = await supabase
@@ -218,13 +246,49 @@ const MaterialsPage = () => {
     if (error) {
       alert('Не удалось сохранить статус');
       console.error(error);
-      setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: job.status } : j)));
+      // откат UI
+      setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
 
-    // если ушли из SHOW_STATUSES — строка должна исчезнуть
+    // если ушли из SHOW_STATUSES — таблицу нужно обновить
     await fetchAll();
   };
+
+  // смена техника прямо в таблице
+  const handleInlineTechChange = async (job, newTechId) => {
+    const parsed =
+      newTechId === '' || newTechId == null
+        ? null
+        : Number.isNaN(Number(newTechId))
+        ? newTechId
+        : parseInt(newTechId, 10);
+
+    const prev = job.technician_id ?? null;
+    setJobs((prevJobs) =>
+      prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: parsed } : j))
+    );
+
+    const { error } = await supabase
+      .from('jobs')
+      .update({ technician_id: parsed })
+      .eq('id', job.id);
+
+    if (error) {
+      alert('Не удалось сохранить техника');
+      console.error(error);
+      // откат
+      setJobs((prevJobs) =>
+        prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
+      );
+      return;
+    }
+  };
+
+  // заявки без деталей (для SHOW_STATUSES)
+  const jobsWithoutMaterials = jobs.filter(
+    (j) => SHOW_STATUSES.has(normalizeStatusForDb(j.status)) && !materials.find((m) => m.job_id === j.id)
+  );
 
   return (
     <div style={{ padding: 16 }}>
@@ -232,7 +296,7 @@ const MaterialsPage = () => {
 
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
         💡 Подсказка: кликните по <span style={linkNumStyle}>№ заявки</span> или по всей строке, чтобы открыть
-        редактирование материалов. Статус можно поменять прямо в таблице.
+        редактирование материалов. Статус и технику можно менять прямо в таблице.
       </div>
 
       {/* Блок «заявки без деталей» */}
@@ -281,37 +345,67 @@ const MaterialsPage = () => {
           <tbody>
             {materials.map((row) => {
               const job = jobs.find((j) => j.id === row.job_id);
-              if (!job || !SHOW_STATUSES.has(job.status)) return null;
+              if (!job || !SHOW_STATUSES.has(normalizeStatusForDb(job.status))) return null;
+
+              // для селекта техника: текущее значение как строка
+              const jobTechVal = job.technician_id == null ? '' : String(job.technician_id);
+              const techExists = jobTechVal === '' || technicians.some((t) => String(t.id) === jobTechVal);
 
               return (
                 <tr key={row.id} {...rowClickableProps(job)}>
                   <td style={td(COL.JOB)}>
                     <span style={linkNumStyle}>№{job.job_number || job.id}</span>
                   </td>
-                  <td style={td(COL.TECH)}>{techName(job.technician_id)}</td>
+
+                  {/* Техник: ИНЛАЙН-СЕЛЕКТ */}
+                  <td
+                    style={td(COL.TECH)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <select
+                      value={jobTechVal}
+                      onChange={(e) => handleInlineTechChange(job, e.target.value)}
+                      style={input}
+                    >
+                      <option value="">—</option>
+                      {/* если в БД стоит техник, которого нет в списке (неактивен) — показываем как фиксированное значение */}
+                      {!techExists && jobTechVal && (
+                        <option value={jobTechVal}>{techName(job.technician_id) || `ID ${jobTechVal}`}</option>
+                      )}
+                      {technicians.map((t) => (
+                        <option key={t.id} value={String(t.id)}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+
                   <td style={td(COL.NAME)}>{row.name}</td>
                   <td style={td(COL.QTY, 'right')}>{row.quantity}</td>
                   <td style={td(COL.PRICE, 'right')}>{row.price}</td>
                   <td style={td(COL.SUPPLIER)}>{row.supplier}</td>
 
-                  {/* Select статуса прямо в таблице */}
+                  {/* Статус: ИНЛАЙН-СЕЛЕКТ */}
                   <td
                     style={td(COL.STATUS)}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
                     <select
-                      value={job.status || ''}
+                      value={normalizeStatusForDb(job.status) || ''}
                       onChange={(e) => handleInlineStatusChange(job, e.target.value)}
                       style={input}
                     >
-                      {/* если вдруг статус нестандартный — добавим скрытый option, чтобы не было пустого значения */}
-                      {!statusOptions.includes(job.status || '') && (
-                        <option value={job.status || ''}>{job.status || ''}</option>
+                      {/* если вдруг статус нестандартный — добавим опцию, чтобы не терять значение */}
+                      {!STATUS_VALUES.includes(normalizeStatusForDb(job.status) || '') && (
+                        <option value={normalizeStatusForDb(job.status) || ''}>
+                          {STATUS_LABEL(normalizeStatusForDb(job.status) || '')}
+                        </option>
                       )}
-                      {statusOptions.map((s) => (
+                      {STATUS_VALUES.map((s) => (
                         <option key={s} value={s}>
-                          {s}
+                          {STATUS_LABEL(s)}
                         </option>
                       ))}
                     </select>
@@ -323,7 +417,7 @@ const MaterialsPage = () => {
             {/* если пусто */}
             {materials.filter((r) => {
               const j = jobs.find((x) => x.id === r.job_id);
-              return j && SHOW_STATUSES.has(j.status);
+              return j && SHOW_STATUSES.has(normalizeStatusForDb(j.status));
             }).length === 0 && (
               <tr>
                 <td colSpan={7} style={{ padding: 8, border: '1px solid #ccc' }}>
@@ -372,13 +466,20 @@ const MaterialsPage = () => {
             <div>
               <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Техник</label>
               <select
-                value={modalTechnician}
+                value={modalTechnician ?? ''}
                 onChange={(e) => setModalTechnician(e.target.value)}
                 style={input}
               >
                 <option value="">—</option>
+                {/* подстрахуемся, если текущий техник неактивен и не в списке */}
+                {modalTechnician &&
+                  !technicians.some((t) => String(t.id) === String(modalTechnician)) && (
+                    <option value={String(modalTechnician)}>
+                      {techName(modalTechnician) || `ID ${modalTechnician}`}
+                    </option>
+                  )}
                 {technicians.map((t) => (
-                  <option key={t.id} value={t.id}>
+                  <option key={t.id} value={String(t.id)}>
                     {t.name}
                   </option>
                 ))}
@@ -388,17 +489,19 @@ const MaterialsPage = () => {
             <div>
               <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Статус</label>
               <select
-                value={modalStatus}
+                value={normalizeStatusForDb(modalStatus) || ''}
                 onChange={(e) => setModalStatus(e.target.value)}
                 style={input}
               >
-                {/* подстрахуемся, если текущий статус нестандартный */}
-                {!statusOptions.includes(modalStatus || '') && (
-                  <option value={modalStatus || ''}>{modalStatus || ''}</option>
+                {/* нестандартный статус */}
+                {!STATUS_VALUES.includes(normalizeStatusForDb(modalStatus) || '') && (
+                  <option value={normalizeStatusForDb(modalStatus) || ''}>
+                    {STATUS_LABEL(normalizeStatusForDb(modalStatus) || '')}
+                  </option>
                 )}
-                {statusOptions.map((s) => (
+                {STATUS_VALUES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {STATUS_LABEL(s)}
                   </option>
                 ))}
               </select>
@@ -507,4 +610,3 @@ const MaterialsPage = () => {
 };
 
 export default MaterialsPage;
-
