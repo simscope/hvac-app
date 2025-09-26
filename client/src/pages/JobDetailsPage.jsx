@@ -5,56 +5,55 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-/* ===== Timezone helpers (America/New_York) ===== */
+/* ===== Время NY: читаем/пишем "как в БД" ===== */
 const NY_TZ = 'America/New_York';
 
-// ISO (UTC) → строка для <input type="datetime-local"> в NY: "YYYY-MM-DDTHH:mm"
-function nyInputFromIso(iso) {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (isNaN(date)) return '';
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: NY_TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
-  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+// из ISO/строки из БД берём просто YYYY-MM-DDTHH:mm (без конверсий)
+function wallFromDb(isoLike) {
+  if (!isoLike) return '';
+  const s = String(isoLike);
+  const m =
+    s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/) ||
+    s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return '';
+  // m[1] может быть всей датой или только годом — первый шаблон выше и так покрывает.
+  const year = m[1].length === 4 ? `${m[1]}-${m[2]}-${m[3]}` : m[1];
+  const hh   = m[m.length - 2];
+  const mm   = m[m.length - 1];
+  return `${year}T${hh}:${mm}`;
 }
 
-// строка из <input type="datetime-local"> (NY) → UTC ISO для timestamptz
-function isoFromNyInput(val) {
-  if (!val) return null; // "YYYY-MM-DDTHH:mm"
-  const [datePart, timePart] = val.split('T');
-  if (!datePart || !timePart) return null;
-  const [y, m, d] = datePart.split('-').map(Number);
-  const [H, M]   = timePart.split(':').map(Number);
-  if ([y,m,d,H,M].some(n => Number.isNaN(n))) return null;
-
-  // 1) "Фейковое" UTC время с теми же компонентами
-  const fakeUtcMs = Date.UTC(y, (m - 1), d, H, M, 0, 0);
-
-  // 2) Узнаём смещение зоны NY для этого момента (в минутах), парся "GMT-4"/"GMT-5"
-  const tzName = new Intl.DateTimeFormat('en-US', {
+// получить оффсет зоны NY для конкретного "стеночного" времени (YYYY-MM-DDTHH:mm)
+function nyOffsetForWall(wall) {
+  const [dpart, tpart] = String(wall).split('T');
+  const [y, m, d] = dpart.split('-').map(Number);
+  const [H, M] = tpart.split(':').map(Number);
+  const fakeUtc = Date.UTC(y, m - 1, d, H, M, 0, 0);
+  const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: NY_TZ,
     timeZoneName: 'short',
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false,
-  }).formatToParts(new Date(fakeUtcMs)).find(p => p.type === 'timeZoneName')?.value || 'GMT-0';
+  }).formatToParts(new Date(fakeUtc));
+  const tz = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT-00';
+  const m2 = tz.match(/GMT([+-]\d{1,2})(?::?(\d{2}))?/i);
+  if (!m2) return '+00:00';
+  const sign = m2[1].startsWith('-') ? '-' : '+';
+  const hh = String(Math.abs(parseInt(m2[1], 10))).padStart(2, '0');
+  const mm = String(m2[2] ? parseInt(m2[2], 10) : 0).padStart(2, '0');
+  return `${sign}${hh}:${mm}`; // например "-04:00" / "-05:00"
+}
 
-  const mOffset = (() => {
-    const m = tzName.match(/GMT([+-]\d{1,2})(?::?(\d{2}))?/i);
-    if (!m) return 0;
-    const sign = m[1].startsWith('-') ? -1 : 1;
-    const hh = Math.abs(parseInt(m[1], 10));
-    const mm = m[2] ? parseInt(m[2], 10) : 0;
-    return sign * (hh * 60 + mm);
-  })();
-
-  // 3) Реальное UTC: "NY wall time" минус смещение зоны
-  const realUtcMs = fakeUtcMs - (mOffset * 60 * 1000);
-  return new Date(realUtcMs).toISOString();
+// если в БД уже было значение — пробуем забрать из него оффсет, иначе вычисляем по дате (DST)
+function zonedIsoFromWall(wall, prevIsoLike) {
+  let offset = null;
+  if (prevIsoLike) {
+    const m = String(prevIsoLike).match(/([+-]\d{2}:\d{2}|Z)$/);
+    if (m && m[1] !== 'Z') offset = m[1];
+  }
+  if (!offset) offset = nyOffsetForWall(wall);
+  return `${wall}:00${offset}`; // "YYYY-MM-DDTHH:mm:00-04:00"
 }
 
 /* ---------- UI ---------- */
@@ -85,7 +84,7 @@ const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 /* ---------- Edge helpers ---------- */
 function functionsBase() { return supabaseUrl.replace('.supabase.co', '.functions.supabase.co'); }
 async function callEdgeAuth(path, body) {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session} } = await supabase.auth.getSession();
   const token = session?.access_token || '';
   const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
   const res = await fetch(url, {
@@ -105,8 +104,14 @@ const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Оплата ---------- */
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
-const pmToSelect = (v) => { const s = String(v ?? '').trim().toLowerCase(); return PM_ALLOWED.includes(s) ? s : '-'; };
-const pmToSave   = (v) => { const s = String(v ?? '').trim().toLowerCase(); return PM_ALLOWED.includes(s) ? s : '-'; };
+const pmToSelect = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  return PM_ALLOWED.includes(s) ? s : '-';
+};
+const pmToSave = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  return PM_ALLOWED.includes(s) ? s : '-';
+};
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -295,7 +300,7 @@ export default function JobDetailsPage() {
   const saveJob = async () => {
     const payload = {
       technician_id: normalizeId(job.technician_id),
-      appointment_time: job.appointment_time ?? null, // уже NY->UTC в onChange
+      appointment_time: job.appointment_time ?? null, // уже в нужном формате
       system_type: job.system_type || null,
       issue: job.issue || null,
       scf: toNum(job.scf),
@@ -612,8 +617,8 @@ export default function JobDetailsPage() {
                 <input
                   style={INPUT}
                   type="datetime-local"
-                  value={nyInputFromIso(job.appointment_time)}
-                  onChange={(e)=>setField('appointment_time', isoFromNyInput(e.target.value))}
+                  value={wallFromDb(job.appointment_time)}
+                  onChange={(e)=>setField('appointment_time', zonedIsoFromWall(e.target.value, job.appointment_time))}
                 />
               </div>
 
