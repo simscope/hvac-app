@@ -30,22 +30,9 @@ const INVOICES_BUCKET = 'invoices';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
-/* ---------- Edge helpers ---------- */
+/* ---------- Helpers (Edge) ---------- */
 function functionsBase() {
   return supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
-}
-async function callEdgePublic(path, body) {
-  const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    mode: 'cors',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  });
-  const text = await res.text();
-  let json; try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
-  if (!res.ok) throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
-  return json;
 }
 async function callEdgeAuth(path, body) {
   const { data: { session } } = await supabase.auth.getSession();
@@ -80,21 +67,11 @@ const pmToSave = (v) => {
 
 /* ---------- Хелперы ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
-const stringOrNull = (v) => {
-  if (v == null) return null;
-  const s = String(v).trim();
-  return s === '' ? null : s;
-};
+const stringOrNull = (v) => (v == null ? null : (String(v).trim() || null));
 const normalizeEmail = (v) => {
   const s = (v ?? '').toString().trim();
-  return s === '' ? null : s.toLowerCase();
+  return s ? s.toLowerCase() : null;
 };
-function makeFrontUrl(path) {
-  const base = window.location.origin;
-  const isHash = window.location.href.includes('/#/');
-  const clean = path.startsWith('/') ? path : `/${path}`;
-  return isHash ? `${base}/#${clean}` : `${base}${clean}`;
-}
 const toLocal = (iso) => {
   if (!iso) return '';
   const d = new Date(iso); if (Number.isNaN(d.getTime())) return '';
@@ -104,6 +81,12 @@ const toLocal = (iso) => {
 const fromLocal = (v) => { if (!v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
+function makeFrontUrl(path) {
+  const base = window.location.origin;
+  const isHash = window.location.href.includes('/#/');
+  const clean = path.startsWith('/') ? path : `/${path}`;
+  return isHash ? `${base}/#${clean}` : `${base}${clean}`;
+}
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
@@ -132,6 +115,7 @@ async function convertIfHeicWeb(file) {
   const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
   return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: Date.now() });
 }
+
 /* ====================================================================== */
 
 export default function JobDetailsPage() {
@@ -307,7 +291,7 @@ export default function JobDetailsPage() {
   /* ---------- редактирование клиента ---------- */
   const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
-  const syncJobClientFields = async (cid, c) => {
+  const mirrorClientIntoJob = async (cid, c) => {
     const patch = {};
     if ('client_id' in (job || {})) patch.client_id = cid;
     if ('client_name' in (job || {})) patch.client_name = c.full_name || '';
@@ -330,62 +314,38 @@ export default function JobDetailsPage() {
     };
 
     try {
-      // ===== 1) update существующего клиента (без return=representation -> нет 406)
+      // === UPDATE существующего клиента (никаких .select после update!)
       if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
 
-        const { error: upErr } = await supabase
-          .from('clients')
-          .update(payload)
-          .eq('id', cid);
+        const { error: upErr } = await supabase.from('clients').update(payload).eq('id', cid);
         if (upErr) throw upErr;
 
-        // дочитываем отдельным запросом (если RLS разрешает)
-        let q = supabase.from('clients')
+        // дочитать свежую строку отдельным запросом
+        const { data: updated } = await supabase
+          .from('clients')
           .select('id, full_name, phone, email, address')
           .eq('id', cid)
-          .limit(1);
-        const { data: updated } = await q.maybeSingle();
+          .maybeSingle();
 
         const merged = updated ?? { id: cid, ...payload };
-        await syncJobClientFields(cid, merged);
-        setClient({ id: cid, full_name: merged.full_name || '', phone: merged.phone || '', email: merged.email || null, address: merged.address || '' });
+        await mirrorClientIntoJob(cid, merged);
+        setClient({ id: cid, full_name: merged.full_name || '', phone: merged.phone || '', email: merged.email || '', address: merged.address || '' });
         setClientDirty(false);
         alert('Клиент сохранён');
         return;
       }
 
-      // ===== 2) клиента нет — создаём и привязываем к заявке
-      const ins = await supabase
+      // === INSERT нового клиента (разрешено .select().single())
+      const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
         .select('id, full_name, phone, email, address')
-        .maybeSingle();
+        .single();
+      if (insErr) throw insErr;
 
-      let created = ins.data;
-
-      // фолбэк: если RLS не вернул строку после insert, попробуем найти по полям
-      if (!created) {
-        let qb = supabase
-          .from('clients')
-          .select('id, full_name, phone, email, address, created_at')
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (payload.email) qb = qb.eq('email', payload.email);
-        if (payload.phone) qb = qb.eq('phone', payload.phone);
-        if (payload.full_name) qb = qb.eq('full_name', payload.full_name);
-        if (payload.address) qb = qb.eq('address', payload.address);
-
-        const found = await qb.maybeSingle();
-        created = found.data || null;
-      }
-
-      if (!created?.id) throw new Error('Создали клиента, но не удалось получить его id (RLS?)');
-
-      const newId = created.id;
-      await syncJobClientFields(newId, created);
-      setClient({ id: newId, full_name: created.full_name || '', phone: created.phone || '', email: created.email || null, address: created.address || '' });
+      await mirrorClientIntoJob(created.id, created);
+      setClient({ id: created.id, full_name: created.full_name || '', phone: created.phone || '', email: created.email || '', address: created.address || '' });
       setClientDirty(false);
       alert('Клиент создан и привязан к заявке');
     } catch (e) {
@@ -465,7 +425,6 @@ export default function JobDetailsPage() {
     }
   };
 
-  // Удаление файла (функция auth + fallback)
   const delPhoto = async (name) => {
     if (!window.confirm('Удалить файл?')) return;
     try {
@@ -522,7 +481,7 @@ export default function JobDetailsPage() {
       db.forEach((d) => { if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d); });
       merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
       setInvoices(merged);
-    } catch (e) {
+    } catch {
       setInvoices([]);
     } finally {
       setInvoicesLoading(false);
