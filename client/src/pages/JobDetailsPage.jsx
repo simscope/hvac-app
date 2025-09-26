@@ -30,7 +30,7 @@ const INVOICES_BUCKET = 'invoices';
 const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
-/* ---------- Helpers (Edge) ---------- */
+/* ---------- Edge helpers ---------- */
 function functionsBase() {
   return supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
 }
@@ -70,8 +70,14 @@ const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null :
 const stringOrNull = (v) => (v == null ? null : (String(v).trim() || null));
 const normalizeEmail = (v) => {
   const s = (v ?? '').toString().trim();
-  return s ? s.toLowerCase() : null;
+  return s ? s.toLowerCase() : null; // пустое → NULL
 };
+function makeFrontUrl(path) {
+  const base = window.location.origin;
+  const isHash = window.location.href.includes('/#/');
+  const clean = path.startsWith('/') ? path : `/${path}`;
+  return isHash ? `${base}/#${clean}` : `${base}${clean}`;
+}
 const toLocal = (iso) => {
   if (!iso) return '';
   const d = new Date(iso); if (Number.isNaN(d.getTime())) return '';
@@ -81,12 +87,6 @@ const toLocal = (iso) => {
 const fromLocal = (v) => { if (!v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
-function makeFrontUrl(path) {
-  const base = window.location.origin;
-  const isHash = window.location.href.includes('/#/');
-  const clean = path.startsWith('/') ? path : `/${path}`;
-  return isHash ? `${base}/#${clean}` : `${base}${clean}`;
-}
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
@@ -314,29 +314,37 @@ export default function JobDetailsPage() {
     };
 
     try {
-      // === UPDATE существующего клиента (никаких .select после update!)
+      // === UPDATE существующего клиента (никаких .select() после update!)
       if (client.id || job?.client_id) {
         const cid = client.id || job.client_id;
 
         const { error: upErr } = await supabase.from('clients').update(payload).eq('id', cid);
         if (upErr) throw upErr;
 
-        // дочитать свежую строку отдельным запросом
-        const { data: updated } = await supabase
+        // дочитать свежие данные отдельным запросом
+        const { data: fresh, error: selErr } = await supabase
           .from('clients')
           .select('id, full_name, phone, email, address')
           .eq('id', cid)
           .maybeSingle();
+        if (selErr) throw selErr;
 
-        const merged = updated ?? { id: cid, ...payload };
+        const merged = fresh ?? { id: cid, ...payload };
+
         await mirrorClientIntoJob(cid, merged);
-        setClient({ id: cid, full_name: merged.full_name || '', phone: merged.phone || '', email: merged.email || '', address: merged.address || '' });
+        setClient({
+          id: cid,
+          full_name: merged.full_name || '',
+          phone: merged.phone || '',
+          email: merged.email || '',
+          address: merged.address || '',
+        });
         setClientDirty(false);
         alert('Клиент сохранён');
         return;
       }
 
-      // === INSERT нового клиента (разрешено .select().single())
+      // === INSERT нового клиента (здесь .select().single() ОК)
       const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
@@ -345,10 +353,17 @@ export default function JobDetailsPage() {
       if (insErr) throw insErr;
 
       await mirrorClientIntoJob(created.id, created);
-      setClient({ id: created.id, full_name: created.full_name || '', phone: created.phone || '', email: created.email || '', address: created.address || '' });
+      setClient({
+        id: created.id,
+        full_name: created.full_name || '',
+        phone: created.phone || '',
+        email: created.email || '',
+        address: created.address || '',
+      });
       setClientDirty(false);
       alert('Клиент создан и привязан к заявке');
     } catch (e) {
+      console.error('saveClient error:', e);
       alert(`Не удалось сохранить клиента: ${e.message || 'ошибка'}`);
     }
   };
@@ -425,6 +440,7 @@ export default function JobDetailsPage() {
     }
   };
 
+  // Удаление файла (функция auth + fallback)
   const delPhoto = async (name) => {
     if (!window.confirm('Удалить файл?')) return;
     try {
