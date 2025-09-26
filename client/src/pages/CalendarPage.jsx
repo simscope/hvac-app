@@ -9,7 +9,6 @@ import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
 /* ========== helpers ========== */
-// ''|null=>null; '123'=>123; иначе — строка (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
@@ -72,7 +71,6 @@ export default function CalendarPage() {
     default:       { bg: '#f3f4f6', fg: '#111827', ring: '#9ca3af' },
   };
 
-  // стабильные цвета техников (для режима "Все техники")
   const techColor = useMemo(() => {
     const base = ['#0284c7', '#7c3aed', '#16a34a', '#db2777', '#0ea5e9', '#f59e0b', '#06b6d4', '#ef4444', '#84cc16'];
     const map = {};
@@ -106,8 +104,7 @@ export default function CalendarPage() {
     job?.address ||
     '';
 
-  // FIX: корректные проверки неоплаты
-  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
+  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.payment_method;
   const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
   const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
 
@@ -149,7 +146,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // ISO-UTC из БД; FullCalendar (timeZone="America/New_York") сам отрисует корректно
+        start: j.appointment_time, // UTC ISO из БД; FullCalendar сам отрисует в America/New_York
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -172,9 +169,9 @@ export default function CalendarPage() {
 
   /* ---------- обработчики DnD/клика ---------- */
   const handleEventDrop = async (info) => {
-    // timeZone календаря = America/New_York → start — реальный local NY, .toISOString() = UTC для БД
+    // timeZone календаря = America/New_York → event.start — корректный instant.
     const id = info.event.id;
-    const newStart = info.event.start?.toISOString() ?? null;
+    const newStart = info.event.start?.toISOString() ?? null; // сохраняем UTC ISO
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -192,7 +189,7 @@ export default function CalendarPage() {
       alert('Выберите вкладку конкретного мастера и повторите перетаскивание.');
       return;
     }
-    const newStart = info.event.start?.toISOString() ?? null;
+    const newStart = info.event.start?.toISOString() ?? null; // UTC ISO
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
@@ -386,14 +383,10 @@ export default function CalendarPage() {
           locale="ru"
 
           /* ===== ключевые настройки времени ===== */
-          timeZone="America/New_York"         // ВСЕГДА показывать и редактировать в часовом поясе Нью-Йорка
-          slotMinTime="08:00:00"              // рабочий день с 08:00
-          slotMaxTime="20:00:00"              // до 20:00
-          businessHours={{
-            daysOfWeek: [0,1,2,3,4,5,6],
-            startTime: '08:00',
-            endTime: '20:00',
-          }}
+          timeZone="America/New_York"         // Отрисовка всегда в NY
+          slotMinTime="08:00:00"
+          slotMaxTime="20:00:00"
+          businessHours={{ daysOfWeek: [0,1,2,3,4,5,6], startTime: '08:00', endTime: '20:00' }}
           allDaySlot={false}
           nowIndicator={true}
           expandRows={true}
