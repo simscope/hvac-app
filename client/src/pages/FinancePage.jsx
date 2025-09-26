@@ -13,6 +13,7 @@ const FinancePage = () => {
   const [filterTech, setFilterTech] = useState('all');
   const [filterPeriod, setFilterPeriod] = useState('month');
   const [filterPaid, setFilterPaid] = useState('all'); // all | unpaid | paid
+  const [filterStatus, setFilterStatus] = useState('all'); // all | <status>
 
   // Массовая отметка
   const [selected, setSelected] = useState(new Set());
@@ -62,26 +63,34 @@ const FinancePage = () => {
   ];
 
   // ===== helpers =====
+  // способ оплаты выбран?
+  const methodChosen = (raw) => {
+    const v = String(raw ?? '').trim().toLowerCase();
+    return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0';
+  };
+
+  // подпись способа оплаты
   const normalizePaymentLabel = (raw) => {
     const v = String(raw ?? '').trim().toLowerCase();
-    if (!v) return '—';
-    if (['cash', 'наличные'].includes(v)) return 'Наличные';
-    if (['zelle'].includes(v)) return 'Zelle';
-    if (['card', 'карта'].includes(v)) return 'Карта';
-    if (['check', 'чек'].includes(v)) return 'Чек';
+    if (!v || v === '-' || v === 'none' || v === '0') return '—';
+    if (v === 'cash' || v === 'наличные') return 'Наличные';
+    if (v === 'zelle') return 'Zelle';
+    if (v === 'card' || v === 'карта') return 'Карта';
+    if (v === 'check' || v === 'чек') return 'Чек';
     return String(raw);
   };
-  const methodChosen = (raw) => String(raw ?? '').trim() !== '';
+
   const formatMoney = (n) => `$${(Number.isFinite(Number(n)) ? Number(n) : 0).toFixed(2)}`;
   const getTechnicianName = (id) => {
     const tech = technicians.find((t) => String(t.id) === String(id));
     return tech ? tech.name : '—';
   };
-  const collectStatuses = (j) => {
-    const keys = ['status', 'job_status', 'state', 'stage', 'payment_status', 'warranty_status'];
-    const vals = keys.map((k) => (j?.[k] ? String(j[k]).trim() : '')).filter(Boolean);
-    return vals.length ? [...new Set(vals)].join(' • ') : '—';
-  };
+
+  // основной статус заявки — только jobs.status
+  const getJobStatus = (j) => String(j?.status ?? '').trim();
+
+  // показать статус для информации (один столбец)
+  const showStatus = (j) => getJobStatus(j) || '—';
 
   // ===== load =====
   useEffect(() => { fetchAll(); }, []);
@@ -128,41 +137,52 @@ const FinancePage = () => {
     return true;
   };
 
+  // список статусов для селекта
+  const statusOptions = useMemo(() => {
+    const set = new Set();
+    jobs.forEach((j) => {
+      const s = getJobStatus(j);
+      if (s) set.add(s);
+    });
+    return ['all', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [jobs]);
+
   const filteredJobs = useMemo(() => {
     return jobs.filter((job) => {
-      const byTech = filterTech === 'all' || String(job.technician_id) === String(filterTech);
+      const byTech   = filterTech === 'all' || String(job.technician_id) === String(filterTech);
       const byPeriod = inPeriod(job.created_at);
-      const byPaid =
+      const byPaid   =
         filterPaid === 'all' ||
         (filterPaid === 'paid' && job.salary_paid) ||
         (filterPaid === 'unpaid' && !job.salary_paid);
-      return byTech && byPeriod && byPaid;
+      const byStatus = filterStatus === 'all' || getJobStatus(job) === filterStatus;
+      return byTech && byPeriod && byPaid && byStatus;
     });
-  }, [jobs, filterTech, filterPeriod, filterPaid]);
+  }, [jobs, filterTech, filterPeriod, filterPaid, filterStatus]);
 
- // ===== row math =====
-// Учитываем только суммы с выбранным способом оплаты.
-// Зарплата =
-//   если payLabor == 0 и payScf > 0 -> 50
-//   иначе 50% * max(0, (payLabor + payScf - materials))
-const calcRow = (j) => {
-  const scf = Number(j.scf || 0);
-  const labor = Number(j.labor_price || 0);
-  const materials = Number(materialsSum[j.id] || 0);
+  // ===== row math =====
+  // Зарплата:
+  //   если payLabor == 0 и payScf > 0 -> 50
+  //   иначе 50% * max(0, (payLabor + payScf - materials))
+  // Учитываем только суммы с выбранным способом оплаты.
+  const calcRow = (j) => {
+    const scf = Number(j.scf || 0);
+    const labor = Number(j.labor_price || 0);
+    const materials = Number(materialsSum[j.id] || 0);
 
-  const payLabor = String(j.labor_payment_method || '').trim() ? labor : 0;
-  const payScf   = String(j.scf_payment_method || '').trim()   ? scf   : 0;
+    const payLabor = methodChosen(j.labor_payment_method) ? labor : 0;
+    const payScf   = methodChosen(j.scf_payment_method)   ? scf   : 0;
 
-  const onlyScf = payLabor === 0 && payScf > 0;
+    const onlyScf = payLabor === 0 && payScf > 0;
 
-  const base = payLabor + payScf - materials;
-  const salary = onlyScf ? 50 : 0.5 * Math.max(0, base);
+    const base = payLabor + payScf - materials;
+    const salary = onlyScf ? 50 : 0.5 * Math.max(0, base);
 
-  // "Итого (только с оплатой)" по строке — без деталей
-  const totalCounted = payLabor + payScf;
+    // "Итого (только с оплатой)" — без деталей
+    const totalCounted = payLabor + payScf;
 
-  return { scf, labor, materials, total: totalCounted, salary, scfPart: onlyScf ? 50 : payScf };
-};
+    return { scf, labor, materials, total: totalCounted, salary, scfPart: onlyScf ? 50 : payScf };
+  };
 
   // ===== money report =====
   // Учитываем только суммы, где выбран способ оплаты.
@@ -190,14 +210,14 @@ const calcRow = (j) => {
       return {
         'Job #': j.job_number || j.id,
         'Техник': getTechnicianName(j.technician_id),
-        'Статусы': collectStatuses(j),
+        'Статус': showStatus(j),
         'SCF': scf,
         'Оплата SCF': normalizePaymentLabel(j.scf_payment_method),
         'Работа': labor,
         'Оплата работы': normalizePaymentLabel(j.labor_payment_method),
         'Детали (сумма)': materials,
-        'Итого (SCF+Работа)': total,
-        'Зарплата (0.5*Раб + SCF|50 - Детали)': salary,
+        'Итого (оплач. SCF+Работа)': total,
+        'Зарплата (50%*(Опл.Раб+SCF−Детали) | только SCF→$50)': salary,
         'Счётная часть SCF для ЗП': scfPart,
         'Выплачено': j.salary_paid ? 'Да' : 'Нет',
         'Дата выплаты': j.salary_paid_at || '',
@@ -346,7 +366,7 @@ const calcRow = (j) => {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(220px, 1fr))',
+          gridTemplateColumns: 'repeat(4, minmax(220px, 1fr))',
           gap: 12,
           marginBottom: 12,
           maxWidth: TABLE_WIDTH,
@@ -371,6 +391,16 @@ const calcRow = (j) => {
           <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Статус выплат</label>
           <select value={filterPaid} onChange={(e) => setFilterPaid(e.target.value)} style={selectStyle}>
             {paidOptions.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </select>
+        </div>
+
+        {/* Новый фильтр по статусу заявки */}
+        <div>
+          <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Статус заявки</label>
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={selectStyle}>
+            {statusOptions.map((s) =>
+              s === 'all' ? <option key="all" value="all">Все</option> : <option key={s} value={s}>{s}</option>
+            )}
           </select>
         </div>
       </div>
@@ -432,14 +462,14 @@ const calcRow = (j) => {
               </th>
               <th style={thStyle(COL.JOB)}>Job #</th>
               <th style={thStyle(COL.TECH)}>Техник</th>
-              <th style={thStyle(COL.STATUS)}>Статусы</th>
+              <th style={thStyle(COL.STATUS)}>Статус</th>
               <th style={thStyle(COL.SCF, 'right')}>SCF</th>
               <th style={thStyle(COL.SCF_PAY)}>Оплата SCF</th>
               <th style={thStyle(COL.LABOR, 'right')}>Работа</th>
               <th style={thStyle(COL.LABOR_PAY)}>Оплата работы</th>
               <th style={thStyle(COL.MATERIALS, 'right')}>Детали</th>
               <th style={thStyle(COL.TOTAL, 'right')}>Итого (только с оплатой)</th>
-              <th style={thStyle(COL.SALARY, 'right')}>Зарплата (0.5*Раб + SCF|50 − Детали)</th>
+              <th style={thStyle(COL.SALARY, 'right')}>Зарплата (50%*(Опл.Раб+SCF−Детали) | только SCF→$50)</th>
               <th style={thStyle(COL.PAID, 'center')}>Выплачено</th>
               <th style={thStyle(COL.ACTION, 'center')}>Действие</th>
             </tr>
@@ -447,25 +477,17 @@ const calcRow = (j) => {
 
           <tbody>
             {filteredJobs.map((j) => {
-              const { scf, labor, materials, salary } = calcRow(j);
+              const { scf, labor, materials, salary, total } = calcRow(j);
               const paid = !!j.salary_paid;
-
-              const totalCounted =
-                (methodChosen(j.scf_payment_method) ? scf : 0) +
-                (methodChosen(j.labor_payment_method) ? labor : 0);
 
               return (
                 <tr key={j.id} style={{ background: paid ? '#ecfdf5' : 'transparent' }}>
                   <td style={{ ...tdStyle(COL.SEL, 'center') }}>
-                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => {
-                      const next = new Set(selected);
-                      if (next.has(j.id)) next.delete(j.id); else next.add(j.id);
-                      setSelected(next);
-                    }} />
+                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleRow(j.id)} />
                   </td>
                   <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
                   <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
-                  <td style={tdStyle(COL.STATUS)}>{collectStatuses(j)}</td>
+                  <td style={tdStyle(COL.STATUS)}>{showStatus(j)}</td>
 
                   <td style={tdStyle(COL.SCF, 'right')}>{formatMoney(scf)}</td>
                   <td style={tdStyle(COL.SCF_PAY)}>{normalizePaymentLabel(j.scf_payment_method)}</td>
@@ -475,7 +497,7 @@ const calcRow = (j) => {
 
                   <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
                   <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>
-                    {formatMoney(totalCounted)}
+                    {formatMoney(total)}
                   </td>
                   <td style={tdStyle(COL.SALARY, 'right')}>
                     {paid && Number(j.salary_paid_amount) > 0
@@ -502,6 +524,7 @@ const calcRow = (j) => {
                       <button
                         onClick={() => markPaid(j)}
                         style={{ ...btn, background: '#2563eb', color: '#fff' }}
+                        title="Пометить как выплаченное с фиксацией суммы"
                       >
                         Выплатил зарплату
                       </button>
@@ -509,6 +532,7 @@ const calcRow = (j) => {
                       <button
                         onClick={() => unmarkPaid(j)}
                         style={{ ...btn, background: '#f59e0b', color: '#111827' }}
+                        title="Отменить пометку выплаты"
                       >
                         Отменить выплату
                       </button>
@@ -554,4 +578,3 @@ const calcRow = (j) => {
 };
 
 export default FinancePage;
-
