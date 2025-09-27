@@ -29,15 +29,17 @@ const JoAllJobsPage = () => {
     'завершено',
   ];
 
-  useEffect(() => {
-    fetchAll();
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
   const fetchAll = async () => {
     setLoading(true);
     const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
       supabase.from('jobs').select('*'),
-      supabase.from('technicians').select('id,name,role,is_active').in('role', ['technician', 'tech']).order('name', { ascending: true }),
+      supabase
+        .from('technicians')
+        .select('id,name,role,is_active')
+        .in('role', ['technician', 'tech'])
+        .order('name', { ascending: true }),
       supabase.from('clients').select('*'),
     ]);
     setJobs(j || []);
@@ -95,15 +97,17 @@ const JoAllJobsPage = () => {
     return scfOK && laborOK;
   };
 
+  // старт гарантий: completed_at → appointment_time → created_at
   const warrantyStart = (j) => {
     const o = origById(j.id) || j;
     if (o.completed_at) return new Date(o.completed_at);
-    if (isDone(o.status) && o.updated_at) return new Date(o.updated_at);
+    if (o.appointment_time) return new Date(o.appointment_time);
+    if (o.created_at) return new Date(o.created_at);
     return null;
   };
   const warrantyEnd = (j) => {
     const s = warrantyStart(j);
-    return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null;
+    return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 дней
   };
   const now = new Date();
 
@@ -112,10 +116,16 @@ const JoAllJobsPage = () => {
     if (isRecall(o.status)) return false; // ReCall всегда активный
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now <= warrantyEnd(j);
   };
-  const persistedInArchive = (j) => {
+  const persistedInArchiveByWarranty = (j) => {
     const o = origById(j.id) || j;
     if (isRecall(o.status)) return false;
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now > warrantyEnd(j);
+  };
+  const hasArchivedFlag = (j) => !!(origById(j.id)?.archived_at || j.archived_at);
+
+  const normalizePM = (v) => {
+    const s = String(v || '').trim().toLowerCase();
+    return ['cash', 'zelle', 'card', 'check'].includes(s) ? s : null;
   };
 
   const handleSave = async (job) => {
@@ -130,19 +140,20 @@ const JoAllJobsPage = () => {
       status: job.status ?? null,
       appointment_time: toISO(job.appointment_time),
       labor_price: job.labor_price !== '' && job.labor_price != null ? parseFloat(job.labor_price) : null,
-      scf_payment_method: job.scf_payment_method ?? null,             // SCF
-      labor_payment_method: job.labor_payment_method ?? null, // Работа
+      scf_payment_method: normalizePM(job.scf_payment_method),
+      labor_payment_method: normalizePM(job.labor_payment_method),
       system_type: job.system_type ?? null,
       issue: job.issue ?? null,
     };
 
-    // при переходе в "завершено" фиксируем новую дату
+    // при переходе в "завершено" фиксируем дату завершения
     if (!wasDone && willBeDone) {
       payload.completed_at = new Date().toISOString();
     }
 
     let { error } = await supabase.from('jobs').update(payload).eq('id', id);
 
+    // если в БД нет completed_at — повторим без него
     if (error && String(error.message || '').toLowerCase().includes('completed_at')) {
       const { completed_at, ...withoutCompleted } = payload;
       ({ error } = await supabase.from('jobs').update(withoutCompleted).eq('id', id));
@@ -180,6 +191,8 @@ const JoAllJobsPage = () => {
         'Оплата работы': job.labor_payment_method,
         Статус: job.status,
         'Дата завершения': job.completed_at || '',
+        'Архив (ручной)': job.archived_at || '',
+        'Причина архива': job.archived_reason || '',
         Техник: tech?.name || '',
         Система: job.system_type,
         Проблема: job.issue,
@@ -197,9 +210,20 @@ const JoAllJobsPage = () => {
       .filter((j) => {
         const o = origById(j.id) || j;
         const recall = isRecall(o.status);
-        if (viewMode === 'warranty') return !recall && persistedInWarranty(j);
-        if (viewMode === 'archive')  return !recall && persistedInArchive(j);
-        return recall || !(persistedInWarranty(j) || persistedInArchive(j));
+        const archivedFlag = hasArchivedFlag(j);
+
+        if (viewMode === 'warranty') {
+          // Только гарантия, но исключаем ручной архив
+          return !recall && !archivedFlag && persistedInWarranty(j);
+        }
+
+        if (viewMode === 'archive') {
+          // Ручной архив ИЛИ архив по окончанию гарантии
+          return !recall && (archivedFlag || persistedInArchiveByWarranty(j));
+        }
+
+        // active: всё, что не в гарантии и не в архиве (и ReCall остаётся активным)
+        return recall || (!archivedFlag && !(persistedInWarranty(j) || persistedInArchiveByWarranty(j)));
       })
       .filter((j) =>
         filterStatus === 'all'
@@ -258,6 +282,7 @@ const JoAllJobsPage = () => {
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
         .jobs-table .center { text-align:center; }
         .jobs-table tr.warranty { background:#dcfce7; }
+        .jobs-table tr.archived { background:#f3f4f6; color:#6b7280; }
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
       `}</style>
 
@@ -355,11 +380,14 @@ const JoAllJobsPage = () => {
               <tbody>
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
-
                   const scfError   = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
 
-                  const rowClass = persistedInWarranty(job) ? 'warranty' : '';
+                  const archivedRow = hasArchivedFlag(job);
+                  const rowClass =
+                    archivedRow
+                      ? 'archived'
+                      : (persistedInWarranty(job) ? 'warranty' : '');
 
                   return (
                     <tr
@@ -391,6 +419,11 @@ const JoAllJobsPage = () => {
                             e.stopPropagation();
                             navigate(`/job/${job.id}`);
                           }}
+                          title={
+                            archivedRow && job.archived_at
+                              ? `В архиве с ${new Date(job.archived_at).toLocaleString()}${job.archived_reason ? ' • ' + job.archived_reason : ''}`
+                              : undefined
+                          }
                         >
                           <span className="num-link">{job.job_number || job.id}</span>
                         </div>
@@ -419,10 +452,10 @@ const JoAllJobsPage = () => {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
-                          <option value="Cash">cash</option>
-                          <option value="Zelle">Zelle</option>
-                          <option value="Card">card</option>
-                          <option value="check">chek</option>
+                          <option value="cash">cash</option>
+                          <option value="zelle">zelle</option>
+                          <option value="card">card</option>
+                          <option value="check">check</option>
                         </select>
                       </td>
 
@@ -443,10 +476,10 @@ const JoAllJobsPage = () => {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
-                          <option value="Cash">cash</option>
-                          <option value="Zelle">Zelle</option>
-                          <option value="Card">card</option>
-                          <option value="check">chek</option>
+                          <option value="cash">cash</option>
+                          <option value="zelle">zelle</option>
+                          <option value="card">card</option>
+                          <option value="check">check</option>
                         </select>
                       </td>
 
@@ -513,8 +546,3 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
-
-
-
-
-
