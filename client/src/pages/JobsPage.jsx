@@ -11,15 +11,26 @@ const STATUS_ORDER = [
   'заказ деталей',
   'ожидание деталей',
   'к финишу',
-  'завершено'
+  'завершено',
 ];
 
+// Статусы, которые не показываем в активном списке
 const HIDDEN_STATUSES = new Set([
   'завершено',
   'заверщено',
   'completed',
   'done',
-  'закрыто'
+  'закрыто',
+  // архив/отказ
+  'архив',
+  'archive',
+  'archived',
+  'canceled',
+  'cancelled',
+  'отказ',
+  'отказ от ремонта',
+  'refused',
+  'declined',
 ]);
 
 export default function JobsPage() {
@@ -69,7 +80,7 @@ export default function JobsPage() {
         ...j,
         client_name: c?.full_name || c?.name || '—',
         client_phone: c?.phone || '',
-        created_at_fmt: fmtDate(j.created_at)
+        created_at_fmt: fmtDate(j.created_at),
       };
     });
   }, [jobs, clients]);
@@ -116,8 +127,7 @@ export default function JobsPage() {
             : Number.isNaN(Number(job.scf))
             ? null
             : Number(job.scf),
-        // ← добавили сохранение текста проблемы
-        issue: job.issue === '' || job.issue == null ? null : job.issue
+        issue: job.issue === '' || job.issue == null ? null : job.issue,
       };
       const { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
       if (error) throw error;
@@ -126,6 +136,53 @@ export default function JobsPage() {
     } catch (e) {
       console.error(e);
       alert('Ошибка при сохранении');
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  // Отправить в архив (для отказов и т.п.)
+  async function handleArchive(job) {
+    try {
+      const reason =
+        window.prompt('Причина архива (например: отказ от ремонта):', 'отказ от ремонта');
+      if (reason === null) return; // отменили
+      setSavingId(job.id);
+
+      // Пытаемся сохранить расширенную информацию (если колонок нет — пишем только статус + комментарий)
+      const patch = {
+        status: 'отказ', // будет скрыта HIDDEN_STATUSES; можно поменять на 'архив'
+        archived_at: new Date().toISOString(),
+        archived_reason: reason,
+      };
+
+      let updErr = null;
+      const { error } = await supabase.from('jobs').update(patch).eq('id', job.id);
+      if (error) updErr = error;
+
+      if (updErr) {
+        // если нет колонок archived_*, делаем минимально: только статус
+        if (/column .* does not exist/i.test(updErr.message)) {
+          const { error: e1 } = await supabase
+            .from('jobs')
+            .update({ status: 'отказ' })
+            .eq('id', job.id);
+          if (e1) throw e1;
+
+          // и пишем служебный комментарий
+          await supabase
+            .from('comments')
+            .insert({ job_id: job.id, text: `ARCHIVE: ${reason}` });
+        } else {
+          throw updErr;
+        }
+      }
+
+      await fetchAll();
+      alert('Заявка отправлена в архив');
+    } catch (e) {
+      console.error('Архивирование не удалось:', e);
+      alert('Не удалось отправить в архив: ' + (e?.message || e));
     } finally {
       setSavingId(null);
     }
@@ -229,7 +286,7 @@ export default function JobsPage() {
                   <div className="cell-wrap">{job.system_type || '—'}</div>
                 </td>
 
-                {/* Проблема — снова редактируемая */}
+                {/* Проблема — редактируемая */}
                 <td onClick={(e) => e.stopPropagation()}>
                   <input
                     type="text"
@@ -289,17 +346,21 @@ export default function JobsPage() {
                     >
                       {savingId === job.id ? '…' : '💾'}
                     </button>
+
                     <button title="Редактировать" onClick={() => openJob(job.id)}>
                       ✏️
                     </button>
+
+                    {/* ВМЕСТО инвойса — Архив */}
                     <button
-                      title="Инвойс"
+                      title="Отправить в архив (отказ/закрыть без ремонта)"
                       onClick={(e) => {
                         e.stopPropagation();
-                        navigate(`/invoice/${job.id}`);
+                        handleArchive(job);
                       }}
+                      disabled={savingId === job.id}
                     >
-                      📄
+                      🗄️ Архив
                     </button>
                   </div>
                 </td>
