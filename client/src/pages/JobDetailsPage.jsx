@@ -1,6 +1,6 @@
 // client/src/pages/JobDetailsPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useRef as useRef2 } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
@@ -16,7 +16,6 @@ function wallFromDb(isoLike) {
     s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/) ||
     s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
   if (!m) return '';
-  // m[1] может быть всей датой или только годом — первый шаблон выше и так покрывает.
   const year = m[1].length === 4 ? `${m[1]}-${m[2]}-${m[3]}` : m[1];
   const hh   = m[m.length - 2];
   const mm   = m[m.length - 1];
@@ -74,6 +73,18 @@ const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db'
 const PRIMARY = { ...BTN, background: '#2563eb', color: '#fff', borderColor: '#2563eb' };
 const DANGER = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
 const GHOST = { ...BTN, background: '#f8fafc' };
+// баннер архива
+const ARCHIVE_BANNER = {
+  padding: 12,
+  border: '1px solid #fdba74',
+  background: '#fff7ed',
+  color: '#9a3412',
+  borderRadius: 10,
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: 10,
+  alignItems: 'center',
+};
 
 /* ---------- Storage ---------- */
 const PHOTOS_BUCKET = 'job-photos';
@@ -125,6 +136,10 @@ function makeFrontUrl(path) {
 }
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
+
+// завершённый статус?
+const DONE_STATUSES = new Set(['завершено','заверщено','completed','done','закрыто']);
+const isDone = (s) => DONE_STATUSES.has(String(s||'').toLowerCase().trim());
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
@@ -187,6 +202,9 @@ export default function JobDetailsPage() {
   const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,db_id}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
 
+  // чтоб автоархивация не зациклилась
+  const autoArchivedOnce = useRef(false);
+
   /* ---------- загрузка ---------- */
   useEffect(() => {
     (async () => {
@@ -231,6 +249,36 @@ export default function JobDetailsPage() {
       setLoading(false);
     })();
   }, [jobId]);
+
+  // авто-архивация по гарантии (60 дней)
+  useEffect(() => {
+    const run = async () => {
+      if (!job || autoArchivedOnce.current) return;
+      if (job.archived_at) return; // уже в архиве
+      if (!isDone(job.status)) return; // не завершено — не трогаем
+
+      // базовая дата гарантии: completed_at > appointment_time > created_at
+      const baseDateStr = job.completed_at || job.appointment_time || job.created_at;
+      if (!baseDateStr) return;
+
+      const base = new Date(baseDateStr);
+      if (Number.isNaN(base.getTime())) return;
+
+      const days = (Date.now() - base.getTime()) / (24 * 60 * 60 * 1000);
+      if (days < 60) return;
+
+      try {
+        autoArchivedOnce.current = true;
+        const patch = { archived_at: new Date().toISOString(), archived_reason: 'Гарантия истекла (60 дней) [auto]' };
+        const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
+        if (!error) setJob((p) => ({ ...(p || {}), ...patch }));
+      } catch (e) {
+        // молчим, это необязательная операция
+        console.warn('auto-archive failed', e);
+      }
+    };
+    run();
+  }, [job, jobId]);
 
   /* ---------- загрузка фото ---------- */
   const loadPhotos = async () => {
@@ -323,6 +371,28 @@ export default function JobDetailsPage() {
       alert('Сохранено');
     } catch (e) {
       alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
+    }
+  };
+
+  /* ---------- Архив / Разархив ---------- */
+  const archiveJob = async (reason) => {
+    try {
+      const patch = { archived_at: new Date().toISOString(), archived_reason: reason || null };
+      const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
+      if (error) throw error;
+      setJob((p) => ({ ...(p || {}), ...patch }));
+    } catch (e) {
+      alert('Не удалось отправить в архив: ' + (e.message || e));
+    }
+  };
+  const unarchiveJob = async () => {
+    try {
+      const patch = { archived_at: null, archived_reason: null };
+      const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
+      if (error) throw error;
+      setJob((p) => ({ ...(p || {}), ...patch }));
+    } catch (e) {
+      alert('Не удалось вернуть из архива: ' + (e.message || e));
     }
   };
 
@@ -581,6 +651,7 @@ export default function JobDetailsPage() {
   const isUnpaidLabor = pmToSelect(job?.labor_payment_method) === '-';
   const isUnpaidSCF   = (toNum(job?.scf) || 0) > 0 && pmToSelect(job?.scf_payment_method) === '-';
   const isRecall = String(job?.status || '').toLowerCase().trim() === 'recall';
+  const isArchived = !!job?.archived_at;
 
   if (loading) {
     return (
@@ -595,10 +666,40 @@ export default function JobDetailsPage() {
     <div style={PAGE}>
       <div style={H1}>Редактирование заявки {jobNumTitle}</div>
 
+      {/* Баннер архива */}
+      {isArchived && (
+        <div style={ARCHIVE_BANNER}>
+          <div>
+            <strong>Заявка в архиве.</strong>{' '}
+            <span>
+              С {job.archived_at ? new Date(job.archived_at).toLocaleString() : '—'}.
+              {job.archived_reason ? ` Причина: ${job.archived_reason}` : ''}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={BTN} onClick={unarchiveJob}>Вернуть из архива</button>
+          </div>
+        </div>
+      )}
+
       <div style={GRID2}>
         <div style={COL}>
           <div style={BOX}>
-            <div style={H2}>Параметры</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={H2}>Параметры</div>
+              {!isArchived && (
+                <button
+                  style={{ ...BTN, borderColor: '#f59e0b', color: '#b45309', background: '#fffbeb' }}
+                  onClick={() => {
+                    const r = window.prompt('Причина архивации', 'отказ от ремонта');
+                    if (r !== null) archiveJob(r || null);
+                  }}
+                >
+                  📦 В архив
+                </button>
+              )}
+            </div>
+
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={ROW}>
                 <div>Техник</div>
