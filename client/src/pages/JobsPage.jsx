@@ -12,26 +12,10 @@ const STATUS_ORDER = [
   'ожидание деталей',
   'к финишу',
   'завершено',
+  'отказ',
 ];
 
-// Статусы, которые не показываем в активном списке
-const HIDDEN_STATUSES = new Set([
-  'завершено',
-  'заверщено',
-  'completed',
-  'done',
-  'закрыто',
-  // архив/отказ
-  'архив',
-  'archive',
-  'archived',
-  'canceled',
-  'cancelled',
-  'отказ',
-  'отказ от ремонта',
-  'refused',
-  'declined',
-]);
+const HIDDEN_STATUSES = new Set(['завершено','заверщено','completed','done','закрыто']);
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
@@ -40,14 +24,12 @@ export default function JobsPage() {
   const [savingId, setSavingId] = useState(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchAll();
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
   async function fetchAll() {
-    const jobsReq = supabase.from('jobs').select('*');
+    const jobsReq    = supabase.from('jobs').select('*');
     const clientsReq = supabase.from('clients').select('*');
-    const techsReq = supabase
+    const techsReq   = supabase
       .from('technicians')
       .select('id,name,role,is_active')
       .in('role', ['technician', 'tech'])
@@ -55,7 +37,6 @@ export default function JobsPage() {
       .order('name', { ascending: true });
 
     const [jobsRes, clientsRes, techsRes] = await Promise.all([jobsReq, clientsReq, techsReq]);
-
     if (jobsRes.error) console.error(jobsRes.error);
     if (clientsRes.error) console.error(clientsRes.error);
     if (techsRes.error) console.error(techsRes.error);
@@ -65,13 +46,13 @@ export default function JobsPage() {
     setTechnicians(techsRes.data || []);
   }
 
-  function fmtDate(iso) {
+  const fmtDate = (iso) => {
     if (!iso) return '—';
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
     const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-  }
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
 
   const jobsView = useMemo(() => {
     return (jobs || []).map((j) => {
@@ -85,26 +66,25 @@ export default function JobsPage() {
     });
   }, [jobs, clients]);
 
+  // в активном списке не показываем архив
   const activeJobsView = useMemo(() => {
-    return jobsView.filter((j) => !HIDDEN_STATUSES.has(String(j.status || '').toLowerCase()));
+    return jobsView.filter(
+      (j) =>
+        !HIDDEN_STATUSES.has(String(j.status || '').toLowerCase()) &&
+        !j.archived_at // скрываем архив
+    );
   }, [jobsView]);
 
   const orderMap = useMemo(() => {
     const m = new Map(STATUS_ORDER.map((s, i) => [s.toLowerCase(), i]));
-    if (!m.has('завершено') && m.has('заверщено')) {
-      m.set('завершено', m.get('заверщено'));
-    }
+    if (!m.has('завершено') && m.has('заверщено')) m.set('завершено', m.get('заверщено'));
     return m;
   }, []);
 
   const sortedJobs = useMemo(() => {
     return [...activeJobsView].sort((a, b) => {
-      const ar = orderMap.has(String(a.status || '').toLowerCase())
-        ? orderMap.get(String(a.status || '').toLowerCase())
-        : 999;
-      const br = orderMap.has(String(b.status || '').toLowerCase())
-        ? orderMap.get(String(b.status || '').toLowerCase())
-        : 999;
+      const ar = orderMap.get(String(a.status || '').toLowerCase()) ?? 999;
+      const br = orderMap.get(String(b.status || '').toLowerCase()) ?? 999;
       if (ar !== br) return ar - br;
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     });
@@ -118,16 +98,13 @@ export default function JobsPage() {
     setSavingId(job.id);
     try {
       const payload = {
-        technician_id:
-          job.technician_id === '' || job.technician_id == null ? null : job.technician_id,
+        technician_id: job.technician_id ? job.technician_id : null,
         status: job.status ?? null,
         scf:
           job.scf === '' || job.scf == null
             ? null
-            : Number.isNaN(Number(job.scf))
-            ? null
-            : Number(job.scf),
-        issue: job.issue === '' || job.issue == null ? null : job.issue,
+            : Number.isNaN(Number(job.scf)) ? null : Number(job.scf),
+        issue: job.issue || null,
       };
       const { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
       if (error) throw error;
@@ -141,50 +118,29 @@ export default function JobsPage() {
     }
   }
 
-  // Отправить в архив (для отказов и т.п.)
+  // Архив / разархивировать
   async function handleArchive(job) {
     try {
-      const reason =
-        window.prompt('Причина архива (например: отказ от ремонта):', 'отказ от ремонта');
-      if (reason === null) return; // отменили
-      setSavingId(job.id);
-
-      // Пытаемся сохранить расширенную информацию (если колонок нет — пишем только статус + комментарий)
-      const patch = {
-        status: 'отказ', // будет скрыта HIDDEN_STATUSES; можно поменять на 'архив'
-        archived_at: new Date().toISOString(),
-        archived_reason: reason,
-      };
-
-      let updErr = null;
-      const { error } = await supabase.from('jobs').update(patch).eq('id', job.id);
-      if (error) updErr = error;
-
-      if (updErr) {
-        // если нет колонок archived_*, делаем минимально: только статус
-        if (/column .* does not exist/i.test(updErr.message)) {
-          const { error: e1 } = await supabase
-            .from('jobs')
-            .update({ status: 'отказ' })
-            .eq('id', job.id);
-          if (e1) throw e1;
-
-          // и пишем служебный комментарий
-          await supabase
-            .from('comments')
-            .insert({ job_id: job.id, text: `ARCHIVE: ${reason}` });
-        } else {
-          throw updErr;
-        }
+      if (!job.archived_at) {
+        const reason =
+          window.prompt('Причина архивации (например: "отказ от ремонта")', 'отказ от ремонта') || null;
+        const patch = {
+          archived_at: new Date().toISOString(),
+          archived_reason: reason,
+          status: 'отказ', // помечаем статусом отказа; при желании можно убрать
+        };
+        const { error } = await supabase.from('jobs').update(patch).eq('id', job.id);
+        if (error) throw error;
+      } else {
+        if (!window.confirm('Вернуть заявку из архива?')) return;
+        const patch = { archived_at: null, archived_reason: null };
+        const { error } = await supabase.from('jobs').update(patch).eq('id', job.id);
+        if (error) throw error;
       }
-
       await fetchAll();
-      alert('Заявка отправлена в архив');
     } catch (e) {
-      console.error('Архивирование не удалось:', e);
-      alert('Не удалось отправить в архив: ' + (e?.message || e));
-    } finally {
-      setSavingId(null);
+      console.error(e);
+      alert('Архивирование не удалось: ' + (e.message || e));
     }
   }
 
@@ -249,16 +205,11 @@ export default function JobsPage() {
                 tabIndex={0}
                 onClick={(e) => {
                   const tag = e.target.tagName;
-                  if (!['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) {
-                    openJob(job.id);
-                  }
+                  if (!['BUTTON','A','INPUT','SELECT','TEXTAREA'].includes(tag)) openJob(job.id);
                 }}
                 onKeyDown={(e) => {
-                  if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      openJob(job.id);
-                    }
+                  if (!['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openJob(job.id); }
                   }
                 }}
                 title="Открыть заявку"
@@ -266,27 +217,19 @@ export default function JobsPage() {
                 <td>
                   <div
                     className="cell-wrap num-link"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openJob(job.id);
-                    }}
+                    onClick={(e) => { e.stopPropagation(); openJob(job.id); }}
                   >
                     {job.job_number || job.id}
                   </div>
                 </td>
 
-                <td>
-                  <div className="cell-wrap">
-                    {job.client_name}
-                    {job.client_phone ? ` — ${job.client_phone}` : ''}
-                  </div>
-                </td>
+                <td><div className="cell-wrap">
+                  {job.client_name}{job.client_phone ? ` — ${job.client_phone}` : ''}
+                </div></td>
 
-                <td className="col-system">
-                  <div className="cell-wrap">{job.system_type || '—'}</div>
-                </td>
+                <td className="col-system"><div className="cell-wrap">{job.system_type || '—'}</div></td>
 
-                {/* Проблема — редактируемая */}
+                {/* Проблема */}
                 <td onClick={(e) => e.stopPropagation()}>
                   <input
                     type="text"
@@ -311,17 +254,11 @@ export default function JobsPage() {
                     onChange={(e) => handleChange(job.id, 'technician_id', e.target.value || null)}
                   >
                     <option value="">—</option>
-                    {technicians.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
+                    {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
                 </td>
 
-                <td className="col-date">
-                  <div className="cell-wrap">{job.created_at_fmt}</div>
-                </td>
+                <td className="col-date"><div className="cell-wrap">{job.created_at_fmt}</div></td>
 
                 <td onClick={(e) => e.stopPropagation()}>
                   <select
@@ -329,11 +266,7 @@ export default function JobsPage() {
                     onChange={(e) => handleChange(job.id, 'status', e.target.value)}
                   >
                     <option value="">—</option>
-                    {STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
+                    {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </td>
 
@@ -346,21 +279,13 @@ export default function JobsPage() {
                     >
                       {savingId === job.id ? '…' : '💾'}
                     </button>
-
-                    <button title="Редактировать" onClick={() => openJob(job.id)}>
-                      ✏️
-                    </button>
-
-                    {/* ВМЕСТО инвойса — Архив */}
+                    <button title="Редактировать" onClick={() => openJob(job.id)}>✏️</button>
+                    {/* ВМЕСТО «Инвойс» — «Архив» */}
                     <button
-                      title="Отправить в архив (отказ/закрыть без ремонта)"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleArchive(job);
-                      }}
-                      disabled={savingId === job.id}
+                      title={job.archived_at ? 'Вернуть из архива' : 'Отправить в архив'}
+                      onClick={(e) => { e.stopPropagation(); handleArchive(job); }}
                     >
-                      🗄️ Архив
+                      {job.archived_at ? '♻️' : '📦 Архив'}
                     </button>
                   </div>
                 </td>
@@ -368,11 +293,7 @@ export default function JobsPage() {
             ))}
 
             {sortedJobs.length === 0 && (
-              <tr>
-                <td colSpan={9} style={{ padding: 10 }}>
-                  Нет заявок
-                </td>
-              </tr>
+              <tr><td colSpan={9} style={{ padding: 10 }}>Нет заявок</td></tr>
             )}
           </tbody>
         </table>
