@@ -243,67 +243,104 @@ const FinancePage = () => {
   };
 
   const markPaid = async (job) => {
-    const { salary } = calcRow(job);
-    const paid_by = await getCurrentUserName();
-    const patch = {
-      salary_paid: true,
-      salary_paid_at: new Date().toISOString(),
-      salary_paid_by: paid_by,
-      salary_paid_amount: salary,
-    };
-    const { error } = await supabase.from('jobs').update(patch).eq('id', job.id);
-    if (error) { console.error('Не удалось пометить как выплаченное:', error); return; }
-    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, ...patch } : j)));
-  };
-
-  const unmarkPaid = async (job) => {
-    const patch = {
-      salary_paid: false,
-      salary_paid_at: null,
-      salary_paid_by: null,
-      salary_paid_amount: null,
-    };
-    const { error } = await supabase.from('jobs').update(patch).eq('id', job.id);
-    if (error) { console.error('Не удалось отменить выплату:', error); return; }
-    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, ...patch } : j)));
-  };
-
-  const bulkPay = async (ids) => {
-    const paid_by = await getCurrentUserName();
-    const patches = {};
-    filteredJobs.forEach((j) => {
-      if (!ids.has(j.id)) return;
-      const { salary } = calcRow(j);
-      patches[j.id] = {
+    try {
+      const { salary } = calcRow(job);
+      const paid_by = await getCurrentUserName();
+      const patch = {
         salary_paid: true,
         salary_paid_at: new Date().toISOString(),
         salary_paid_by: paid_by,
         salary_paid_amount: salary,
       };
-    });
-    for (const id of ids) {
-      const patch = patches[id];
-      if (!patch) continue;
-      const { error } = await supabase.from('jobs').update(patch).eq('id', id);
-      if (error) console.error('Ошибка массовой выплаты id=', id, error);
+      const { error } = await supabase
+        .from('jobs')
+        .update(patch)
+        .eq('id', job.id)
+        .select('id') // просим вернуть строку, чтобы видеть возможную ошибку/политику
+        .single();
+
+      if (error) throw error;
+      await fetchJobs(); // подтягиваем фактическое состояние из БД
+    } catch (e) {
+      console.error('Не удалось пометить как выплаченное:', e);
+      alert('Не удалось пометить как выплаченное: ' + (e?.message || e));
     }
-    setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, ...patches[j.id] } : j)));
-    setSelected(new Set());
+  };
+
+  const unmarkPaid = async (job) => {
+    try {
+      const patch = {
+        salary_paid: false,
+        salary_paid_at: null,
+        salary_paid_by: null,
+        salary_paid_amount: null,
+      };
+      const { error } = await supabase
+        .from('jobs')
+        .update(patch)
+        .eq('id', job.id)
+        .select('id')
+        .single();
+
+      if (error) throw error;
+      await fetchJobs();
+    } catch (e) {
+      console.error('Не удалось отменить выплату:', e);
+      alert('Не удалось отменить выплату: ' + (e?.message || e));
+    }
+  };
+
+  const bulkPay = async (ids) => {
+    try {
+      const paid_by = await getCurrentUserName();
+      for (const j of filteredJobs) {
+        if (!ids.has(j.id)) continue;
+        const { salary } = calcRow(j);
+        const patch = {
+          salary_paid: true,
+          salary_paid_at: new Date().toISOString(),
+          salary_paid_by: paid_by,
+          salary_paid_amount: salary,
+        };
+        const { error } = await supabase
+          .from('jobs')
+          .update(patch)
+          .eq('id', j.id)
+          .select('id')
+          .single();
+        if (error) throw error;
+      }
+      setSelected(new Set());
+      await fetchJobs();
+    } catch (e) {
+      console.error('Массовая выплата: ', e);
+      alert('Массовая выплата: ' + (e?.message || e));
+    }
   };
 
   const bulkUnpay = async (ids) => {
-    const patch = {
-      salary_paid: false,
-      salary_paid_at: null,
-      salary_paid_by: null,
-      salary_paid_amount: null,
-    };
-    for (const id of ids) {
-      const { error } = await supabase.from('jobs').update(patch).eq('id', id);
-      if (error) console.error('Ошибка отмены выплаты id=', id, error);
+    try {
+      const patch = {
+        salary_paid: false,
+        salary_paid_at: null,
+        salary_paid_by: null,
+        salary_paid_amount: null,
+      };
+      for (const id of ids) {
+        const { error } = await supabase
+          .from('jobs')
+          .update(patch)
+          .eq('id', id)
+          .select('id')
+          .single();
+        if (error) throw error;
+      }
+      setSelected(new Set());
+      await fetchJobs();
+    } catch (e) {
+      console.error('Массовая отмена выплаты: ', e);
+      alert('Массовая отмена выплаты: ' + (e?.message || e));
     }
-    setJobs((prev) => prev.map((j) => (ids.has(j.id) ? { ...j, ...patch } : j)));
-    setSelected(new Set());
   };
 
   // ===== selection =====
@@ -415,6 +452,13 @@ const FinancePage = () => {
           >
             Выплатить выбранным
           </button>
+          <button
+            onClick={() => bulkUnpay(selected)}
+            disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
+            style={{ ...btn, background: '#f59e0b', color: '#111827' }}
+          >
+            Отменить выплату выбранным
+          </button>
         </div>
 
         <button onClick={handleExport} style={{ ...btn, background: '#16a34a', color: '#fff' }}>
@@ -447,17 +491,7 @@ const FinancePage = () => {
                 <input
                   type="checkbox"
                   checked={filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id))}
-                  onChange={() => {
-                    if (filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id))) {
-                      const next = new Set(selected);
-                      filteredJobs.forEach((j) => next.delete(j.id));
-                      setSelected(next);
-                    } else {
-                      const next = new Set(selected);
-                      filteredJobs.forEach((j) => next.add(j.id));
-                      setSelected(next);
-                    }
-                  }}
+                  onChange={toggleSelectAllVisible}
                 />
               </th>
               <th style={thStyle(COL.JOB)}>Job #</th>
@@ -553,7 +587,9 @@ const FinancePage = () => {
 
       {/* Отчёт по деньгам */}
       <div style={{ maxWidth: TABLE_WIDTH, marginTop: 16 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Отчёт по деньгам (учитываются только строки с выбранным способом оплаты):</h2>
+        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
+          Отчёт по деньгам (учитываются только строки с выбранным способом оплаты):
+        </h2>
         <ul style={{ margin: 0, padding: 0, listStyle: 'none', lineHeight: '1.9' }}>
           <li>Наличные: <strong>{formatMoney(moneyReport.buckets['Наличные'])}</strong></li>
           <li>Zelle: <strong>{formatMoney(moneyReport.buckets['Zelle'])}</strong></li>
