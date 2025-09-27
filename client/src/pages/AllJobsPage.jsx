@@ -82,26 +82,29 @@ const JoAllJobsPage = () => {
     return val;
   };
 
-  /* ====== ОПЛАТЫ: новая ясная логика ======
-     Оплачено (paid) ⇔
-       (scf <= 0  ИЛИ (scf > 0 И выбран метод оплаты)) И
-       (labor <= 0 ИЛИ (labor > 0 И выбран метод оплаты))
-     Неоплачено (unpaid) ⇔ НЕ paid
-  */
+  /* ====== Помощник: выбран ли способ оплаты (как в FinancePage) ====== */
+  const methodChosen = (raw) => {
+    const v = String(raw ?? '').trim().toLowerCase();
+    return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
+  };
+
+  /* ====== ОПЛАТЫ: заявка оплачена ⇔
+     (scf <= 0  ИЛИ (scf > 0 и выбран метод)) И
+     (labor <= 0 ИЛИ (labor > 0 и выбран метод)) */
   const isFullyPaidNow = (j) => {
     const scf = Number(j.scf || 0);
     const labor = Number(j.labor_price || 0);
-    const scfOK = scf <= 0 || (!!j.scf_payment_method && scf > 0);
-    const laborOK = labor <= 0 || (!!j.labor_payment_method && labor > 0);
+    const scfOK = scf <= 0 || (scf > 0 && methodChosen(j.scf_payment_method));
+    const laborOK = labor <= 0 || (labor > 0 && methodChosen(j.labor_payment_method));
     return scfOK && laborOK;
   };
   const isUnpaidNow = (j) => !isFullyPaidNow(j);
 
-  // для подсветки полей-селектов
-  const needsScfPayment = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
-  const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
+  // Подсветка селектов (если сумма > 0, но способ не выбран)
+  const needsScfPayment = (j) => Number(j.scf || 0) > 0 && !methodChosen(j.scf_payment_method);
+  const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !methodChosen(j.labor_payment_method);
 
-  /* ====== ГАРАНТИЯ/АРХИВ считаем по СОХРАНЁННОМУ состоянию (origJobs) ====== */
+  /* ====== ГАРАНТИЯ/АРХИВ по СНИМКУ из БД (origJobs) ====== */
   const isDone = (s) => {
     const v = String(s || '').toLowerCase().trim();
     return v === 'завершено' || v === 'выполнено';
@@ -114,8 +117,8 @@ const JoAllJobsPage = () => {
 
   const persistedFullyPaid = (j) => {
     const o = origById(j.id) || j;
-    const scfOK = Number(o.scf || 0) <= 0 || !!o.scf_payment_method;
-    const laborOK = Number(o.labor_price || 0) <= 0 || !!o.labor_payment_method;
+    const scfOK = Number(o.scf || 0) <= 0 || methodChosen(o.scf_payment_method);
+    const laborOK = Number(o.labor_price || 0) <= 0 || methodChosen(o.labor_payment_method);
     return scfOK && laborOK;
   };
 
@@ -127,7 +130,7 @@ const JoAllJobsPage = () => {
   };
   const warrantyEnd = (j) => {
     const s = warrantyStart(j);
-    return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null;
+    return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 дней
   };
   const now = new Date();
 
@@ -136,12 +139,13 @@ const JoAllJobsPage = () => {
     if (isRecall(o.status)) return false; // ReCall всегда активный
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now <= warrantyEnd(j);
   };
-  const persistedInArchive = (j) => {
+  const persistedInArchiveByWarranty = (j) => {
     const o = origById(j.id) || j;
     if (isRecall(o.status)) return false;
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now > warrantyEnd(j);
   };
 
+  /* ====== Сохранение ====== */
   const handleSave = async (job) => {
     const { id } = job;
 
@@ -154,8 +158,8 @@ const JoAllJobsPage = () => {
       status: job.status ?? null,
       appointment_time: toISO(job.appointment_time),
       labor_price: job.labor_price !== '' && job.labor_price != null ? parseFloat(job.labor_price) : null,
-      scf_payment_method: job.scf_payment_method ?? null, // SCF
-      labor_payment_method: job.labor_payment_method ?? null, // Работа
+      scf_payment_method: job.scf_payment_method ?? null,
+      labor_payment_method: job.labor_payment_method ?? null,
       system_type: job.system_type ?? null,
       issue: job.issue ?? null,
     };
@@ -221,10 +225,19 @@ const JoAllJobsPage = () => {
       .filter((j) => {
         const o = origById(j.id) || j;
         const recall = isRecall(o.status);
-        if (viewMode === 'warranty') return !recall && persistedInWarranty(j);
-        if (viewMode === 'archive') return !recall && persistedInArchive(j);
-        // active
-        return recall || !(persistedInWarranty(j) || persistedInArchive(j));
+
+        if (viewMode === 'warranty') {
+          // Только гарантия, исключаем вручную архивированные
+          return !recall && !j.archived_at && persistedInWarranty(j);
+        }
+
+        if (viewMode === 'archive') {
+          // В архиве: вручную архивированные ИЛИ ушедшие по сроку гарантии
+          return j.archived_at || (!recall && persistedInArchiveByWarranty(j));
+        }
+
+        // active: всё, что НЕ в гарантийном и НЕ в архиве, + ReCall; исключаем вручную архивированные
+        return (recall || !(persistedInWarranty(j) || persistedInArchiveByWarranty(j))) && !j.archived_at;
       })
       .filter((j) =>
         filterStatus === 'all'
@@ -297,7 +310,7 @@ const JoAllJobsPage = () => {
 
       <h1 className="text-2xl font-bold mb-2">📋 Все заявки</h1>
 
-      {/* Легенда для активного режима */}
+      {/* Легенда для активного списка */}
       {viewMode === 'active' && (
         <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
@@ -306,7 +319,7 @@ const JoAllJobsPage = () => {
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span style={{ display: 'inline-block', width: 12, height: 12, background: '#dcfce7', border: '1px solid #86efac' }} />
-            <span>зелёным — заявки на гарантии</span>
+            <span>зелёным — заявки на гарантии (60 дней)</span>
           </span>
         </div>
       )}
@@ -409,11 +422,13 @@ const JoAllJobsPage = () => {
               <tbody>
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
-                  const rowClass = persistedInWarranty(job)
-                    ? 'warranty'
-                    : isUnpaidNow(job)
-                    ? 'unpaid'
-                    : '';
+                  const rowClass = job.archived_at
+                    ? '' // вручную архивированную НЕ красим; она видна только во вкладке "Архив"
+                    : (persistedInWarranty(job)
+                        ? 'warranty'
+                        : isUnpaidNow(job)
+                        ? 'unpaid'
+                        : '');
 
                   const scfError = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
@@ -489,9 +504,10 @@ const JoAllJobsPage = () => {
                         >
                           <option value="">—</option>
                           <option value="cash">cash</option>
-                          <option value="Zelle">Zelle</option>
+                          <option value="zelle">Zelle</option>
                           <option value="card">card</option>
                           <option value="check">check</option>
+                          <option value="-">-</option>
                         </select>
                       </td>
 
@@ -515,9 +531,10 @@ const JoAllJobsPage = () => {
                         >
                           <option value="">—</option>
                           <option value="cash">cash</option>
-                          <option value="Zelle">Zelle</option>
+                          <option value="zelle">Zelle</option>
                           <option value="card">card</option>
                           <option value="check">check</option>
+                          <option value="-">-</option>
                         </select>
                       </td>
 
