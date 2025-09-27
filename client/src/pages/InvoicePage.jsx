@@ -84,6 +84,9 @@ export default function InvoicePage() {
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
+  // Переопределение Balance Due (пустая строка = auto от total)
+  const [dueOverride, setDueOverride] = useState('');
+
   const [saving, setSaving] = useState(false);
 
   /* ----------- init ----------- */
@@ -163,6 +166,12 @@ export default function InvoicePage() {
   );
   const total = useMemo(() => Math.max(0, N(subtotal) - N(discount)), [subtotal, discount]);
 
+  // Итог для Balance Due (учитывает переопределение)
+  const balanceDue = useMemo(() => {
+    const v = String(dueOverride).trim();
+    return v === '' ? total : Math.max(0, N(v));
+  }, [dueOverride, total]);
+
   /* ----------- rows edit ----------- */
   const changeRow = (i, key, val) => {
     setRows((prev) => {
@@ -237,7 +246,7 @@ export default function InvoicePage() {
       doc.roundedRect(pageW - marginX - pillW, rightY, pillW, pillH, 8, 8, 'FD');
       doc.setFont(undefined,'bold'); doc.setTextColor(70);
       doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
-      doc.setTextColor(0); doc.text(`$${N(total).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
+      doc.setTextColor(0); doc.text(`$${N(balanceDue).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
       rightY += pillH + 18;
 
       // Company block aligned with Bill To
@@ -432,10 +441,45 @@ export default function InvoicePage() {
               />
             </div>
 
+            {/* ====== РЕДАКТИРУЕМЫЙ Balance Due ====== */}
             <div style={{ ...S.pill, marginTop: 8 }}>
               <div style={S.pillRow}>
                 <div style={S.pillCellLeft}>Balance Due:</div>
-                <div style={S.pillCellRight}>${N(total).toFixed(2)}</div>
+                <div style={S.pillCellRight}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ opacity: 0.7 }}>$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      style={{
+                        ...S.input,
+                        width: 120,
+                        height: 32,
+                        textAlign: 'right',
+                        padding: '4px 8px',
+                        background: '#fff',
+                        borderColor: '#dfe3ea'
+                      }}
+                      value={dueOverride === '' ? N(total).toFixed(2) : dueOverride}
+                      onChange={(e) => setDueOverride(e.target.value)}
+                      onFocus={() => {
+                        if (dueOverride === '') setDueOverride(N(total).toFixed(2));
+                      }}
+                      title="Можно отредактировать вручную; ↺ — сброс к авто"
+                    />
+                    {dueOverride !== '' && (
+                      <button
+                        type="button"
+                        onClick={() => setDueOverride('')}
+                        style={{ ...S.ghost, height: 32, lineHeight: '20px', padding: '4px 8px' }}
+                        title="Сбросить к авто (из Total)"
+                      >
+                        ↺
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -504,8 +548,13 @@ export default function InvoicePage() {
             Include warranty
           </label>
           <span style={{ marginLeft: 10 }}>Days:&nbsp;</span>
-          <input type="number" min={0} style={{ ...S.input, width: 90, display: 'inline-block' }}
-                 value={warrantyDays} onChange={(e) => setWarrantyDays(Number(e.target.value || 0))} />
+          <input
+            type="number"
+            min={0}
+            style={{ ...S.input, width: 90, display: 'inline-block' }}
+            value={warrantyDays}
+            onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
+          />
         </div>
       </div>
     </div>
