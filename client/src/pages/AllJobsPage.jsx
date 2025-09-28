@@ -303,8 +303,8 @@ const JoAllJobsPage = () => {
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
         .jobs-table .center { text-align:center; }
         .jobs-table tr.warranty { background:#dcfce7; }
-        .jobs-table tr.unpaid { background:#fee2e2; }           /* 🔴 неоплаченные */
-        .jobs-table tr.unpaid:hover { background:#fecaca; }     /* чуть темнее при ховере */
+        .jobs-table tr.unpaid { background:#fee2e2; }           /* 🔴 неоплаченные (только завершённые) */
+        .jobs-table tr.unpaid:hover { background:#fecaca; }
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
       `}</style>
 
@@ -315,7 +315,8 @@ const JoAllJobsPage = () => {
         <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
             <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fee2e2', border: '1px solid #fca5a5' }} />
-            <span>красным — НЕОПЛАЧЕННЫЕ (есть суммы &gt; 0 без выбранного способа оплаты)</span>
+            {/* 🔴 уточнили формулировку */}
+            <span>красным — <b>ЗАВЕРШЕНО</b>, но <b>НЕ ОПЛАЧЕНО</b> (есть суммы &gt; 0 без выбранного способа оплаты)</span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <span style={{ display: 'inline-block', width: 12, height: 12, background: '#dcfce7', border: '1px solid #86efac' }} />
@@ -422,11 +423,13 @@ const JoAllJobsPage = () => {
               <tbody>
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
+
+                  // 🔴 подсвечиваем красным ТОЛЬКО если статус завершено И не оплачено
                   const rowClass = job.archived_at
-                    ? '' // вручную архивированную НЕ красим; она видна только во вкладке "Архив"
+                    ? '' // вручную архивированную НЕ красим; видна только во вкладке "Архив"
                     : (persistedInWarranty(job)
                         ? 'warranty'
-                        : isUnpaidNow(job)
+                        : (isDone(job.status) && isUnpaidNow(job))
                         ? 'unpaid'
                         : '');
 
