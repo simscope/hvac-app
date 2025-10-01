@@ -138,22 +138,15 @@ export default function TasksTodayPage() {
   };
 
   // ручное создание платежной задачи из блока "неоплаченные"
-  const makeFromJob = async (job_id, job_number) => {
-    await supabase.from('tasks').insert({
-      title: `Оплата по заявке #${job_number || String(job_id).slice(0,8)}`,
-      details: 'Связаться с клиентом и закрыть оплату',
-      status: 'active',
-      type: 'payment',
-      job_id: String(job_id),          // UUID
-      job_number: job_number || null,  // если есть номер — сохраним
-      due_date: nyToday(),
-      created_by: me.id,
-      assignee_id: me.id,
-      priority: 'high',
-      tags: ['оплата','неоплачено']
-    });
-    load();
-  };
+ const makeFromJob = async (job_id, job_number) => {
+  // безопасно: создаст только если на сегодня ещё нет
+  await supabase.rpc('create_payment_task', {
+    p_job_id: job_id,
+    p_job_number: job_number || null,
+    p_user: me.id,
+  });
+  load();
+};
 
   // алерт от task_notifications
   useEffect(() => {
