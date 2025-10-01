@@ -339,7 +339,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
       title: title.trim(),
       details: details.trim() || null,
       status: 'active',
-      job_id: jobId ? Number(jobId) : null,
+      job_id: jobId ? String(jobId).trim() : null,
       due_date: dateStr,                    // день задачи (NY)
       created_by: me.id,
       assignee_id,
