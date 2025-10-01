@@ -25,6 +25,9 @@ import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
 
+// 🔹 добавили страницу задач
+import TasksTodayPage from './pages/TasksTodayPage.jsx';
+
 /* ──────────────────────────────────────────────────────────────────────────────
    Гард на доступ к конкретной заявке для техника:
    admin / manager — всегда; tech — только если заявка назначена на него
@@ -98,6 +101,18 @@ function Shell() {
           {/* Публичные */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/no-access" element={<NoAccessPage />} />
+
+          {/* 🔹 Задачи на сегодня — менеджер + админ */}
+          <Route
+            path="/tasks/today"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <TasksTodayPage />
+              </ProtectedRoute>
+            }
+          />
+          {/* Алиас /tasks → /tasks/today */}
+          <Route path="/tasks" element={<Navigate to="/tasks/today" replace />} />
 
           {/* Заявки (список) — менеджер + админ */}
           <Route
