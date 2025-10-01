@@ -37,6 +37,12 @@ const Icon = {
       <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v15l4-3h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2ZM6 9h8v2H6V9Zm0-4h12v2H6V5Z"/>
     </svg>
   ),
+  Tasks: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path fill="currentColor" d="M9 2h6a2 2 0 0 1 2 2v1h3v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5h3V4a2 2 0 0 1 2-2Zm0 3h6V4H9v1Zm-1 5h8v2H8V10Zm0 4h8v2H8v-2Z"/>
+      <path fill="currentColor" d="m7 11 1.5 1.5L12 9l-1.4-1.4-2.1 2.08L8.4 10 7 11Z" opacity=".0"/> 
+    </svg>
+  ),
   Techs: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path fill="currentColor" d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5Zm0 2c-4.33 0-8 2-8 4.5V21h16v-2.5C20 16 16.33 14 12 14Z"/>
@@ -131,7 +137,7 @@ export default function TopNav() {
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
 
-    // лёгкий поллинг (как резерв, если вдруг websocket отвалился и переподключился без событий)
+    // лёгкий поллинг
     pollRef.current = setInterval(() => {
       if (document.visibilityState === 'visible') refreshUnreadFromServer();
     }, 5000);
@@ -161,6 +167,7 @@ export default function TopNav() {
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> }];
     if (r === 'admin' || r === 'manager') {
       arr.push(
+        { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },   // 👈 новый пункт
         { to: '/jobs/all', label: 'Все заявки', icon: <Icon.All /> },
         { to: '/calendar', label: 'Календарь', icon: <Icon.Calendar /> },
         { to: '/materials', label: 'Материалы', icon: <Icon.Materials /> },
