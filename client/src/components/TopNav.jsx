@@ -40,7 +40,6 @@ const Icon = {
   Tasks: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path fill="currentColor" d="M9 2h6a2 2 0 0 1 2 2v1h3v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5h3V4a2 2 0 0 1 2-2Zm0 3h6V4H9v1Zm-1 5h8v2H8V10Zm0 4h8v2H8v-2Z"/>
-      <path fill="currentColor" d="m7 11 1.5 1.5L12 9l-1.4-1.4-2.1 2.08L8.4 10 7 11Z" opacity=".0"/> 
     </svg>
   ),
   Techs: (p) => (
@@ -64,7 +63,7 @@ export default function TopNav() {
   const { user, role, logout } = useAuth();
   const uid = user?.id || null;
 
-  // unread total для бэйджа «Чат» (быстрая инициализация из localStorage)
+  // unread total для бэйджа «Чат»
   const [chatUnreadTotal, setChatUnreadTotal] = useState(() => {
     try {
       const raw = localStorage.getItem('CHAT_UNREAD_TOTAL');
@@ -85,13 +84,12 @@ export default function TopNav() {
   const refreshUnreadFromServer = async () => {
     if (!uid) { setChatUnreadTotal(0); return; }
     const { data, error } = await supabase.rpc('get_unread_by_chat');
-    if (error) return; // тихо: локальный счётчик всё равно есть
+    if (error) return;
     const sum = (data || []).reduce((s, r) => s + (Number(r.unread) || 0), 0);
     setChatUnreadTotal(sum);
     try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum)); } catch {}
   };
 
-  // слушаем локальный ивент от ChatPage
   useEffect(() => {
     const onLocalChanged = (e) => {
       const n = e?.detail?.total;
@@ -101,9 +99,7 @@ export default function TopNav() {
     return () => window.removeEventListener('chat-unread-changed', onLocalChanged);
   }, []);
 
-  // Realtime подписки + страховки (focus/visibility + поллинг)
   useEffect(() => {
-    // очистить прошлое
     if (channelRef.current) {
       try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
@@ -112,18 +108,14 @@ export default function TopNav() {
 
     if (!uid) return;
 
-    // начальная загрузка
     refreshUnreadFromServer();
 
-    // realtime подписка
     const ch = supabase
       .channel('topnav-unread')
-      // любое новое сообщение → пересчитать
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         () => debounced(refreshUnreadFromServer)
       )
-      // мой last_read_at поменялся → пересчитать
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `member_id=eq.${uid}` },
         () => debounced(refreshUnreadFromServer)
@@ -131,13 +123,11 @@ export default function TopNav() {
       .subscribe();
     channelRef.current = ch;
 
-    // обновление при возврате вкладки / при фокусе окна
     const onFocus = () => debounced(refreshUnreadFromServer, 50);
     const onVisibility = () => { if (document.visibilityState === 'visible') onFocus(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
 
-    // лёгкий поллинг
     pollRef.current = setInterval(() => {
       if (document.visibilityState === 'visible') refreshUnreadFromServer();
     }, 5000);
@@ -152,7 +142,6 @@ export default function TopNav() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
-  // остальные хуки
   const r = useMemo(() => norm(role), [role]);
 
   const base = process.env.PUBLIC_URL || '';
@@ -163,14 +152,15 @@ export default function TopNav() {
     else { setLogoSrc(null); }
   };
 
+  // Порядок ссылок: Заявки → Все заявки → Календарь → Материалы → Задачи → Чат
   const links = useMemo(() => {
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> }];
     if (r === 'admin' || r === 'manager') {
       arr.push(
-        { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },   // 👈 новый пункт
         { to: '/jobs/all', label: 'Все заявки', icon: <Icon.All /> },
         { to: '/calendar', label: 'Календарь', icon: <Icon.Calendar /> },
         { to: '/materials', label: 'Материалы', icon: <Icon.Materials /> },
+        { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },   // ← здесь
         { to: '/chat', label: 'Чат', icon: <Icon.Chat /> },
       );
     }
