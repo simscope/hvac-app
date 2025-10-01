@@ -306,6 +306,28 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [repeatMins, setRepeatMins] = useState('');
   const [priority, setPriority] = useState('normal');
   const [tags, setTags] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Подставляем номер по UUID (если известен)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const id = (jobId || '').trim();
+      if (!id) return;
+      try {
+        const { data, error } = await supabase
+          .from('jobs')
+          .select('id, job_number')
+          .eq('id', id)
+          .maybeSingle();
+        if (!alive || error || !data) return;
+        if (!jobNumber && data.job_number != null) {
+          setJobNumber(String(data.job_number));
+        }
+      } catch {}
+    })();
+    return () => { alive = false; };
+  }, [jobId]);
 
   const applyTemplate = (name) => {
     if (name === 'parts') {
@@ -315,7 +337,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
       setTags('детали,поиск');
     }
     if (name === 'call') {
-      setTitle('Позвонить в супплай-хаус');
+      setTitle(jobNumber ? `Позвонить в супплай-хаус по заявке #${jobNumber}` : 'Позвонить в супплай-хаус');
       setDetails('Уточнить наличие/цену, оформить заказ');
       setPriority('normal');
       setTags('звонок,супплай');
@@ -328,30 +350,76 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
     }
   };
 
+  // Если пользователь вписал/изменил номер — аккуратно дописываем его в заголовок из шаблонов
+  useEffect(() => {
+    if (!jobNumber) return;
+    if (/заявк/i.test(title) && !/#\s*\d+/.test(title)) {
+      setTitle((t) => `${t.trim()} #${jobNumber}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobNumber]);
+
   const save = async () => {
-    const assignee_id = assignee==='me' ? me.id : assignee;
-    const reminder_at = timeStr ? toNYTzISO(dateStr, timeStr) : null;
-    const tagsArr = tags ? tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    setLoading(true);
+    try {
+      // 1) Разруливаем связку job_id/job_number:
+      let job_id = (jobId || '').trim() || null;
+      let job_number = (jobNumber || '').trim() || null;
 
-    await supabase.from('tasks').insert({
-      title: title.trim(),
-      details: details.trim() || null,
-      status: 'active',
-      type: 'general',
-      job_id: jobId ? String(jobId).trim() : null,
-      job_number: jobNumber || null,
-      due_date: dateStr,
-      created_by: me.id,
-      assignee_id,
-      priority,
-      tags: tagsArr,
-      reminder_at,
-      remind_every_minutes: repeatMins ? Number(repeatMins) : null,
-      last_reminded_at: null
-    });
+      // Если есть только номер — найдём id
+      if (!job_id && job_number) {
+        const { data } = await supabase
+          .from('jobs')
+          .select('id, job_number')
+          .eq('job_number', job_number)
+          .maybeSingle();
+        if (data?.id) job_id = data.id;
+      }
 
-    onCreated?.();
-    onClose?.();
+      // Если есть только id — найдём номер
+      if (job_id && !job_number) {
+        const { data } = await supabase
+          .from('jobs')
+          .select('job_number')
+          .eq('id', job_id)
+          .maybeSingle();
+        if (data?.job_number != null) job_number = String(data.job_number);
+      }
+
+      // 2) Гарантируем, что в заголовке номер, а не UUID
+      let finalTitle = title.trim();
+      if (job_number && /заявк/i.test(finalTitle) && !/#\s*\d+/.test(finalTitle)) {
+        finalTitle = `${finalTitle} #${job_number}`;
+      }
+
+      // 3) Напоминание и теги
+      const reminder_at = timeStr ? toNYTzISO(dateStr, timeStr) : null;
+      const tagsArr = tags ? tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
+      const assignee_id = assignee==='me' ? me.id : assignee;
+
+      // 4) Сохранение
+      await supabase.from('tasks').insert({
+        title: finalTitle,
+        details: details.trim() || null,
+        status: 'active',
+        type: 'general',
+        job_id: job_id,                    // UUID, если нашли
+        job_number: job_number || null,    // номер, если есть
+        due_date: dateStr,
+        created_by: me.id,
+        assignee_id,
+        priority,
+        tags: tagsArr,
+        reminder_at,
+        remind_every_minutes: repeatMins ? Number(repeatMins) : null,
+        last_reminded_at: null
+      });
+
+      onCreated?.();
+      onClose?.();
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -360,7 +428,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
       display:'grid', placeItems:'center', zIndex:50
     }}>
       <div style={{ width:620, background:'#fff', borderRadius:16, padding:16, display:'grid', gap:12 }}>
-        <div style={{...ROW}}>
+        <div style={{display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center'}}>
           <div style={{fontWeight:700, fontSize:18}}>Новая задача</div>
           <button style={BTN_L} onClick={onClose}>Закрыть</button>
         </div>
@@ -422,7 +490,9 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
 
         <div style={{display:'grid', gridTemplateColumns:'1fr auto', gap:12}}>
           <div />
-          <button style={BTN} onClick={save} disabled={!title.trim()}>Создать</button>
+          <button style={BTN} onClick={save} disabled={loading || !title.trim()}>
+            {loading ? 'Сохраняю…' : 'Создать'}
+          </button>
         </div>
       </div>
     </div>
