@@ -1,6 +1,6 @@
 // client/src/pages/TasksTodayPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -8,7 +8,7 @@ import tz from 'dayjs/plugin/timezone';
 dayjs.extend(utc); dayjs.extend(tz);
 const NY = 'America/New_York';
 
-/* ===== UI styles ===== */
+/* ===== UI ===== */
 const PAGE = { padding: 16, display: 'grid', gap: 12 };
 const ROW = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems:'center', gap: 8 };
 const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
@@ -29,49 +29,47 @@ function toNYTzISO(dateStr, timeStr) {
 
 export default function TasksTodayPage() {
   const [me, setMe] = useState(null);
-  const [managers, setManagers] = useState([]); // {id, full_name, role}
-
+  const [managers, setManagers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [comments, setComments] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [notif, setNotif] = useState(null);
 
-  // ========== auth ==========
+  /* ========== auth ========== */
   useEffect(() => {
-    let authListener = null;
-
+    let unsub = null;
     (async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      setMe(sessionData?.session?.user ?? null);
-
-      const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
-        setMe(s?.user ?? null);
+      const { data: s } = await supabase.auth.getSession();
+      setMe(s?.session?.user ?? null);
+      const { data } = supabase.auth.onAuthStateChange((_e, session) => {
+        setMe(session?.user ?? null);
       });
-      authListener = sub;
+      unsub = data?.subscription;
     })();
-
-    return () => {
-      authListener?.subscription?.unsubscribe?.();
-    };
+    return () => unsub?.unsubscribe?.();
   }, []);
 
-  // ========== managers list ==========
+  /* ========== managers ========== */
   const loadManagers = useCallback(async () => {
-    const { data: mgrs } = await supabase
+    const { data } = await supabase
       .from('profiles')
       .select('id, full_name, role')
-      .in('role', ['admin','manager'])
+      .in('role', ['admin', 'manager'])
       .order('role', { ascending: true });
-    setManagers(mgrs || []);
+    setManagers(data || []);
   }, []);
   useEffect(()=>{ loadManagers(); }, []);
 
-  // ========== load tasks & comments ==========
+  /* ========== загрузка задач ========== */
   const load = useCallback(async () => {
+    // авто-перенос & автосоздание платежных задач на сегодня
+    await supabase.rpc('rollover_open_tasks_to_today');
+    await supabase.rpc('ensure_payment_tasks_for_today');
+
     const today = nyToday();
     const { data: t } = await supabase
       .from('tasks')
-      .select('id,title,details,status,job_id,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
+      .select('id,title,details,status,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
       .eq('due_date', today)
       .order('status', { ascending: true })
       .order('updated_at', { ascending: false });
@@ -94,28 +92,22 @@ export default function TasksTodayPage() {
       setComments({});
     }
   }, []);
+
   useEffect(() => { load(); }, [me]);
 
-  // ========== realtime ==========
+  /* ========== realtime ========== */
   useEffect(() => {
     if (!me) return;
     const ch = supabase
       .channel('tasks_realtime')
       .on('postgres_changes', { event:'*', schema:'public', table:'tasks' }, load)
       .on('postgres_changes', { event:'*', schema:'public', table:'task_comments' }, load)
-      .on(
-        'postgres_changes',
-        { event:'INSERT', schema:'public', table:'task_notifications', filter: `user_id=eq.${me.id}` },
-        (payload) => setNotif(payload.new)
-      )
+      .on('postgres_changes', { event:'INSERT', schema:'public', table:'task_notifications', filter:`user_id=eq.${me.id}` }, (p) => setNotif(p.new))
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(ch);
-    };
+    return () => supabase.removeChannel(ch);
   }, [me, load]);
 
-  // ========== unpaid jobs (из вью unpaid_jobs_current + дотащить время из jobs) ==========
+  /* ========== неоплаченные заявки из вью + подтянуть номер/время ========== */
   const [unpaid, setUnpaid] = useState([]);
   const loadUnpaid = useCallback(async () => {
     const { data: uj } = await supabase.from('unpaid_jobs_current').select('job_id');
@@ -123,14 +115,14 @@ export default function TasksTodayPage() {
     if (!ids.length) { setUnpaid([]); return; }
     const { data: j } = await supabase
       .from('jobs')
-      .select('id, appointment_time, created_at')
+      .select('id, job_number, appointment_time, created_at')
       .in('id', ids);
     setUnpaid(j || []);
   }, []);
   useEffect(()=>{ loadUnpaid(); }, []);
 
   const active = useMemo(()=> (tasks||[]).filter(t=>t.status==='active'), [tasks]);
-  const done   = useMemo(()=> (tasks||[]).filter(t=>t.status==='done'), [tasks]);
+  const done   = useMemo(()=> (tasks||[]).filter(t=>t.status==='done'),   [tasks]);
 
   const toggleStatus = async (t) => {
     await supabase.from('tasks').update({ status: t.status==='active'?'done':'active' }).eq('id', t.id);
@@ -145,22 +137,25 @@ export default function TasksTodayPage() {
     });
   };
 
-  const makeFromJob = async (job_id) => {
-    const today = nyToday();
+  // ручное создание платежной задачи из блока "неоплаченные"
+  const makeFromJob = async (job_id, job_number) => {
     await supabase.from('tasks').insert({
-      title: `Оплата по заявке #${job_id}`,
+      title: `Оплата по заявке #${job_number || String(job_id).slice(0,8)}`,
       details: 'Связаться с клиентом и закрыть оплату',
       status: 'active',
+      type: 'payment',
       job_id: String(job_id),          // UUID
-      due_date: today,
+      job_number: job_number || null,  // если есть номер — сохраним
+      due_date: nyToday(),
       created_by: me.id,
       assignee_id: me.id,
       priority: 'high',
       tags: ['оплата','неоплачено']
     });
+    load();
   };
 
-  // alerts
+  // алерт от task_notifications
   useEffect(() => {
     if (!notif) return;
     alert(notif.payload?.message || 'Активные задачи');
@@ -190,10 +185,12 @@ export default function TasksTodayPage() {
             {unpaid.map(u => (
               <div key={u.id} style={{display:'grid', gridTemplateColumns:'1fr auto', gap:8, alignItems:'center', border:'1px solid #fecaca', background:'#fee2e2', borderRadius:10, padding:10}}>
                 <div>
-                  <div style={{fontWeight:600, color:'#b91c1c'}}>Заявка #{u.id}</div>
-                  <div style={{fontSize:12, color:'#6b7280'}}>Назначено: {u.appointment_time ? dayjs(u.appointment_time).tz(NY).format('DD.MM HH:mm') : '—'}</div>
+                  <div style={{fontWeight:600, color:'#b91c1c'}}>Заявка #{u.job_number || String(u.id).slice(0,8)}</div>
+                  <div style={{fontSize:12, color:'#6b7280'}}>
+                    Назначено: {u.appointment_time ? dayjs(u.appointment_time).tz(NY).format('DD.MM HH:mm') : '—'}
+                  </div>
                 </div>
-                <button style={BTN} onClick={()=>makeFromJob(u.id)}>Создать задачу</button>
+                <button style={BTN} onClick={()=>makeFromJob(u.id, u.job_number)}>Создать задачу</button>
               </div>
             ))}
           </div>
@@ -272,10 +269,16 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
           {task.details && <div style={{color:'#6b7280', fontSize:14}}>{task.details}</div>}
-          {task.job_id && <div style={{fontSize:12, color:'#2563eb'}}>Связано с заявкой #{task.job_id}</div>}
+          {(task.job_number || task.job_id) && (
+            <div style={{fontSize:12, color:'#2563eb'}}>
+              Связано с заявкой #{task.job_number || String(task.job_id).slice(0,8)}
+            </div>
+          )}
           <TagList tags={task.tags} />
         </div>
-        <button style={BTN_L} onClick={onToggle}>{task.status==='active' ? 'Завершить' : 'В активные'}</button>
+        <button style={BTN_L} onClick={onToggle}>
+          {task.status==='active' ? 'Завершить' : 'В активные'}
+        </button>
       </div>
 
       {/* Комментарии */}
@@ -303,16 +306,17 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
   const [jobId, setJobId] = useState('');
+  const [jobNumber, setJobNumber] = useState('');
   const [assignee, setAssignee] = useState('me');
   const [dateStr, setDateStr] = useState(dayjs().tz(NY).format('YYYY-MM-DD'));
-  const [timeStr, setTimeStr] = useState('');                 // HH:mm → reminder_at
-  const [repeatMins, setRepeatMins] = useState('');           // 15/30/60...
+  const [timeStr, setTimeStr] = useState('');
+  const [repeatMins, setRepeatMins] = useState('');
   const [priority, setPriority] = useState('normal');
-  const [tags, setTags] = useState('');                       // "детали,звонок"
+  const [tags, setTags] = useState('');
 
   const applyTemplate = (name) => {
     if (name === 'parts') {
-      setTitle(jobId ? `Найти детали к заявке #${jobId}` : 'Найти детали к заявке');
+      setTitle(jobNumber ? `Найти детали к заявке #${jobNumber}` : 'Найти детали к заявке');
       setDetails('Проверить схемы/мануалы, подобрать аналоги');
       setPriority('high');
       setTags('детали,поиск');
@@ -340,7 +344,9 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
       title: title.trim(),
       details: details.trim() || null,
       status: 'active',
-      job_id: jobId ? String(jobId).trim() : null, // UUID
+      type: 'general',
+      job_id: jobId ? String(jobId).trim() : null,
+      job_number: jobNumber || null,
       due_date: dateStr,
       created_by: me.id,
       assignee_id,
@@ -383,8 +389,12 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
 
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12}}>
           <div>
-            <div style={{fontSize:12, color:'#6b7280'}}>Заявка (опц.)</div>
+            <div style={{fontSize:12, color:'#6b7280'}}>UUID заявки (опц.)</div>
             <input style={INPUT} value={jobId} onChange={e=>setJobId(e.target.value)} placeholder="UUID заявки" />
+          </div>
+          <div>
+            <div style={{fontSize:12, color:'#6b7280'}}>Номер заявки (опц.)</div>
+            <input style={INPUT} value={jobNumber} onChange={e=>setJobNumber(e.target.value)} placeholder="Напр. 1024" />
           </div>
           <div>
             <div style={{fontSize:12, color:'#6b7280'}}>Исполнитель</div>
@@ -395,20 +405,12 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
               ))}
             </select>
           </div>
-          <div>
-            <div style={{fontSize:12, color:'#6b7280'}}>Приоритет</div>
-            <select style={INPUT} value={priority} onChange={e=>setPriority(e.target.value)}>
-              <option value="low">low</option>
-              <option value="normal">normal</option>
-              <option value="high">high</option>
-            </select>
-          </div>
         </div>
 
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12}}>
           <div>
             <div style={{fontSize:12, color:'#6b7280'}}>Дата (NY)</div>
-            <input type="date" style={INPUT} value={dateStr} onChange={e=>setDateStr(e.target.value)} />
+            <input type="date" style={INPUT} value={dayjs(dateStr).format('YYYY-MM-DD')} onChange={e=>setDateStr(e.target.value)} />
           </div>
           <div>
             <div style={{fontSize:12, color:'#6b7280'}}>Время напоминания (опц.)</div>
