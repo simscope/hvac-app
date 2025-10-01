@@ -104,7 +104,20 @@ export default function TasksTodayPage() {
   // ========== unpaid jobs ==========
   const [unpaid, setUnpaid] = useState([]);
   const loadUnpaid = useCallback(async () => {
-    const { data } = await supabase.from('unpaid_jobs_today').select('job_id,appointment_time,created_at');
+    const { data: uj } = await supabase
+    .from('unpaid_jobs_current')
+    .select('job_id'); // тут только job_id и флаг — всё остальное можно подтянуть по jobs при желании
+    // если нужно время назначения — подтянем из jobs:
+  const ids = (uj||[]).map(x=>x.job_id);
+  let rows = [];
+  if (ids.length) {
+    const { data: j } = await supabase
+      .from('jobs')
+      .select('id, appointment_time, created_at')
+      .in('id', ids);
+    rows = j || [];
+  }
+  setUnpaid(rows);
     setUnpaid(data||[]);
   }, []);
   useEffect(()=>{ loadUnpaid(); }, []);
