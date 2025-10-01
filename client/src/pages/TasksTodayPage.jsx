@@ -1,6 +1,6 @@
 // client/src/pages/TasksTodayPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -21,11 +21,10 @@ const CHIP = { padding:'6px 10px', border:'1px solid #d1d5db', borderRadius:999,
 
 function nyToday() { return dayjs().tz(NY).format('YYYY-MM-DD'); }
 function toNYTzISO(dateStr, timeStr) {
-  // dateStr: 'YYYY-MM-DD', timeStr: 'HH:mm' (локальный ввод)
   if (!dateStr || !timeStr) return null;
   const [h,m] = timeStr.split(':').map(Number);
   const d = dayjs.tz(dateStr, NY).hour(h).minute(m).second(0).millisecond(0);
-  return d.toISOString(); // хранится с TZ
+  return d.toISOString();
 }
 
 export default function TasksTodayPage() {
@@ -39,23 +38,31 @@ export default function TasksTodayPage() {
 
   // ========== auth ==========
   useEffect(() => {
-    let subAuth;
+    let authListener = null;
+
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      setMe(data?.session?.user ?? null);
-      subAuth = supabase.auth.onAuthStateChange((_e,s)=>setMe(s?.user??null));
+      const { data: sessionData } = await supabase.auth.getSession();
+      setMe(sessionData?.session?.user ?? null);
+
+      const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+        setMe(s?.user ?? null);
+      });
+      authListener = sub;
     })();
-    return () => subAuth?.data?.subscription?.unsubscribe();
+
+    return () => {
+      authListener?.subscription?.unsubscribe?.();
+    };
   }, []);
 
   // ========== managers list ==========
   const loadManagers = useCallback(async () => {
-    const { data } = await supabase
+    const { data: mgrs } = await supabase
       .from('profiles')
       .select('id, full_name, role')
       .in('role', ['admin','manager'])
       .order('role', { ascending: true });
-    setManagers(data||[]);
+    setManagers(mgrs || []);
   }, []);
   useEffect(()=>{ loadManagers(); }, []);
 
@@ -92,33 +99,33 @@ export default function TasksTodayPage() {
   // ========== realtime ==========
   useEffect(() => {
     if (!me) return;
-    const ch = supabase.channel('tasks_realtime')
+    const ch = supabase
+      .channel('tasks_realtime')
       .on('postgres_changes', { event:'*', schema:'public', table:'tasks' }, load)
       .on('postgres_changes', { event:'*', schema:'public', table:'task_comments' }, load)
-      .on('postgres_changes', { event:'INSERT', schema:'public', table:'task_notifications', filter: `user_id=eq.${me.id}` },
-        (p) => setNotif(p.new))
+      .on(
+        'postgres_changes',
+        { event:'INSERT', schema:'public', table:'task_notifications', filter: `user_id=eq.${me.id}` },
+        (payload) => setNotif(payload.new)
+      )
       .subscribe();
-    return () => supabase.removeChannel(ch);
+
+    return () => {
+      supabase.removeChannel(ch);
+    };
   }, [me, load]);
 
-  // ========== unpaid jobs ==========
+  // ========== unpaid jobs (из вью unpaid_jobs_current + дотащить время из jobs) ==========
   const [unpaid, setUnpaid] = useState([]);
   const loadUnpaid = useCallback(async () => {
-    const { data: uj } = await supabase
-    .from('unpaid_jobs_current')
-    .select('job_id'); // тут только job_id и флаг — всё остальное можно подтянуть по jobs при желании
-    // если нужно время назначения — подтянем из jobs:
-  const ids = (uj||[]).map(x=>x.job_id);
-  let rows = [];
-  if (ids.length) {
+    const { data: uj } = await supabase.from('unpaid_jobs_current').select('job_id');
+    const ids = (uj||[]).map(x => x.job_id);
+    if (!ids.length) { setUnpaid([]); return; }
     const { data: j } = await supabase
       .from('jobs')
       .select('id, appointment_time, created_at')
       .in('id', ids);
-    rows = j || [];
-  }
-  setUnpaid(rows);
-    setUnpaid(data||[]);
+    setUnpaid(j || []);
   }, []);
   useEffect(()=>{ loadUnpaid(); }, []);
 
@@ -144,7 +151,7 @@ export default function TasksTodayPage() {
       title: `Оплата по заявке #${job_id}`,
       details: 'Связаться с клиентом и закрыть оплату',
       status: 'active',
-      job_id,
+      job_id: String(job_id),          // UUID
       due_date: today,
       created_by: me.id,
       assignee_id: me.id,
@@ -181,12 +188,12 @@ export default function TasksTodayPage() {
         ) : (
           <div style={{display:'grid', gap:8}}>
             {unpaid.map(u => (
-              <div key={u.job_id} style={{display:'grid', gridTemplateColumns:'1fr auto', gap:8, alignItems:'center', border:'1px solid #fecaca', background:'#fee2e2', borderRadius:10, padding:10}}>
+              <div key={u.id} style={{display:'grid', gridTemplateColumns:'1fr auto', gap:8, alignItems:'center', border:'1px solid #fecaca', background:'#fee2e2', borderRadius:10, padding:10}}>
                 <div>
-                  <div style={{fontWeight:600, color:'#b91c1c'}}>Заявка #{u.job_id}</div>
+                  <div style={{fontWeight:600, color:'#b91c1c'}}>Заявка #{u.id}</div>
                   <div style={{fontSize:12, color:'#6b7280'}}>Назначено: {u.appointment_time ? dayjs(u.appointment_time).tz(NY).format('DD.MM HH:mm') : '—'}</div>
                 </div>
-                <button style={BTN} onClick={()=>makeFromJob(u.job_id)}>Создать задачу</button>
+                <button style={BTN} onClick={()=>makeFromJob(u.id)}>Создать задачу</button>
               </div>
             ))}
           </div>
@@ -276,7 +283,7 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
         <div style={{fontWeight:600, fontSize:14}}>Комментарии</div>
         {(comments||[]).slice(0,5).map(c => (
           <div key={c.id} style={{fontSize:14}}>
-            <span style={{fontWeight:600}}>{short(c.author_id)}:</span>{' '}
+            <span style={{fontWeight:600}}>{(c.author_id||'').slice(0,8)}:</span>{' '}
             {c.body}{' '}
             <span style={{color:'#6b7280', fontSize:12}}>
               {dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}
@@ -292,8 +299,6 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
   );
 }
 
-function short(id){ return (id||'').slice(0,8); }
-
 function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
@@ -303,13 +308,11 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [timeStr, setTimeStr] = useState('');                 // HH:mm → reminder_at
   const [repeatMins, setRepeatMins] = useState('');           // 15/30/60...
   const [priority, setPriority] = useState('normal');
-  const [tags, setTags] = useState('');                       // строка "детали,звонок"
+  const [tags, setTags] = useState('');                       // "детали,звонок"
 
-  // Быстрые шаблоны
   const applyTemplate = (name) => {
     if (name === 'parts') {
-      setTitle('Найти детали к заявке');
-      if (jobId) setTitle(`Найти детали к заявке #${jobId}`);
+      setTitle(jobId ? `Найти детали к заявке #${jobId}` : 'Найти детали к заявке');
       setDetails('Проверить схемы/мануалы, подобрать аналоги');
       setPriority('high');
       setTags('детали,поиск');
@@ -331,16 +334,14 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const save = async () => {
     const assignee_id = assignee==='me' ? me.id : assignee;
     const reminder_at = timeStr ? toNYTzISO(dateStr, timeStr) : null;
-    const tagsArr = tags
-      ? tags.split(',').map(s=>s.trim()).filter(Boolean)
-      : [];
+    const tagsArr = tags ? tags.split(',').map(s=>s.trim()).filter(Boolean) : [];
 
     await supabase.from('tasks').insert({
       title: title.trim(),
       details: details.trim() || null,
       status: 'active',
-      job_id: jobId ? String(jobId).trim() : null,
-      due_date: dateStr,                    // день задачи (NY)
+      job_id: jobId ? String(jobId).trim() : null, // UUID
+      due_date: dateStr,
       created_by: me.id,
       assignee_id,
       priority,
@@ -365,7 +366,6 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
           <button style={BTN_L} onClick={onClose}>Закрыть</button>
         </div>
 
-        {/* Шаблоны */}
         <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
           <button style={CHIP} onClick={()=>applyTemplate('parts')}>Найти детали к заявке</button>
           <button style={CHIP} onClick={()=>applyTemplate('call')}>Позвонить в супплай-хаус</button>
@@ -384,7 +384,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12}}>
           <div>
             <div style={{fontSize:12, color:'#6b7280'}}>Заявка (опц.)</div>
-            <input style={INPUT} value={jobId} onChange={e=>setJobId(e.target.value)} placeholder="job id (например, 9)" />
+            <input style={INPUT} value={jobId} onChange={e=>setJobId(e.target.value)} placeholder="UUID заявки" />
           </div>
           <div>
             <div style={{fontSize:12, color:'#6b7280'}}>Исполнитель</div>
