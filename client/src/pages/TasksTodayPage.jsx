@@ -1,6 +1,6 @@
 // client/src/pages/TasksTodayPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -107,7 +107,7 @@ export default function TasksTodayPage() {
     return () => supabase.removeChannel(ch);
   }, [me, load]);
 
-  /* ========== неоплаченные заявки из вью + подтянуть номер/время ========== */
+  /* ========== неоплаченные заявки (для автосоздания) ========== */
   const [unpaid, setUnpaid] = useState([]);
   const loadUnpaid = useCallback(async () => {
     const { data: uj } = await supabase.from('unpaid_jobs_current').select('job_id');
@@ -297,6 +297,7 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
 function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
+  const [jobId, setJobId] = useState('');
   const [jobNumber, setJobNumber] = useState('');
   const [assignee, setAssignee] = useState('me');
   const [dateStr, setDateStr] = useState(dayjs().tz(NY).format('YYYY-MM-DD'));
@@ -305,6 +306,27 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [priority, setPriority] = useState('normal');
   const [tags, setTags] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Узнаём номер по UUID (если известен UUID)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const id = (jobId || '').trim();
+      if (!id) return;
+      try {
+        const { data, error } = await supabase
+          .from('jobs')
+          .select('id, job_number')
+          .eq('id', id)
+          .maybeSingle();
+        if (!alive || error || !data) return;
+        if (!jobNumber && data.job_number != null) {
+          setJobNumber(String(data.job_number));
+        }
+      } catch {}
+    })();
+    return () => { alive = false; };
+  }, [jobId]);
 
   const applyTemplate = (name) => {
     if (name === 'parts') {
@@ -327,23 +349,28 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
     }
   };
 
-  // Если пользователь вписал/изменил номер — аккуратно дописываем его в заголовок из шаблонов
+  // >>> НОВОЕ: синхронизация номера в заголовке при любом изменении jobNumber
   useEffect(() => {
     if (!jobNumber) return;
-    if (/заявк/i.test(title) && !/#\s*\d+/.test(title)) {
-      setTitle((t) => `${t.trim()} #${jobNumber}`);
-    }
+    setTitle((t) => {
+      if (!/заявк/i.test(t)) return t;                 // если заголовок не про заявку — не трогаем
+      if (/#\s*\d+/.test(t)) {                         // если номер уже есть — заменяем на актуальный
+        return t.replace(/#\s*\d+/, `#${jobNumber}`);
+      }
+      return `${t.trim()} #${jobNumber}`;              // иначе добавляем
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobNumber]);
 
   const save = async () => {
     setLoading(true);
     try {
-      // 1) Связка job_id по номеру (если указан)
-      let job_id = null;
+      // 1) Связка job_id/job_number:
+      let job_id = (jobId || '').trim() || null;
       let job_number = (jobNumber || '').trim() || null;
 
-      if (job_number) {
+      // Есть только номер → найдём id
+      if (!job_id && job_number) {
         const { data } = await supabase
           .from('jobs')
           .select('id, job_number')
@@ -352,10 +379,22 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         if (data?.id) job_id = data.id;
       }
 
-      // 2) Гарантируем, что в заголовке номер, а не UUID
+      // Есть только id → найдём номер
+      if (job_id && !job_number) {
+        const { data } = await supabase
+          .from('jobs')
+          .select('job_number')
+          .eq('id', job_id)
+          .maybeSingle();
+        if (data?.job_number != null) job_number = String(data.job_number);
+      }
+
+      // 2) Гарантируем, что в заголовке итоговый номер (замена или добавление)
       let finalTitle = title.trim();
-      if (job_number && /заявк/i.test(finalTitle) && !/#\s*\d+/.test(finalTitle)) {
-        finalTitle = `${finalTitle} #${job_number}`;
+      if (job_number && /заявк/i.test(finalTitle)) {
+        finalTitle = (/#\s*\d+/.test(finalTitle))
+          ? finalTitle.replace(/#\s*\d+/, `#${job_number}`)
+          : `${finalTitle} #${job_number}`;
       }
 
       // 3) Напоминание и теги
@@ -369,8 +408,8 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         details: details.trim() || null,
         status: 'active',
         type: 'general',
-        job_id: job_id,                    // UUID, если нашли по номеру
-        job_number: job_number || null,    // номер, если введён
+        job_id: job_id,
+        job_number: job_number || null,
         due_date: dateStr,
         created_by: me.id,
         assignee_id,
@@ -414,7 +453,11 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
           <textarea style={TA} value={details} onChange={e=>setDetails(e.target.value)} placeholder="Кратко что именно сделать…" />
         </div>
 
-        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+        <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12}}>
+          <div>
+            <div style={{fontSize:12, color:'#6b7280'}}>UUID заявки (опц.)</div>
+            <input style={INPUT} value={jobId} onChange={e=>setJobId(e.target.value)} placeholder="UUID заявки" />
+          </div>
           <div>
             <div style={{fontSize:12, color:'#6b7280'}}>Номер заявки (опц.)</div>
             <input style={INPUT} value={jobNumber} onChange={e=>setJobNumber(e.target.value)} placeholder="Напр. 1024" />
