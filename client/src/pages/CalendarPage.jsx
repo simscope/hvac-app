@@ -9,7 +9,7 @@ import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
 /* ========== helpers ========== */
-// ''|null=>null; '123'=>123; иначе — строка (UUID)
+// ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
@@ -29,7 +29,7 @@ export default function CalendarPage() {
   const calRef = useRef(null);
   const navigate = useNavigate();
 
-  /* ---------- загрузка данных ---------- */
+  /* ---------- load data ---------- */
   useEffect(() => {
     (async () => {
       const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
@@ -47,17 +47,17 @@ export default function CalendarPage() {
     })();
   }, []);
 
-  /* ---------- палитры ---------- */
+  /* ---------- palettes ---------- */
   const statusKey = (s) => {
     if (!s) return 'default';
     const v = String(s).toLowerCase().trim();
     if (v.includes('recall')) return 'recall';
-    if (v === 'diagnosis') return 'diagnostics';
-    if (v === 'to finish') return 'to_finish';
-    if (v.startsWith('waiting for parts')) return 'waiting_parts';
-    if (v === 'parts ordered') return 'parts_ordered';
-    if (v === 'in progress') return 'in_progress';
-    if (v === 'completed' || v === 'выполнено') return 'finished';
+    if (v === 'diagnosis' || v === 'диагностика') return 'diagnostics';
+    if (v === 'to finish' || v === 'к финишу') return 'to_finish';
+    if (v.startsWith('waiting for parts') || v === 'ожидание деталей') return 'waiting_parts';
+    if (v === 'parts ordered' || v === 'заказ деталей') return 'parts_ordered';
+    if (v === 'in progress' || v === 'в работе') return 'in_progress';
+    if (v === 'completed' || v === 'выполнено' || v === 'завершено') return 'finished';
     return 'default';
   };
 
@@ -79,7 +79,7 @@ export default function CalendarPage() {
     return map;
   }, [techs]);
 
-  /* ---------- индексы ---------- */
+  /* ---------- indexes ---------- */
   const clientsById = useMemo(() => {
     const m = new Map();
     for (const c of clients) m.set(String(c.id), c);
@@ -92,12 +92,12 @@ export default function CalendarPage() {
     return m;
   }, [techs]);
 
-  /* ---------- утилиты ---------- */
+  /* ---------- utils ---------- */
   const getClientName = (job) =>
     clientsById.get(String(job?.client_id))?.full_name ||
     job?.client_name ||
     job?.full_name ||
-    'Без имени';
+    'No name';
 
   const getClientAddress = (job) =>
     clientsById.get(String(job?.client_id))?.address ||
@@ -105,11 +105,11 @@ export default function CalendarPage() {
     job?.address ||
     '';
 
-  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.payment_method;
+  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
   const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
   const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
 
-  /* ---------- внешние карточки (без мастера) ---------- */
+  /* ---------- external cards (unassigned) ---------- */
   useEffect(() => {
     if (!extRef.current) return;
     const d = new Draggable(extRef.current, {
@@ -123,7 +123,7 @@ export default function CalendarPage() {
     return () => d.destroy();
   }, [extRef, jobs]);
 
-  /* ---------- события календаря ---------- */
+  /* ---------- calendar events ---------- */
   const filteredJobs = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (jobs || []).filter((j) => {
@@ -147,7 +147,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // UTC (timestamptz) — FullCalendar в America/New_York покажет правильно
+        start: j.appointment_time, // UTC (timestamptz) — FullCalendar shows correctly in America/New_York
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -168,14 +168,14 @@ export default function CalendarPage() {
     [jobs]
   );
 
-  /* ---------- обработчики DnD/клика ---------- */
+  /* ---------- DnD/click handlers ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // пишем UTC для timestamptz
+    const newStart = info.event.start ? info.event.start.toISOString() : null; // write UTC for timestamptz
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
-      alert('Не удалось сохранить дату/время');
+      alert('Failed to save date/time');
       console.error(error);
       return;
     }
@@ -186,7 +186,7 @@ export default function CalendarPage() {
     const id = info.event.id;
     if (activeTech === 'all') {
       info.event.remove();
-      alert('Выберите вкладку конкретного мастера и повторите перетаскивание.');
+      alert('Select a specific technician tab first, then drop the job onto the calendar.');
       return;
     }
     const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC
@@ -194,7 +194,7 @@ export default function CalendarPage() {
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
       info.event.remove();
-      alert('Не удалось назначить мастера/дату');
+      alert('Failed to assign technician/date');
       console.error(error);
       return;
     }
@@ -247,9 +247,9 @@ export default function CalendarPage() {
       padding: 16,
       background: 'linear-gradient(180deg, #f7faff 0%, #ffffff 40%)'
     }}>
-      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12, letterSpacing: 0.3 }}>🗓 Календарь</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12, letterSpacing: 0.3 }}>🗓 Calendar</h1>
 
-      {/* панель управления */}
+      {/* controls */}
       <div
         style={{
           display: 'flex',
@@ -265,7 +265,7 @@ export default function CalendarPage() {
         }}
       >
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Tab active={activeTech === 'all'} onClick={() => setActiveTech('all')}>Все техники</Tab>
+          <Tab active={activeTech === 'all'} onClick={() => setActiveTech('all')}>All technicians</Tab>
           {techs.map((t) => (
             <Tab key={t.id} active={String(activeTech) === String(t.id)} onClick={() => setActiveTech(t.id)}>
               {t.name}
@@ -277,7 +277,7 @@ export default function CalendarPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Поиск: клиент/адрес/№"
+            placeholder="Search: client/address/job #"
             style={{
               border: '1px solid #e5e7eb',
               borderRadius: 10,
@@ -302,17 +302,17 @@ export default function CalendarPage() {
               outline: 'none'
             }}
           >
-            <option value="dayGridMonth">Месяц</option>
-            <option value="timeGridWeek">Неделя</option>
-            <option value="timeGridDay">День</option>
+            <option value="dayGridMonth">Month</option>
+            <option value="timeGridWeek">Week</option>
+            <option value="timeGridDay">Day</option>
           </select>
         </div>
       </div>
 
-      {/* без мастера */}
+      {/* unassigned */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ marginBottom: 6, fontWeight: 700, color: '#111827' }}>
-          Без мастера <span style={{ color: '#6b7280', fontWeight: 500 }}>(перетащите на календарь выбранной вкладки мастера)</span>:
+          Unassigned <span style={{ color: '#6b7280', fontWeight: 500 }}>(drag onto the calendar of a selected technician tab)</span>:
         </div>
         <div
           ref={extRef}
@@ -326,7 +326,7 @@ export default function CalendarPage() {
             background: '#fafafa'
           }}
         >
-          {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— нет заявок —</div>}
+          {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
           {unassigned.map((j) => {
             const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
             const addr = getClientAddress(j);
@@ -336,7 +336,7 @@ export default function CalendarPage() {
                 className="ext-evt"
                 data-id={String(j.id)}
                 data-title={title}
-                title="Перетащите на календарь мастера"
+                title="Drag onto a technician's calendar"
                 onDoubleClick={() => navigate(`/job/${j.id}`)}
                 style={{
                   display: 'grid',
@@ -380,9 +380,9 @@ export default function CalendarPage() {
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
           initialView={view}
           headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
-          locale="ru"
+          locale="en"
 
-          /* ===== ключевые настройки времени ===== */
+          /* ===== time settings ===== */
           timeZone="America/New_York"
           slotMinTime="08:00:00"
           slotMaxTime="20:00:00"
@@ -396,7 +396,7 @@ export default function CalendarPage() {
           dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
           stickyHeaderDates={true}
 
-          /* ===== визуальные мелочи ===== */
+          /* ===== visuals ===== */
           height="72vh"
           eventDisplay="block"
           eventTimeFormat={{ hour: '2-digit', minute: '2-digit' }}
@@ -405,16 +405,16 @@ export default function CalendarPage() {
           eventOverlap={true}
           slotEventOverlap={false}
 
-          /* ===== DnD/редактирование ===== */
+          /* ===== DnD/edit ===== */
           editable
           eventStartEditable
           eventDurationEditable={false}
           droppable
 
-          /* ===== данные ===== */
+          /* ===== data ===== */
           events={events}
 
-          /* ===== колбэки ===== */
+          /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
           eventClick={handleEventClick}
@@ -473,14 +473,13 @@ function Legend() {
   return (
     <div style={{ marginTop: 10, color: '#6b7280', fontSize: 13 }}>
       {item('#fee2e2', '#7f1d1d', 'ReCall')}
-      {item('#fef9c3', '#854d0e', 'Диагностика')}
-      {item('#e0f2fe', '#075985', 'В работе')}
-      {item('#e0e7ff', '#3730a3', 'Заказ деталей')}
-      {item('#ede9fe', '#5b21b6', 'Ожидание деталей')}
-      {item('#fffbeb', '#92400e', 'К финишу')}
-      {item('#d1fae5', '#065f46', 'Завершено')}
-      <span style={{ marginLeft: 12 }}>Неоплаченные помечены пунктирной рамкой.</span>
+      {item('#fef9c3', '#854d0e', 'Diagnosis')}
+      {item('#e0f2fe', '#075985', 'In progress')}
+      {item('#e0e7ff', '#3730a3', 'Parts ordered')}
+      {item('#ede9fe', '#5b21b6', 'Waiting for parts')}
+      {item('#fffbeb', '#92400e', 'To finish')}
+      {item('#d1fae5', '#065f46', 'Completed')}
+      <span style={{ marginLeft: 12 }}>Unpaid jobs are marked with a dashed border.</span>
     </div>
   );
 }
-
