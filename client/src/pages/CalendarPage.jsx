@@ -52,12 +52,12 @@ export default function CalendarPage() {
     if (!s) return 'default';
     const v = String(s).toLowerCase().trim();
     if (v.includes('recall')) return 'recall';
-    if (v === 'диагностика') return 'diagnostics';
-    if (v === 'к финишу') return 'to_finish';
-    if (v.startsWith('ожид')) return 'waiting_parts';
-    if (v === 'заказ деталей') return 'parts_ordered';
-    if (v === 'в работе') return 'in_progress';
-    if (v === 'завершено' || v === 'выполнено') return 'finished';
+    if (v === 'diagnosis') return 'diagnostics';
+    if (v === 'to finish') return 'to_finish';
+    if (v.startsWith('waiting for parts')) return 'waiting_parts';
+    if (v === 'parts ordered') return 'parts_ordered';
+    if (v === 'in progress') return 'in_progress';
+    if (v === 'completed' || v === 'выполнено') return 'finished';
     return 'default';
   };
 
@@ -483,3 +483,4 @@ function Legend() {
     </div>
   );
 }
+
