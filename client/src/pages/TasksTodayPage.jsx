@@ -19,41 +19,30 @@ const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db'
 const TA = { ...INPUT, minHeight: 80 };
 const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, cursor: 'pointer', background: '#fff' };
 
-/** Надёжно считаем "сегодня" в Нью-Йорке без dayjs */
-function nyToday() {
-  const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: NY, year: 'numeric', month: '2-digit', day: '2-digit' });
-  // sv-SE даёт ISO-подобно: YYYY-MM-DD
-  return fmt.format(new Date());
-}
-
-/** Время напоминания → ISO в NY */
+function nyToday() { return dayjs().tz(NY).format('YYYY-MM-DD'); }
 function toNYTzISO(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
-  const d = dayjs.tz(`${dateStr} ${timeStr}`, 'YYYY-MM-DD HH:mm', NY);
-  return d.isValid() ? d.toISOString() : null;
+  const [h, m] = timeStr.split(':').map(Number);
+  const d = dayjs.tz(dateStr, NY).hour(h).minute(m).second(0).millisecond(0);
+  return d.toISOString();
 }
 
 export default function TasksTodayPage() {
-  const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
-
   const [me, setMe] = useState(null);
   const [managers, setManagers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [comments, setComments] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [notif, setNotif] = useState(null);
-  const [loading, setLoading] = useState(false);
 
   /* ========== auth ========== */
   useEffect(() => {
     let unsub = null;
     (async () => {
-      const { data: s, error } = await supabase.auth.getSession();
-      if (error) console.error('auth.getSession error:', error);
-      if (mounted.current) setMe(s?.session?.user ?? null);
+      const { data: s } = await supabase.auth.getSession();
+      setMe(s?.session?.user ?? null);
       const { data } = supabase.auth.onAuthStateChange((_e, session) => {
-        if (mounted.current) setMe(session?.user ?? null);
+        setMe(session?.user ?? null);
       });
       unsub = data?.subscription;
     })();
@@ -62,74 +51,53 @@ export default function TasksTodayPage() {
 
   /* ========== managers ========== */
   const loadManagers = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('profiles')
       .select('id, full_name, role')
       .in('role', ['admin', 'manager'])
       .order('role', { ascending: true });
-    if (error) { console.error('loadManagers error:', error); return; }
-    if (mounted.current) setManagers(data || []);
+    setManagers(data || []);
   }, []);
   useEffect(() => { loadManagers(); }, []);
 
-  /* ========== загрузка задач + комментариев ========== */
+  /* ========== загрузка задач ========== */
   const load = useCallback(async () => {
-    if (!me) return;
-    setLoading(true);
-    const today = nyToday(); // YYYY-MM-DD в часовом поясе NY
-    console.info('[TasksToday] today(NY)=', today);
+    // 1) перенос незакрытых задач на сегодня
+    await supabase.rpc('rollover_open_tasks_to_today');
 
-    // авто-логика, как и раньше
-    await supabase.rpc('rollover_open_tasks_to_today').catch(e => console.error(e));
-    await supabase.rpc('ensure_payment_tasks_for_today', { p_user: me.id }).catch(e => console.error(e));
-    await supabase.rpc('tick_task_reminders').catch(e => console.error(e));
+    // 2) автосоздание задач "Оплата по заявке" на сегодня (обязателен параметр p_user)
+    await supabase.rpc('ensure_payment_tasks_for_today', { p_user: me?.id || null });
 
-    // ВАЖНО: фильтруем по диапазону, а не strict eq — для стабильности в разных драйверах
-    let t = [];
-    {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('id,title,details,status,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
-        .gte('due_date', today)
-        .lte('due_date', today) // для DATE это эквивалент '='
-        .order('status', { ascending: true })
-        .order('updated_at', { ascending: false });
-      if (error) {
-        console.error('tasks select error:', error);
-      } else {
-        t = data || [];
-      }
-    }
+    // 3) запуск тикера напоминаний (на проде можно заменить на cron)
+    await supabase.rpc('tick_task_reminders');
 
-    if (mounted.current) setTasks(t);
+    // 4) основная выборка задач на сегодня
+    const today = nyToday();
+    const { data: t } = await supabase
+      .from('tasks')
+      .select('id,title,details,status,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
+      .eq('due_date', today)
+      .order('status', { ascending: true })
+      .order('updated_at', { ascending: false });
+    setTasks(t || []);
 
-    // Комментарии с автором (имя)
-    if (t.length) {
+    // 5) подтянуть последние комментарии к видимым задачам
+    if (t && t.length) {
       const ids = t.map(x => x.id);
-      const { data: cs, error: cErr } = await supabase
+      const { data: cs } = await supabase
         .from('task_comments')
-        .select('id,task_id,body,author_id,created_at, profiles:author_id (full_name)')
+        .select('id,task_id,body,author_id,created_at')
         .in('task_id', ids)
         .order('created_at', { ascending: false });
-      if (cErr) {
-        console.error('task_comments select error:', cErr);
-        if (mounted.current) setComments({});
-      } else {
-        const map = {};
-        (cs || []).forEach(c => {
-          if (!map[c.task_id]) map[c.task_id] = [];
-          map[c.task_id].push({
-            ...c,
-            author_name: c?.profiles?.full_name || (c.author_id || '').slice(0, 8),
-          });
-        });
-        if (mounted.current) setComments(map);
-      }
+      const map = {};
+      (cs || []).forEach(c => {
+        if (!map[c.task_id]) map[c.task_id] = [];
+        map[c.task_id].push(c);
+      });
+      setComments(map);
     } else {
-      if (mounted.current) setComments({});
+      setComments({});
     }
-
-    if (mounted.current) setLoading(false);
   }, [me?.id]);
 
   useEffect(() => { if (me) load(); }, [me]);
@@ -137,66 +105,61 @@ export default function TasksTodayPage() {
   /* ========== realtime ========== */
   useEffect(() => {
     if (!me) return;
-    const today = nyToday();
     const ch = supabase
-      .channel(`tasks_realtime_${today}`)
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'tasks', filter: `due_date=eq.${today}` },
-        () => load()
-      )
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'task_comments' },
-        () => load()
-      )
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'task_notifications', filter: `user_id=eq.${me.id}` },
-        (p) => setNotif(p.new)
-      )
+      .channel('tasks_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'task_comments' }, load)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'task_notifications', filter: `user_id=eq.${me.id}` }, (p) => setNotif(p.new))
       .subscribe();
     return () => supabase.removeChannel(ch);
   }, [me, load]);
 
-  /* ========== представления ========== */
+  /* ========== неоплаченные заявки из вью + подтянуть номер/время ========== */
+  const [unpaid, setUnpaid] = useState([]);
+  const loadUnpaid = useCallback(async () => {
+    // Берём job_id из вью unpaid_jobs_current, затем дотягиваем номер и время
+    const { data: uj } = await supabase.from('unpaid_jobs_current').select('job_id');
+    const ids = (uj || []).map(x => x.job_id);
+    if (!ids.length) { setUnpaid([]); return; }
+    const { data: j } = await supabase
+      .from('jobs')
+      .select('id, job_number, appointment_time, created_at')
+      .in('id', ids);
+    setUnpaid(j || []);
+  }, []);
+  useEffect(() => { loadUnpaid(); }, []);
+
   const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
   const done = useMemo(() => (tasks || []).filter(t => t.status === 'done'), [tasks]);
 
-  /* ========== действия (оптимистично + перезагрузка) ========== */
   const toggleStatus = async (t) => {
-    setTasks(prev => prev.map(x => x.id === t.id ? ({ ...x, status: t.status === 'active' ? 'done' : 'active' }) : x));
-    const next = t.status === 'active' ? 'done' : 'active';
-    const { error } = await supabase.from('tasks').update({ status: next, updated_at: new Date().toISOString() }).eq('id', t.id);
-    if (error) console.error('toggleStatus error:', error);
-    await load();
+    await supabase.from('tasks').update({ status: t.status === 'active' ? 'done' : 'active' }).eq('id', t.id);
   };
 
   const addComment = async (taskId, text) => {
-    if (!text?.trim() || !me) return;
-    const nowISO = new Date().toISOString();
-    setComments(prev => {
-      const arr = prev[taskId] ? [...prev[taskId]] : [];
-      arr.unshift({
-        id: `tmp_${Math.random().toString(36).slice(2)}`,
-        task_id: taskId,
-        body: text.trim(),
-        author_id: me.id,
-        author_name: me.user_metadata?.full_name || (me.id || '').slice(0, 8),
-        created_at: nowISO
-      });
-      return { ...prev, [taskId]: arr };
+    if (!text?.trim()) return;
+    await supabase.from('task_comments').insert({
+      task_id: taskId,
+      body: text.trim(),
+      author_id: me.id
     });
-    const { error } = await supabase.from('task_comments').insert({ task_id: taskId, body: text.trim(), author_id: me.id });
-    if (error) console.error('addComment error:', error);
-    await load();
+  };
+
+  // ручное создание платежной задачи из блока "неоплаченные"
+  const makeFromJob = async (job_id, job_number) => {
+    await supabase.rpc('create_payment_task', {
+      p_job_id: job_id,
+      p_job_number: job_number || null,
+      p_user: me.id,
+    });
+    load();
   };
 
   // алерт от task_notifications
   useEffect(() => {
     if (!notif) return;
-    try { alert(notif.payload?.message || 'Активные задачи'); } catch {}
-    supabase.from('task_notifications')
-      .update({ read_at: new Date().toISOString() })
-      .eq('id', notif.id)
-      .then(({ error }) => { if (error) console.error('mark notif read error:', error); });
+    alert(notif.payload?.message || 'Активные задачи');
+    supabase.from('task_notifications').update({ read_at: new Date().toISOString() }).eq('id', notif.id);
   }, [notif]);
 
   return (
@@ -204,9 +167,48 @@ export default function TasksTodayPage() {
       <div style={ROW}>
         <h2 style={H}>Задачи на сегодня ({dayjs().tz(NY).format('DD.MM.YYYY')})</h2>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button style={BTN_L} onClick={load} disabled={loading}>{loading ? 'Обновляю…' : 'Обновить'}</button>
+          <button style={BTN_L} onClick={load}>Обновить</button>
           <button style={BTN} onClick={() => setShowCreate(true)}>+ Новая задача</button>
         </div>
+      </div>
+
+      {/* Неоплаченные заявки → быстрые автозадачи */}
+      <div style={BOX}>
+        <div style={ROW}>
+          <div style={{ fontWeight: 700 }}>Неоплаченные заявки</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>из списка “Все заявки”</div>
+        </div>
+        {(unpaid.length === 0) ? (
+          <div style={{ color: '#10b981' }}>Нет неоплаченных заявок 👍</div>
+        ) : (
+          <div style={{ display: 'grid', gap: 8 }}>
+            {unpaid.map(u => (
+              <div
+                key={u.id}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr auto',
+                  gap: 8,
+                  alignItems: 'center',
+                  border: '1px solid #fecaca',
+                  background: '#fee2e2',
+                  borderRadius: 10,
+                  padding: 10
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600, color: '#b91c1c' }}>
+                    Заявка #{u.job_number || String(u.id).slice(0, 8)}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>
+                    Назначено: {u.appointment_time ? dayjs(u.appointment_time).tz(NY).format('DD.MM HH:mm') : '—'}
+                  </div>
+                </div>
+                <button style={BTN} onClick={() => makeFromJob(u.id, u.job_number)}>Создать задачу</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Активные */}
@@ -298,7 +300,7 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
         <div style={{ fontWeight: 600, fontSize: 14 }}>Комментарии</div>
         {(comments || []).slice(0, 5).map(c => (
           <div key={c.id} style={{ fontSize: 14 }}>
-            <span style={{ fontWeight: 600 }}>{c.author_name}:</span>{' '}
+            <span style={{ fontWeight: 600 }}>{(c.author_id || '').slice(0, 8)}:</span>{' '}
             {c.body}{' '}
             <span style={{ color: '#6b7280', fontSize: 12 }}>
               {dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}
@@ -306,18 +308,7 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
           </div>
         ))}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
-          <input
-            style={INPUT}
-            placeholder="Оставь комментарий, что сделано…"
-            value={txt}
-            onChange={e => setTxt(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && txt.trim()) {
-                onAddComment(task.id, txt);
-                setTxt('');
-              }
-            }}
-          />
+          <input style={INPUT} placeholder="Оставь комментарий, что сделано…" value={txt} onChange={e => setTxt(e.target.value)} />
           <button style={BTN} onClick={() => { onAddComment(task.id, txt); setTxt(''); }}>Добавить</button>
         </div>
       </div>
@@ -331,26 +322,30 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   const [jobId, setJobId] = useState('');
   const [jobNumber, setJobNumber] = useState('');
   const [assignee, setAssignee] = useState('me');
-  const [dateStr, setDateStr] = useState(nyToday());
+  const [dateStr, setDateStr] = useState(dayjs().tz(NY).format('YYYY-MM-DD'));
   const [timeStr, setTimeStr] = useState('');
   const [repeatMins, setRepeatMins] = useState('');
   const [priority, setPriority] = useState('normal');
   const [tags, setTags] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
+  // Подставляем номер по UUID (если известен)
   useEffect(() => {
     let alive = true;
     (async () => {
       const id = (jobId || '').trim();
       if (!id) return;
-      const { data, error } = await supabase
-        .from('jobs')
-        .select('id, job_number')
-        .eq('id', id)
-        .maybeSingle();
-      if (!alive) return;
-      if (error) { console.error('jobs by UUID error:', error); return; }
-      if (!jobNumber && data?.job_number != null) setJobNumber(String(data.job_number));
+      try {
+        const { data, error } = await supabase
+          .from('jobs')
+          .select('id, job_number')
+          .eq('id', id)
+          .maybeSingle();
+        if (!alive || error || !data) return;
+        if (!jobNumber && data.job_number != null) {
+          setJobNumber(String(data.job_number));
+        }
+      } catch { /* ignore */ }
     })();
     return () => { alive = false; };
   }, [jobId]);
@@ -376,6 +371,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
     }
   };
 
+  // Если пользователь вписал/изменил номер — дописываем его в заголовок шаблонов
   useEffect(() => {
     if (!jobNumber) return;
     if (/заявк/i.test(title) && !/#\s*\d+/.test(title)) {
@@ -384,49 +380,52 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   }, [jobNumber]);
 
   const save = async () => {
-    if (!me) return;
-    setSaving(true);
+    setLoading(true);
     try {
+      // 1) Разруливаем связку job_id/job_number:
       let job_id = (jobId || '').trim() || null;
       let job_number = (jobNumber || '').trim() || null;
 
+      // Если есть только номер — найдём id
       if (!job_id && job_number) {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('jobs')
           .select('id, job_number')
           .eq('job_number', job_number)
           .maybeSingle();
-        if (error) console.error('find job by number error:', error);
         if (data?.id) job_id = data.id;
       }
 
+      // Если есть только id — найдём номер
       if (job_id && !job_number) {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('jobs')
           .select('job_number')
           .eq('id', job_id)
           .maybeSingle();
-        if (error) console.error('find number by job id error:', error);
         if (data?.job_number != null) job_number = String(data.job_number);
       }
 
+      // 2) Заголовок — всегда номер, а не UUID
       let finalTitle = (title || '').trim();
       if (job_number && /заявк/i.test(finalTitle) && !/#\s*\d+/.test(finalTitle)) {
         finalTitle = `${finalTitle} #${job_number}`;
       }
 
+      // 3) Напоминание и теги
       const reminder_at = timeStr ? toNYTzISO(dateStr, timeStr) : null;
       const tagsArr = tags ? tags.split(',').map(s => s.trim()).filter(Boolean) : [];
       const assignee_id = assignee === 'me' ? me.id : assignee;
 
-      const { error } = await supabase.from('tasks').insert({
+      // 4) Сохранение
+      await supabase.from('tasks').insert({
         title: finalTitle || 'Задача',
         details: details.trim() || null,
         status: 'active',
         type: 'general',
         job_id: job_id,
         job_number: job_number || null,
-        due_date: dateStr, // DATE (NY)
+        due_date: dateStr,
         created_by: me.id,
         assignee_id,
         priority,
@@ -435,17 +434,19 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         remind_every_minutes: repeatMins ? Number(repeatMins) : null,
         last_reminded_at: null
       });
-      if (error) { console.error('tasks insert error:', error); return; }
 
       onCreated?.();
       onClose?.();
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'grid', placeItems: 'center', zIndex: 50 }}>
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)',
+      display: 'grid', placeItems: 'center', zIndex: 50
+    }}>
       <div style={{ width: 620, background: '#fff', borderRadius: 16, padding: 16, display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
           <div style={{ fontWeight: 700, fontSize: 18 }}>Новая задача</div>
@@ -490,7 +491,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
           <div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Дата (NY)</div>
-            <input type="date" style={INPUT} value={dateStr} onChange={e => setDateStr(e.target.value)} />
+            <input type="date" style={INPUT} value={dayjs(dateStr).format('YYYY-MM-DD')} onChange={e => setDateStr(e.target.value)} />
           </div>
           <div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Время напоминания (опц.)</div>
@@ -509,8 +510,8 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12 }}>
           <div />
-          <button style={BTN} onClick={save} disabled={saving || !title.trim()}>
-            {saving ? 'Сохраняю…' : 'Создать'}
+          <button style={BTN} onClick={save} disabled={loading || !title.trim()}>
+            {loading ? 'Сохраняю…' : 'Создать'}
           </button>
         </div>
       </div>
