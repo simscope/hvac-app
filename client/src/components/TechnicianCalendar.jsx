@@ -47,12 +47,12 @@ export default function TechnicianCalendar({ jobs, onJobUpdated }) {
     if (!s) return '';
     const v = String(s).toLowerCase().trim();
     if (v === 'recall' || v === 'recal' || v === 'reсall' || v === 'рекол' || v === 'реколл' || v === 'recаll') return 'recall';
-    if (v === 'диагностика') return 'diagnostics';
-    if (v === 'к финишу') return 'to_finish';
-    if (v === 'ожидание' || v === 'ожидание деталей') return 'waiting_parts';
-    if (v === 'заказ деталей') return 'parts_ordered';
-    if (v === 'в работе') return 'in_progress';
-    if (v === 'завершено' || v === 'выполнено') return 'finished';
+    if (v === 'diagnosis') return 'diagnostics';
+    if (v === 'in progress') return 'to_finish';
+    if (v === 'waiting for parts') return 'waiting_parts';
+    if (v === 'parts ordered') return 'parts_ordered';
+    if (v === 'in progress') return 'in_progress';
+    if (v === 'completed') return 'finished';
     return v;
   };
 
@@ -263,3 +263,4 @@ export default function TechnicianCalendar({ jobs, onJobUpdated }) {
     </div>
   );
 }
+
