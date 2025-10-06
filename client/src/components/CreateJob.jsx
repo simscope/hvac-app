@@ -42,8 +42,8 @@ export default function CreateJob({ onCreated }) {
       const { data, error } = await supabase
         .from('technicians')
         .select('id, name, role, is_active')
-        .in('role', ['technician', 'tech'])   // поддерживаем обе роли
-        .eq('is_active', true)                // только активные
+        .in('role', ['technician', 'tech'])   // support both roles
+        .eq('is_active', true)                // only active
         .order('name', { ascending: true });
       if (!error) setTechs(data || []);
       else console.error('load technicians error:', error);
@@ -102,7 +102,7 @@ export default function CreateJob({ onCreated }) {
         scf: toNum(form.scf),
         technician_id: form.technician_id ? Number(form.technician_id) : null,
         client_id: clientId,
-        status: 'диагностика',
+        status: 'diagnosis',
       };
 
       const { error: jobErr } = await supabase.from('jobs').insert(jobPayload);
@@ -139,28 +139,28 @@ export default function CreateJob({ onCreated }) {
           textAlign: 'center',
         }}
       >
-        Создание заявки
+        Create Job
       </h2>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div style={{ display: 'grid', gap: 10 }}>
           <div style={row}>
-            <div>Номер заявки</div>
-            <input style={input} value="Автоматически" disabled />
+            <div>Job number</div>
+            <input style={input} value="Automatic" disabled />
           </div>
 
           <div style={row}>
-            <div>Описание проблемы</div>
+            <div>Issue description</div>
             <input
               style={input}
               value={form.issue}
               onChange={set('issue')}
-              placeholder="Описание проблемы"
+              placeholder="Describe the issue"
             />
           </div>
 
           <div style={row}>
-            <div>Система</div>
+            <div>System</div>
             <select style={input} value={form.system_type} onChange={set('system_type')}>
               <option value="HVAC">HVAC</option>
               <option value="Appliance">Appliance</option>
@@ -181,7 +181,7 @@ export default function CreateJob({ onCreated }) {
           </div>
 
           <div style={row}>
-            <div>— Выбери техника —</div>
+            <div>— Select technician —</div>
             <select
               style={input}
               value={form.technician_id}
@@ -199,22 +199,22 @@ export default function CreateJob({ onCreated }) {
 
         <div style={{ display: 'grid', gap: 10 }}>
           <div style={row}>
-            <div>Имя клиента</div>
+            <div>Client name</div>
             <input
               style={input}
               value={form.client_name}
               onChange={set('client_name')}
-              placeholder="Имя клиента"
+              placeholder="Client name"
             />
           </div>
 
           <div style={row}>
-            <div>Телефон</div>
+            <div>Phone</div>
             <input
               style={input}
               value={form.client_phone}
               onChange={set('client_phone')}
-              placeholder="Телефон"
+              placeholder="Phone"
             />
           </div>
 
@@ -229,12 +229,12 @@ export default function CreateJob({ onCreated }) {
           </div>
 
           <div style={row}>
-            <div>Адрес</div>
+            <div>Address</div>
             <input
               style={input}
               value={form.client_address}
               onChange={set('client_address')}
-              placeholder="Адрес"
+              placeholder="Address"
             />
           </div>
         </div>
@@ -242,7 +242,7 @@ export default function CreateJob({ onCreated }) {
 
       <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
         <button style={primary} disabled={busy}>
-          {busy ? 'Создаём…' : 'Создать заявку'}
+          {busy ? 'Creating…' : 'Create job'}
         </button>
       </div>
     </form>
