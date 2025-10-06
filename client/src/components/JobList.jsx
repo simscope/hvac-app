@@ -1,6 +1,6 @@
 import React from 'react';
 
-const JobList = ({ jobs, onSelect }) => {
+const JobList = ({ jobs = [], onSelect }) => {
   return (
     <table
       style={{
@@ -21,6 +21,12 @@ const JobList = ({ jobs, onSelect }) => {
         </tr>
       </thead>
       <tbody>
+        {jobs.length === 0 && (
+          <tr>
+            <td style={{ padding: 10 }} colSpan={7}>No jobs</td>
+          </tr>
+        )}
+
         {jobs.map((job) => (
           <tr key={job.id} style={{ borderBottom: '1px solid #eee' }}>
             <td style={tdStyle}>#{job.job_number || String(job.id).slice(0, 6)}</td>
@@ -35,7 +41,7 @@ const JobList = ({ jobs, onSelect }) => {
             <td style={tdStyle}>{job.content || '—'}</td>
             <td style={tdStyle}>
               <button
-                onClick={() => onSelect(job)}
+                onClick={() => onSelect && onSelect(job)}
                 aria-label={`View job ${job.job_number || job.id}`}
                 style={{
                   padding: '6px 10px',
