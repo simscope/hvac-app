@@ -5,10 +5,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-/* ===== Время NY: читаем/пишем "как в БД" ===== */
+/* ===== NY time: read/write "as in DB" ===== */
 const NY_TZ = 'America/New_York';
 
-// из ISO/строки из БД берём просто YYYY-MM-DDTHH:mm (без конверсий)
+// from ISO/DB string take plain YYYY-MM-DDTHH:mm (no conversions)
 function wallFromDb(isoLike) {
   if (!isoLike) return '';
   const s = String(isoLike);
@@ -22,7 +22,7 @@ function wallFromDb(isoLike) {
   return `${year}T${hh}:${mm}`;
 }
 
-// получить оффсет зоны NY для конкретного "стеночного" времени (YYYY-MM-DDTHH:mm)
+// get NY zone offset for a specific "wall" time (YYYY-MM-DDTHH:mm)
 function nyOffsetForWall(wall) {
   const [dpart, tpart] = String(wall).split('T');
   const [y, m, d] = dpart.split('-').map(Number);
@@ -41,10 +41,10 @@ function nyOffsetForWall(wall) {
   const sign = m2[1].startsWith('-') ? '-' : '+';
   const hh = String(Math.abs(parseInt(m2[1], 10))).padStart(2, '0');
   const mm = String(m2[2] ? parseInt(m2[2], 10) : 0).padStart(2, '0');
-  return `${sign}${hh}:${mm}`; // например "-04:00" / "-05:00"
+  return `${sign}${hh}:${mm}`; // e.g. "-04:00" / "-05:00"
 }
 
-// если в БД уже было значение — пробуем забрать из него оффсет, иначе вычисляем по дате (DST)
+// if DB already had a value — try to keep its offset; otherwise compute by date (DST)
 function zonedIsoFromWall(wall, prevIsoLike) {
   let offset = null;
   if (prevIsoLike) {
@@ -73,7 +73,7 @@ const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #d1d5db'
 const PRIMARY = { ...BTN, background: '#2563eb', color: '#fff', borderColor: '#2563eb' };
 const DANGER = { ...BTN, borderColor: '#ef4444', color: '#ef4444' };
 const GHOST = { ...BTN, background: '#f8fafc' };
-// баннер архива
+// archive banner
 const ARCHIVE_BANNER = {
   padding: 12,
   border: '1px solid #fdba74',
@@ -109,11 +109,11 @@ async function callEdgeAuth(path, body) {
   return json;
 }
 
-/* ---------- Справочники ---------- */
+/* ---------- Dictionaries ---------- */
 const STATUS_OPTIONS = ['recall', 'diagnosis', 'in progress', 'parts ordered', 'waiting for parts', 'to finish', 'completed', 'canceled'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
-/* ---------- Оплата ---------- */
+/* ---------- Payments ---------- */
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
 const pmToSelect = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
@@ -124,7 +124,7 @@ const pmToSave = (v) => {
   return PM_ALLOWED.includes(s) ? s : '-';
 };
 
-/* ---------- Хелперы ---------- */
+/* ---------- Helpers ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
 const stringOrNull = (v) => (v == null ? null : (String(v).trim() || null));
 const normalizeEmail = (v) => { const s = (v ?? '').toString().trim(); return s ? s.toLowerCase() : null; };
@@ -137,7 +137,7 @@ function makeFrontUrl(path) {
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
 
-// завершённый статус?
+// is job done?
 const DONE_STATUSES = new Set(['completed']);
 const isDone = (s) => DONE_STATUSES.has(String(s||'').toLowerCase().trim());
 
@@ -163,7 +163,7 @@ const isHeicLike = (file) =>
   file && (file.type === 'image/heic' || file.type === 'image/heif' || /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name));
 async function convertIfHeicWeb(file) {
   if (!isHeicLike(file)) return file;
-  let heic2any; try { const mod = await import('heic2any'); heic2any = mod.default || mod; } catch { throw new Error('heic2any не установлен'); }
+  let heic2any; try { const mod = await import('heic2any'); heic2any = mod.default || mod; } catch { throw new Error('heic2any is not installed'); }
   const jpegBlob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
   const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
   return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: Date.now() });
@@ -202,10 +202,10 @@ export default function JobDetailsPage() {
   const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,db_id}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
 
-  // чтоб автоархивация не зациклилась
+  // to avoid auto-archive loop
   const autoArchivedOnce = useRef(false);
 
-  /* ---------- загрузка ---------- */
+  /* ---------- load ---------- */
   useEffect(() => {
     (async () => {
       setLoading(true);
@@ -219,10 +219,10 @@ export default function JobDetailsPage() {
       setTechs(techData || []);
 
       const { data: j, error: e1 } = await supabase.from('jobs').select('*').eq('id', jobId).maybeSingle();
-      if (e1 || !j) { alert('Заявка не найдена'); navigate('/jobs'); return; }
+      if (e1 || !j) { alert('Job not found'); navigate('/jobs'); return; }
       setJob(j);
 
-      // клиент
+      // client
       if (j.client_id) {
         const { data: c } = await supabase
           .from('clients').select('id, full_name, phone, email, address').eq('id', j.client_id).maybeSingle();
@@ -250,14 +250,14 @@ export default function JobDetailsPage() {
     })();
   }, [jobId]);
 
-  // авто-архивация по гарантии (60 дней)
+  // auto-archive by warranty (60 days)
   useEffect(() => {
     const run = async () => {
       if (!job || autoArchivedOnce.current) return;
-      if (job.archived_at) return; // уже в архиве
-      if (!isDone(job.status)) return; // не завершено — не трогаем
+      if (job.archived_at) return; // already archived
+      if (!isDone(job.status)) return; // not completed — ignore
 
-      // базовая дата гарантии: completed_at > appointment_time > created_at
+      // warranty base date: completed_at > appointment_time > created_at
       const baseDateStr = job.completed_at || job.appointment_time || job.created_at;
       if (!baseDateStr) return;
 
@@ -269,18 +269,18 @@ export default function JobDetailsPage() {
 
       try {
         autoArchivedOnce.current = true;
-        const patch = { archived_at: new Date().toISOString(), archived_reason: 'Гарантия истекла (60 дней) [auto]' };
+        const patch = { archived_at: new Date().toISOString(), archived_reason: 'Warranty expired (60 days) [auto]' };
         const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
         if (!error) setJob((p) => ({ ...(p || {}), ...patch }));
       } catch (e) {
-        // молчим, это необязательная операция
+        // optional operation
         console.warn('auto-archive failed', e);
       }
     };
     run();
   }, [job, jobId]);
 
-  /* ---------- загрузка фото ---------- */
+  /* ---------- photos load ---------- */
   const loadPhotos = async () => {
     const { data, error } = await storage().list(`${jobId}`, { limit: 200, sortBy: { column: 'name', order: 'asc' } });
     if (error) { setPhotos([]); return; }
@@ -293,7 +293,7 @@ export default function JobDetailsPage() {
     setChecked({});
   };
 
-  /* ---------- Комментарии ---------- */
+  /* ---------- Comments ---------- */
   const loadComments = async () => {
     setCommentsLoading(true);
     const { data, error } = await supabase
@@ -322,7 +322,7 @@ export default function JobDetailsPage() {
     const text = commentText.trim(); if (!text) return;
     const payload = { job_id: jobId, text, author_user_id: user?.id ?? null };
     const { data, error } = await supabase.from('comments').insert(payload).select().single();
-    if (error) { alert('Не удалось сохранить комментарий'); return; }
+    if (error) { alert('Failed to save comment'); return; }
 
     let authorName = null;
     if (user?.id) {
@@ -335,7 +335,7 @@ export default function JobDetailsPage() {
     setCommentText('');
   };
 
-  /* ---------- редактирование заявки ---------- */
+  /* ---------- job edit ---------- */
   const setField = (k, v) => {
     setJob((prev) => {
       if (!prev) return prev;
@@ -348,7 +348,7 @@ export default function JobDetailsPage() {
   const saveJob = async () => {
     const payload = {
       technician_id: normalizeId(job.technician_id),
-      appointment_time: job.appointment_time ?? null, // уже в нужном формате
+      appointment_time: job.appointment_time ?? null, // already in correct format
       system_type: job.system_type || null,
       issue: job.issue || null,
       scf: toNum(job.scf),
@@ -368,13 +368,13 @@ export default function JobDetailsPage() {
       const { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
       if (error) throw error;
       setDirty(false);
-      alert('Сохранено');
+      alert('Saved');
     } catch (e) {
-      alert(`Не удалось сохранить: ${e.message || 'ошибка запроса'}`);
+      alert(`Failed to save: ${e.message || 'request error'}`);
     }
   };
 
-  /* ---------- Архив / Разархив ---------- */
+  /* ---------- Archive / Unarchive ---------- */
   const archiveJob = async (reason) => {
     try {
       const patch = { archived_at: new Date().toISOString(), archived_reason: reason || null };
@@ -382,7 +382,7 @@ export default function JobDetailsPage() {
       if (error) throw error;
       setJob((p) => ({ ...(p || {}), ...patch }));
     } catch (e) {
-      alert('Не удалось отправить в архив: ' + (e.message || e));
+      alert('Failed to archive: ' + (e.message || e));
     }
   };
   const unarchiveJob = async () => {
@@ -392,11 +392,11 @@ export default function JobDetailsPage() {
       if (error) throw error;
       setJob((p) => ({ ...(p || {}), ...patch }));
     } catch (e) {
-      alert('Не удалось вернуть из архива: ' + (e.message || e));
+      alert('Failed to unarchive: ' + (e.message || e));
     }
   };
 
-  /* ---------- редактирование клиента ---------- */
+  /* ---------- client edit ---------- */
   const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
 
   const mirrorClientIntoJob = async (cid, c) => {
@@ -446,7 +446,7 @@ export default function JobDetailsPage() {
           address: merged.address || '',
         });
         setClientDirty(false);
-        alert('Клиент сохранён');
+        alert('Client saved');
         return;
       }
 
@@ -466,14 +466,14 @@ export default function JobDetailsPage() {
         address: created.address || '',
       });
       setClientDirty(false);
-      alert('Клиент создан и привязан к заявке');
+      alert('Client created and linked to the job');
     } catch (e) {
       console.error('saveClient error:', e);
-      alert(`Не удалось сохранить клиента: ${e.message || 'ошибка'}`);
+      alert(`Failed to save client: ${e.message || 'error'}`);
     }
   };
 
-  /* ---------- материалы ---------- */
+  /* ---------- materials ---------- */
   const addMat = () => {
     setMaterials((p) => [...p, { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' }]);
   };
@@ -492,7 +492,7 @@ export default function JobDetailsPage() {
         quantity: m.quantity===''||m.quantity==null?1:Number(m.quantity), supplier: m.supplier || null,
       }));
       const { error } = await supabase.from('materials').insert(payload);
-      if (error) { alert(`Не удалось сохранить новые материалы: ${error.message || 'ошибка'}`); return; }
+      if (error) { alert(`Failed to save new materials: ${error.message || 'error'}`); return; }
     }
 
     for (const m of olds) {
@@ -503,14 +503,14 @@ export default function JobDetailsPage() {
         supplier: m.supplier || null,
       };
       const { error } = await supabase.from('materials').update(patch).eq('id', m.id);
-      if (error) { alert(`Не удалось сохранить материал: ${error.message || 'ошибка'}`); return; }
+      if (error) { alert(`Failed to save material: ${error.message || 'error'}`); return; }
     }
 
     const { data: fresh } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
-    setMaterials(fresh || []); alert('Материалы сохранены');
+    setMaterials(fresh || []); alert('Materials saved');
   };
 
-  /* ---------- файлы ---------- */
+  /* ---------- files ---------- */
   const onPick = async (e) => {
     const files = Array.from(e.target.files || []); if (!files.length) return;
     setUploadBusy(true);
@@ -520,11 +520,11 @@ export default function JobDetailsPage() {
           /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
           /pdf$/i.test(original.type) ||
           /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
-        if (!allowed) { alert(`Формат не поддерживается: ${original.name}`); continue; }
+        if (!allowed) { alert(`Unsupported format: ${original.name}`); continue; }
 
         let file;
         try { file = await convertIfHeicWeb(original); } catch (convErr) {
-          if (isHeicLike(original)) { alert('HEIC/HEIF. Конвертация не сработала.'); continue; }
+          if (isHeicLike(original)) { alert('HEIC/HEIF. Conversion failed.'); continue; }
           file = original;
         }
 
@@ -535,7 +535,7 @@ export default function JobDetailsPage() {
           });
           if (error) throw error;
         } catch (upErr) {
-          alert(`Не удалось загрузить файл: ${file.name}`);
+          alert(`Failed to upload file: ${file.name}`);
         }
       }
     } finally {
@@ -545,15 +545,15 @@ export default function JobDetailsPage() {
     }
   };
 
-  // Удаление файла (функция auth + fallback)
+  // Delete file (edge auth + fallback)
   const delPhoto = async (name) => {
-    if (!window.confirm('Удалить файл?')) return;
+    if (!window.confirm('Delete file?')) return;
     try {
       await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
       await loadPhotos();
     } catch (e) {
       const { error } = await storage().remove([`${jobId}/${name}`]);
-      if (error) { alert(`Не удалось удалить файл: ${e.message || error.message || 'ошибка'}`); return; }
+      if (error) { alert(`Failed to delete file: ${e.message || error.message || 'error'}`); return; }
       await loadPhotos();
     }
   };
@@ -562,12 +562,12 @@ export default function JobDetailsPage() {
   const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
   const downloadOne = async (name) => {
     const { data, error } = await storage().download(`${jobId}/${name}`);
-    if (error || !data) { alert('Не удалось скачать файл'); return; }
+    if (error || !data) { alert('Failed to download file'); return; }
     const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
   const downloadSelected = async () => { const names = photos.filter((p) => checked[p.name]).map((p) => p.name); for (const n of names) await downloadOne(n); };
 
-  /* ---------- инвойсы ---------- */
+  /* ---------- invoices ---------- */
   const loadInvoices = async () => {
     setInvoicesLoading(true);
     try {
@@ -618,7 +618,7 @@ export default function JobDetailsPage() {
   const downloadInvoice = async (item) => {
     if (!item?.hasFile) return;
     const { data, error } = await invStorage().download(`${jobId}/${item.name}`);
-    if (error || !data) { alert('Не удалось скачать инвойс'); return; }
+    if (error || !data) { alert('Failed to download invoice'); return; }
     const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = item.name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   };
 
@@ -626,7 +626,7 @@ export default function JobDetailsPage() {
     const fileName = item?.name || (item?.invoice_no ? `invoice_${item.invoice_no}.pdf` : null);
     const key = fileName ? `${jobId}/${fileName}` : null;
 
-    if (!window.confirm(`Удалить инвойс${item?.invoice_no ? ' #' + item.invoice_no : ''}?`)) return;
+    if (!window.confirm(`Delete invoice${item?.invoice_no ? ' #' + item.invoice_no : ''}?`)) return;
 
     try {
       await callEdgeAuth('admin-delete-invoice-bundle', {
@@ -637,7 +637,7 @@ export default function JobDetailsPage() {
         invoice_no: item?.invoice_no != null ? Number(item.invoice_no) : null,
       });
     } catch (e) {
-      alert(`Не удалось удалить инвойс: ${e.message || e}`);
+      alert(`Failed to delete invoice: ${e.message || e}`);
       return;
     }
 
@@ -646,7 +646,7 @@ export default function JobDetailsPage() {
 
   const createInvoice = () => { window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer'); };
 
-  /* ---------- отображение ---------- */
+  /* ---------- display ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
   const isUnpaidLabor = pmToSelect(job?.labor_payment_method) === '-';
   const isUnpaidSCF   = (toNum(job?.scf) || 0) > 0 && pmToSelect(job?.scf_payment_method) === '-';
@@ -656,28 +656,28 @@ export default function JobDetailsPage() {
   if (loading) {
     return (
       <div style={PAGE}>
-        <div style={H1}>Редактирование заявки {jobNumTitle}</div>
-        <div style={{ ...BOX, textAlign: 'center', color: '#6b7280' }}>Загрузка…</div>
+        <div style={H1}>Edit Job {jobNumTitle}</div>
+        <div style={{ ...BOX, textAlign: 'center', color: '#6b7280' }}>Loading…</div>
       </div>
     );
   }
 
   return (
     <div style={PAGE}>
-      <div style={H1}>Редактирование заявки {jobNumTitle}</div>
+      <div style={H1}>Edit Job {jobNumTitle}</div>
 
-      {/* Баннер архива */}
+      {/* Archive banner */}
       {isArchived && (
         <div style={ARCHIVE_BANNER}>
           <div>
-            <strong>Заявка в архиве.</strong>{' '}
+            <strong>Job is archived.</strong>{' '}
             <span>
-              С {job.archived_at ? new Date(job.archived_at).toLocaleString() : '—'}.
-              {job.archived_reason ? ` Причина: ${job.archived_reason}` : ''}
+              Since {job.archived_at ? new Date(job.archived_at).toLocaleString() : '—'}.
+              {job.archived_reason ? ` Reason: ${job.archived_reason}` : ''}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={BTN} onClick={unarchiveJob}>Вернуть из архива</button>
+            <button style={BTN} onClick={unarchiveJob}>Unarchive</button>
           </div>
         </div>
       )}
@@ -686,23 +686,23 @@ export default function JobDetailsPage() {
         <div style={COL}>
           <div style={BOX}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={H2}>Параметры</div>
+              <div style={H2}>Parameters</div>
               {!isArchived && (
                 <button
                   style={{ ...BTN, borderColor: '#f59e0b', color: '#b45309', background: '#fffbeb' }}
                   onClick={() => {
-                    const r = window.prompt('Причина архивации', 'отказ от ремонта');
+                    const r = window.prompt('Archive reason', 'customer declined repair');
                     if (r !== null) archiveJob(r || null);
                   }}
                 >
-                  📦 В архив
+                  📦 Archive
                 </button>
               )}
             </div>
 
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={ROW}>
-                <div>Техник</div>
+                <div>Technician</div>
                 <select
                   style={SELECT}
                   value={job.technician_id == null ? '' : String(job.technician_id)}
@@ -714,7 +714,7 @@ export default function JobDetailsPage() {
               </div>
 
               <div style={ROW}>
-                <div>Дата визита (NY)</div>
+                <div>Appointment (NY)</div>
                 <input
                   style={INPUT}
                   type="datetime-local"
@@ -724,18 +724,18 @@ export default function JobDetailsPage() {
               </div>
 
               <div style={ROW}>
-                <div>Тип системы</div>
+                <div>System type</div>
                 <select style={SELECT} value={job.system_type || SYSTEM_OPTIONS[0]} onChange={(e)=>setField('system_type', e.target.value)}>
                   {SYSTEM_OPTIONS.map((s) => (<option key={s} value={s}>{s}</option>))}
                 </select>
               </div>
 
-              <div style={ROW}><div>Проблема</div><input style={INPUT} value={job.issue || ''} onChange={(e)=>setField('issue', e.target.value)} /></div>
+              <div style={ROW}><div>Issue</div><input style={INPUT} value={job.issue || ''} onChange={(e)=>setField('issue', e.target.value)} /></div>
 
               <div style={ROW}><div>SCF ($)</div><input style={INPUT} type="number" value={job.scf ?? ''} onChange={(e)=>setField('scf', toNum(e.target.value))} /></div>
 
               <div style={ROW}>
-                <div>Оплата SCF</div>
+                <div>SCF payment</div>
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isUnpaidSCF ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidSCF ? '#fef2f2' : '#fff' }}
@@ -744,14 +744,14 @@ export default function JobDetailsPage() {
                   >
                     {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
                   </select>
-                  {isUnpaidSCF && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>SCF не оплачено — выбери способ оплаты</div>}
+                  {isUnpaidSCF && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>SCF unpaid — select payment method</div>}
                 </div>
               </div>
 
-              <div style={ROW}><div>Стоимость работы ($)</div><input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e)=>setField('labor_price', toNum(e.target.value))} /></div>
+              <div style={ROW}><div>Labor ($)</div><input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e)=>setField('labor_price', toNum(e.target.value))} /></div>
 
               <div style={ROW}>
-                <div>Оплата работы</div>
+                <div>Labor payment</div>
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isUnpaidLabor ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidLabor ? '#fef2f2' : '#fff' }}
@@ -760,76 +760,69 @@ export default function JobDetailsPage() {
                   >
                     {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
                   </select>
-                  {isUnpaidLabor && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Не оплачено — выбери способ оплаты</div>}
+                  {isUnpaidLabor && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Unpaid — select payment method</div>}
                 </div>
               </div>
 
               <div style={ROW}>
-                <div>Статус</div>
+                <div>Status</div>
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`, background: isRecall ? '#fef2f2' : '#fff' }}
                     value={job.status || STATUS_OPTIONS[0]}
                     onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
                   >
-                    <option value="recall">ReCall</option>
-                    <option value="диагностика">диагностика</option>
-                    <option value="в работе">в работе</option>
-                    <option value="заказ деталей">заказ деталей</option>
-                    <option value="ожидание деталей">ожидание деталей</option>
-                    <option value="к финишу">к финишу</option>
-                    <option value="завершено">завершено</option>
-                    <option value="отменено">отменено</option>
+                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
-                  {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Статус ReCall</div>}
+                  {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>ReCall status</div>}
                 </div>
               </div>
 
-              <div style={ROW}><div>Job № (необязательно)</div><input style={INPUT} value={job.job_number || ''} onChange={(e)=>setField('job_number', e.target.value)} /></div>
+              <div style={ROW}><div>Job # (optional)</div><input style={INPUT} value={job.job_number || ''} onChange={(e)=>setField('job_number', e.target.value)} /></div>
 
               {'tech_comment' in (job || {}) && (
-                <div style={ROW}><div>Комментарий от техника</div><textarea style={TA} value={job.tech_comment || ''} onChange={(e)=>setField('tech_comment', e.target.value)} /></div>
+                <div style={ROW}><div>Technician comment</div><textarea style={TA} value={job.tech_comment || ''} onChange={(e)=>setField('tech_comment', e.target.value)} /></div>
               )}
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>Сохранить заявку</button>
-                <button style={GHOST} onClick={() => navigate(-1)}>Назад</button>
-                {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
+                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>Save job</button>
+                <button style={GHOST} onClick={() => navigate(-1)}>Back</button>
+                {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Правая колонка */}
+        {/* Right column */}
         <div style={COL}>
-          {/* Клиент */}
+          {/* Client */}
           <div style={BOX}>
-            <div style={H2}>Клиент</div>
+            <div style={H2}>Client</div>
             <div style={{ display: 'grid', gap: 10 }}>
-              <Row label="ФИО" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
-              <Row label="Телефон" value={client.phone} onChange={(v) => setClientField('phone', v)} />
+              <Row label="Full name" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
+              <Row label="Phone" value={client.phone} onChange={(v) => setClientField('phone', v)} />
               <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
-              <Row label="Адрес" value={client.address} onChange={(v) => setClientField('address', v)} />
+              <Row label="Address" value={client.address} onChange={(v) => setClientField('address', v)} />
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Сохранить клиента</button>
-                {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>Изменений нет</div>}
+                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Save client</button>
+                {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
               </div>
-              {job?.client_id && <div style={{ ...MUTED, fontSize: 12 }}>Привязан client_id: {String(job.client_id)}</div>}
+              {job?.client_id && <div style={{ ...MUTED, fontSize: 12 }}>Linked client_id: {String(job.client_id)}</div>}
             </div>
           </div>
 
-          {/* Инвойсы */}
+          {/* Invoices */}
           <div style={BOX}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={H2}>Инвойсы (PDF)</div>
+              <div style={H2}>Invoices (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>{invoicesLoading ? '...' : 'Обновить'}</button>
-                <button type="button" style={PRIMARY} onClick={createInvoice}>+ Создать инвойс</button>
+                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>{invoicesLoading ? '...' : 'Refresh'}</button>
+                <button type="button" style={PRIMARY} onClick={createInvoice}>+ Create invoice</button>
               </div>
             </div>
 
             {!invoices || invoices.length === 0 ? (
-              <div style={MUTED}>Пока нет инвойсов для этой заявки</div>
+              <div style={MUTED}>No invoices for this job yet</div>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
                 {invoices.map((inv) => (
@@ -840,14 +833,14 @@ export default function JobDetailsPage() {
                     <div>
                       <div style={{ fontWeight: 600 }}>
                         {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                        {!inv.hasFile && (<span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF ещё не в хранилище)</span>)}
+                        {!inv.hasFile && (<span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>)}
                       </div>
                       <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>Открыть PDF</button>
-                      <button type="button" style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && downloadInvoice(inv)} disabled={!inv.hasFile}>Скачать</button>
-                      <button type="button" style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && deleteInvoice(inv)} disabled={!inv.hasFile}>Удалить</button>
+                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>Open PDF</button>
+                      <button type="button" style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && downloadInvoice(inv)} disabled={!inv.hasFile}>Download</button>
+                      <button type="button" style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && deleteInvoice(inv)} disabled={!inv.hasFile}>Delete</button>
                     </div>
                   </div>
                 ))}
@@ -857,14 +850,14 @@ export default function JobDetailsPage() {
         </div>
       </div>
 
-      {/* Материалы */}
+      {/* Materials */}
       <div style={BOX}>
-        <div style={H2}>Материалы</div>
+        <div style={H2}>Materials</div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <Th>Название</Th><Th>Цена</Th><Th>Кол-во</Th><Th>Поставщик</Th><Th center>Действия</Th>
+                <Th>Name</Th><Th>Price</Th><Th>Qty</Th><Th>Supplier</Th><Th center>Actions</Th>
               </tr>
             </thead>
             <tbody>
@@ -881,21 +874,21 @@ export default function JobDetailsPage() {
           </table>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button style={GHOST} onClick={addMat}>+ Добавить</button>
-          <button style={PRIMARY} onClick={saveMats}>Сохранить материалы</button>
+          <button style={GHOST} onClick={addMat}>+ Add</button>
+          <button style={PRIMARY} onClick={saveMats}>Save materials</button>
         </div>
       </div>
 
-      {/* Комментарии */}
+      {/* Comments */}
       <div style={BOX}>
-        <div style={H2}>Комментарии</div>
+        <div style={H2}>Comments</div>
         {commentsLoading ? (
-          <div style={MUTED}>Загрузка…</div>
+          <div style={MUTED}>Loading…</div>
         ) : (
           <>
             <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, marginBottom: 8 }}>
               {comments.length === 0 ? (
-                <div style={MUTED}>Пока нет комментариев</div>
+                <div style={MUTED}>No comments yet</div>
               ) : (
                 comments.map((c) => {
                   const when = new Date(c.created_at).toLocaleString();
@@ -910,31 +903,31 @@ export default function JobDetailsPage() {
               )}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <textarea rows={2} style={{ ...TA, minHeight: 60 }} value={commentText} onChange={(e)=>setCommentText(e.target.value)} placeholder="Написать комментарий…" />
-              <button style={PRIMARY} onClick={addComment}>Отправить</button>
+              <textarea rows={2} style={{ ...TA, minHeight: 60 }} value={commentText} onChange={(e)=>setCommentText(e.target.value)} placeholder="Write a comment…" />
+              <button style={PRIMARY} onClick={addComment}>Send</button>
             </div>
           </>
         )}
       </div>
 
-      {/* Фото / файлы */}
+      {/* Photos / files */}
       <div style={BOX}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={H2}>Фото / файлы</div>
+          <div style={H2}>Photos / Files</div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <label style={{ userSelect: 'none', cursor: 'pointer' }}>
-              <input type="checkbox" checked={allChecked} onChange={(e)=>toggleAllPhotos(e.target.checked)} /> Выбрать всё
+              <input type="checkbox" checked={allChecked} onChange={(e)=>toggleAllPhotos(e.target.checked)} /> Select all
             </label>
-            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>Скачать выбранные</button>
+            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>Download selected</button>
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
           <input ref={fileRef} type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf" onChange={onPick} />
-          {uploadBusy && <span style={MUTED}>Загрузка…</span>}
+          {uploadBusy && <span style={MUTED}>Uploading…</span>}
         </div>
 
-        {photos.length === 0 && <div style={MUTED}>Файлов пока нет (необязательно)</div>}
+        {photos.length === 0 && <div style={MUTED}>No files yet (optional)</div>}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
           {photos.map((p) => (
@@ -951,8 +944,8 @@ export default function JobDetailsPage() {
               )}
 
               <div style={{ display: 'flex', gap: 6 }}>
-                <button style={BTN} onClick={()=>downloadOne(p.name)}>Скачать</button>
-                <button style={DANGER} onClick={()=>delPhoto(p.name)}>Удалить</button>
+                <button style={BTN} onClick={()=>downloadOne(p.name)}>Download</button>
+                <button style={DANGER} onClick={()=>delPhoto(p.name)}>Delete</button>
               </div>
             </div>
           ))}
@@ -962,7 +955,7 @@ export default function JobDetailsPage() {
   );
 }
 
-/* ---------- Мелкие компоненты ---------- */
+/* ---------- Small components ---------- */
 function Row({ label, value, onChange }) {
   return (
     <div style={ROW}>
@@ -983,5 +976,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
