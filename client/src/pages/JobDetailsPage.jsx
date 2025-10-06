@@ -138,7 +138,7 @@ const normalizeId = (v) => { if (v === '' || v == null) return null; const s = S
 const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
 
 // завершённый статус?
-const DONE_STATUSES = new Set(['завершено','заверщено','completed','done','закрыто']);
+const DONE_STATUSES = new Set(['completed']);
 const isDone = (s) => DONE_STATUSES.has(String(s||'').toLowerCase().trim());
 
 /* ---------- HEIC → JPEG ---------- */
@@ -983,4 +983,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
