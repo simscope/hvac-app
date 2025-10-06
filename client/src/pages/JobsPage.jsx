@@ -15,7 +15,7 @@ const STATUS_ORDER = [
   'отказ',
 ];
 
-const HIDDEN_STATUSES = new Set(['завершено','заверщено','completed','done','закрыто']);
+const HIDDEN_STATUSES = new Set(['diagnosis','in progress','parts ordered','completed','canceled']);
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
@@ -301,3 +301,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
