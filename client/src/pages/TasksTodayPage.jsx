@@ -19,7 +19,14 @@ const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db'
 const TA = { ...INPUT, minHeight: 80 };
 const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, cursor: 'pointer', background: '#fff' };
 
-const nyToday = () => dayjs().tz(NY).format('YYYY-MM-DD');
+/** Надёжно считаем "сегодня" в Нью-Йорке без dayjs */
+function nyToday() {
+  const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: NY, year: 'numeric', month: '2-digit', day: '2-digit' });
+  // sv-SE даёт ISO-подобно: YYYY-MM-DD
+  return fmt.format(new Date());
+}
+
+/** Время напоминания → ISO в NY */
 function toNYTzISO(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
   const d = dayjs.tz(`${dateStr} ${timeStr}`, 'YYYY-MM-DD HH:mm', NY);
@@ -60,7 +67,7 @@ export default function TasksTodayPage() {
       .select('id, full_name, role')
       .in('role', ['admin', 'manager'])
       .order('role', { ascending: true });
-    if (error) return console.error('loadManagers error:', error);
+    if (error) { console.error('loadManagers error:', error); return; }
     if (mounted.current) setManagers(data || []);
   }, []);
   useEffect(() => { loadManagers(); }, []);
@@ -69,29 +76,35 @@ export default function TasksTodayPage() {
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
-    const today = nyToday();
+    const today = nyToday(); // YYYY-MM-DD в часовом поясе NY
+    console.info('[TasksToday] today(NY)=', today);
 
-    // перенос/автогенерация/тикер (если настроено на стороне БД)
+    // авто-логика, как и раньше
     await supabase.rpc('rollover_open_tasks_to_today').catch(e => console.error(e));
     await supabase.rpc('ensure_payment_tasks_for_today', { p_user: me.id }).catch(e => console.error(e));
     await supabase.rpc('tick_task_reminders').catch(e => console.error(e));
 
-    // сами задачи на сегодня
-    const { data: t, error: tErr } = await supabase
-      .from('tasks')
-      .select('id,title,details,status,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
-      .eq('due_date', today)
-      .order('status', { ascending: true })
-      .order('updated_at', { ascending: false });
-    if (tErr) {
-      console.error('tasks select error:', tErr);
-      if (mounted.current) { setTasks([]); setComments({}); setLoading(false); }
-      return;
+    // ВАЖНО: фильтруем по диапазону, а не strict eq — для стабильности в разных драйверах
+    let t = [];
+    {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('id,title,details,status,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
+        .gte('due_date', today)
+        .lte('due_date', today) // для DATE это эквивалент '='
+        .order('status', { ascending: true })
+        .order('updated_at', { ascending: false });
+      if (error) {
+        console.error('tasks select error:', error);
+      } else {
+        t = data || [];
+      }
     }
-    if (mounted.current) setTasks(t || []);
 
-    // комментарии + имя автора
-    if (t && t.length) {
+    if (mounted.current) setTasks(t);
+
+    // Комментарии с автором (имя)
+    if (t.length) {
       const ids = t.map(x => x.id);
       const { data: cs, error: cErr } = await supabase
         .from('task_comments')
@@ -121,7 +134,7 @@ export default function TasksTodayPage() {
 
   useEffect(() => { if (me) load(); }, [me]);
 
-  /* ========== realtime (по сегодняшним задачам) ========== */
+  /* ========== realtime ========== */
   useEffect(() => {
     if (!me) return;
     const today = nyToday();
@@ -147,28 +160,18 @@ export default function TasksTodayPage() {
   const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
   const done = useMemo(() => (tasks || []).filter(t => t.status === 'done'), [tasks]);
 
-  /* ========== действия (сразу применяются) ========== */
+  /* ========== действия (оптимистично + перезагрузка) ========== */
   const toggleStatus = async (t) => {
-    // оптимистично обновим UI
-    setTasks(prev =>
-      prev.map(x => x.id === t.id ? { ...x, status: t.status === 'active' ? 'done' : 'active' } : x)
-    );
-    // пульнём на сервер
+    setTasks(prev => prev.map(x => x.id === t.id ? ({ ...x, status: t.status === 'active' ? 'done' : 'active' }) : x));
     const next = t.status === 'active' ? 'done' : 'active';
-    const { error } = await supabase
-      .from('tasks')
-      .update({ status: next, updated_at: new Date().toISOString() })
-      .eq('id', t.id);
+    const { error } = await supabase.from('tasks').update({ status: next, updated_at: new Date().toISOString() }).eq('id', t.id);
     if (error) console.error('toggleStatus error:', error);
-    // синхронизируемся с сервером (на случай RLS/триггеров)
     await load();
   };
 
   const addComment = async (taskId, text) => {
     if (!text?.trim() || !me) return;
     const nowISO = new Date().toISOString();
-
-    // оптимистично добавим комментарий
     setComments(prev => {
       const arr = prev[taskId] ? [...prev[taskId]] : [];
       arr.unshift({
@@ -181,16 +184,8 @@ export default function TasksTodayPage() {
       });
       return { ...prev, [taskId]: arr };
     });
-
-    // отправим на сервер
-    const { error } = await supabase.from('task_comments').insert({
-      task_id: taskId,
-      body: text.trim(),
-      author_id: me.id
-    });
+    const { error } = await supabase.from('task_comments').insert({ task_id: taskId, body: text.trim(), author_id: me.id });
     if (error) console.error('addComment error:', error);
-
-    // перезагрузим для получения real id + нормального профиля
     await load();
   };
 
@@ -219,13 +214,7 @@ export default function TasksTodayPage() {
         <div style={{ ...H, margin: 0 }}>Активные</div>
         <div style={{ display: 'grid', gap: 8 }}>
           {active.length === 0 ? <div style={{ color: '#6b7280' }}>Нет активных задач</div> : active.map(t => (
-            <TaskRow
-              key={t.id}
-              task={t}
-              comments={comments[t.id] || []}
-              onToggle={() => toggleStatus(t)}
-              onAddComment={addComment}
-            />
+            <TaskRow key={t.id} task={t} comments={comments[t.id] || []} onToggle={() => toggleStatus(t)} onAddComment={addComment} />
           ))}
         </div>
       </div>
@@ -235,13 +224,7 @@ export default function TasksTodayPage() {
         <div style={{ ...H, margin: 0 }}>Завершённые (сегодня)</div>
         <div style={{ display: 'grid', gap: 8 }}>
           {done.length === 0 ? <div style={{ color: '#6b7280' }}>Нет</div> : done.map(t => (
-            <TaskRow
-              key={t.id}
-              task={t}
-              comments={comments[t.id] || []}
-              onToggle={() => toggleStatus(t)}
-              onAddComment={addComment}
-            />
+            <TaskRow key={t.id} task={t} comments={comments[t.id] || []} onToggle={() => toggleStatus(t)} onAddComment={addComment} />
           ))}
         </div>
       </div>
@@ -443,7 +426,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         type: 'general',
         job_id: job_id,
         job_number: job_number || null,
-        due_date: dateStr,
+        due_date: dateStr, // DATE (NY)
         created_by: me.id,
         assignee_id,
         priority,
@@ -462,10 +445,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
   };
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)',
-      display: 'grid', placeItems: 'center', zIndex: 50
-    }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'grid', placeItems: 'center', zIndex: 50 }}>
       <div style={{ width: 620, background: '#fff', borderRadius: 16, padding: 16, display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
           <div style={{ fontWeight: 700, fontSize: 18 }}>Новая задача</div>
@@ -510,7 +490,7 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
           <div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Дата (NY)</div>
-            <input type="date" style={INPUT} value={dayjs(dateStr).format('YYYY-MM-DD')} onChange={e => setDateStr(e.target.value)} />
+            <input type="date" style={INPUT} value={dateStr} onChange={e => setDateStr(e.target.value)} />
           </div>
           <div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Время напоминания (опц.)</div>
