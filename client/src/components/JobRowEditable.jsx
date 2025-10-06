@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-/** Приводим id: ''|null => null; '123' => 123; любой другой => строка */
+/** Normalize id: ''|null => null; '123' => 123; otherwise => string */
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
-  return /^\d+$/.test(s) ? Number(s) : s; // число или uuid-строка
+  return /^\d+$/.test(s) ? Number(s) : s; // number or uuid string
 };
 
 export default function JobRowEditable({ job, technicians = [], onUpdate, onSelect }) {
@@ -30,7 +30,7 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
   const techOptions = useMemo(
     () =>
       (technicians || [])
-        .filter((t) => !t.role || String(t.role).toLowerCase() === 'tech')
+        .filter((t) => !t.role || ['tech', 'technician'].includes(String(t.role).toLowerCase()))
         .sort((a, b) => (a.name || '').localeCompare(b.name || '')),
     [technicians]
   );
@@ -45,7 +45,7 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
       system_type: draft.system_type || null,
       issue: draft.issue || null,
       scf: draft.scf === '' || draft.scf == null ? null : Number(draft.scf),
-      technician_id: normalizeId(draft.technician_id), // <-- ключевое
+      technician_id: normalizeId(draft.technician_id),
       status: draft.status || null,
     };
 
@@ -54,8 +54,8 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
       if (error) throw error;
       onUpdate && onUpdate();
     } catch (err) {
-      console.error('Ошибка сохранения job:', err);
-      alert('Ошибка при сохранении заявки');
+      console.error('Job save error:', err);
+      alert('Failed to save job');
     }
   };
 
@@ -63,10 +63,10 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
 
   return (
     <tr>
-      {/* 1. Номер */}
+      {/* 1. Job number */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px' }}>
         <span
-          title="Открыть детали заявки"
+          title="Open job details"
           onClick={openDetails}
           style={{ color: '#1976d2', textDecoration: 'underline', cursor: 'pointer' }}
         >
@@ -74,33 +74,46 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
         </span>
       </td>
 
-      {/* 2. Клиент */}
-      <td style={{ border: '1px solid #ccc', padding: '6px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      {/* 2. Client */}
+      <td
+        style={{
+          border: '1px solid #ccc',
+          padding: '6px 8px',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
         {job.client_name || '—'}
       </td>
 
-      {/* 3. Система */}
+      {/* 3. System */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px' }}>
         <input value={draft.system_type} onChange={onChange('system_type')} style={{ width: '100%' }} />
       </td>
 
-      {/* 4. Проблема */}
+      {/* 4. Issue */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px' }}>
         <input value={draft.issue} onChange={onChange('issue')} style={{ width: '100%' }} />
       </td>
 
       {/* 5. SCF */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px', textAlign: 'right' }}>
-        <input type="number" value={draft.scf} onChange={onChange('scf')} style={{ width: '100%', textAlign: 'right' }} />
+        <input
+          type="number"
+          value={draft.scf}
+          onChange={onChange('scf')}
+          style={{ width: '100%', textAlign: 'right' }}
+        />
       </td>
 
-      {/* 6. Техник */}
+      {/* 6. Technician */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px' }}>
         <select
           value={draft.technician_id == null || draft.technician_id === '' ? '' : String(draft.technician_id)}
           onChange={(e) => {
             const v = e.target.value;
-            setDraft((p) => ({ ...p, technician_id: v === '' ? '' : v })); // в стейте держим строку
+            setDraft((p) => ({ ...p, technician_id: v === '' ? '' : v })); // keep as string in state
           }}
           style={{ width: '100%' }}
         >
@@ -113,10 +126,10 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
         </select>
       </td>
 
-      {/* 7. Дата */}
+      {/* 7. Date */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px' }}>{job.created_at_fmt || '—'}</td>
 
-      {/* 8. Статус */}
+      {/* 8. Status */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px' }}>
         <select
           value={draft.status ?? ''}
@@ -132,19 +145,23 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
         >
           <option value="recall">ReCall</option>
           <option value="">—</option>
-          <option value="диагностика">диагностика</option>
-          <option value="в работе">в работе</option>
-          <option value="заказ деталей">заказ деталей</option>
-          <option value="ожидание деталей">ожидание деталей</option>
-          <option value="к финишу">к финишу</option>
-          <option value="завершено">завершено</option>
+          <option value="diagnosis">diagnosis</option>
+          <option value="in progress">in progress</option>
+          <option value="parts ordered">parts ordered</option>
+          <option value="waiting for parts">waiting for parts</option>
+          <option value="to finish">to finish</option>
+          <option value="completed">completed</option>
         </select>
       </td>
 
-      {/* 9. Действия */}
+      {/* 9. Actions */}
       <td style={{ border: '1px solid #ccc', padding: '6px 8px', textAlign: 'center' }}>
-        <button onClick={handleSave} title="Сохранить" style={{ marginRight: 8 }}>💾</button>
-        <button onClick={openDetails} title="Открыть">✏️</button>
+        <button onClick={handleSave} title="Save" style={{ marginRight: 8 }}>
+          💾
+        </button>
+        <button onClick={openDetails} title="Open">
+          ✏️
+        </button>
       </td>
     </tr>
   );
