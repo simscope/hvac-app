@@ -110,7 +110,7 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Справочники ---------- */
-const STATUS_OPTIONS = ['recall', 'диагностика', 'в работе', 'заказ деталей', 'ожидание деталей', 'к финишу', 'завершено', 'отменено'];
+const STATUS_OPTIONS = ['recall', 'diagnosis', 'in progress', 'parts ordered', 'waiting for parts', 'to finish', 'completed', 'canceled'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Оплата ---------- */
@@ -983,3 +983,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
