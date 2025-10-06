@@ -6,11 +6,11 @@ import { supabase } from '../supabaseClient';
 /* ---------- Статусы: храним в БД нормализованные значения ---------- */
 const STATUS_VALUES = [
   'recall',
-  'заказ деталей',
-  'ожидание деталей',
-  'в работе',
-  'к финишу',
-  'завершено',
+  'parts ordered',
+  'waiting for parts',
+  'in progress',
+  'to finish',
+  'completed',
 ];
 
 // отображаемые лейблы для селекта
@@ -21,12 +21,12 @@ const normalizeStatusForDb = (s) => {
   if (!s) return null;
   const v = String(s).trim();
   if (v.toLowerCase() === 'recall' || v === 'ReCall') return 'recall';
-  if (v === 'выполнено') return 'завершено';
+  if (v === 'выполнено') return 'completed';
   return v;
 };
 
 /* ---------- Показываем строки только для этих статусов ---------- */
-const SHOW_STATUSES = new Set(['recall', 'заказ деталей', 'ожидание деталей']);
+const SHOW_STATUSES = new Set(['recall', 'parts ordered', 'waiting for parts']);
 
 const MaterialsPage = () => {
   const [jobs, setJobs] = useState([]);
@@ -610,3 +610,4 @@ const MaterialsPage = () => {
 };
 
 export default MaterialsPage;
+
