@@ -20,13 +20,9 @@ const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db'
 const TA = { ...INPUT, minHeight: 80 };
 const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, cursor: 'pointer', background: '#fff' };
 
-/** Надёжно даёт строку YYYY-MM-DD для зоны Нью-Йорк */
-function nyToday() {
-  const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: NY, year: 'numeric', month: '2-digit', day: '2-digit' });
-  return fmt.format(new Date());
-}
-
-/** Дата/время формы -> ISO в зоне Нью-Йорк */
+/** Сегодня (DATE) в зоне NY */
+function nyToday() { return dayjs().tz(NY).format('YYYY-MM-DD'); }
+/** Дата/время формы -> ISO (NY) */
 function toNYTzISO(dateStr, timeStr) {
   if (!dateStr || !timeStr) return null;
   const d = dayjs.tz(`${dateStr} ${timeStr}`, 'YYYY-MM-DD HH:mm', NY);
@@ -59,16 +55,17 @@ export default function TasksTodayPage() {
     return () => unsub?.unsubscribe?.();
   }, []);
 
-  /* ---------- managers (для модалки) ---------- */
-  const loadManagers = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, full_name, role')
-      .in('role', ['admin', 'manager'])
-      .order('role', { ascending: true });
-    if (!error && mounted.current) setManagers(data || []);
+  /* ---------- managers ---------- */
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, role')
+        .in('role', ['admin', 'manager'])
+        .order('role', { ascending: true });
+      if (!error && mounted.current) setManagers(data || []);
+    })();
   }, []);
-  useEffect(() => { loadManagers(); }, []);
 
   /* ---------- load today ---------- */
   const load = useCallback(async () => {
@@ -76,54 +73,57 @@ export default function TasksTodayPage() {
     setLoading(true);
     const today = nyToday();
 
-    // серверная логика — как и хотели
-    await supabase.rpc('rollover_open_tasks_to_today').catch(console.error);
-    await supabase.rpc('ensure_payment_tasks_for_today', { p_user: me.id }).catch(console.error);
-    await supabase.rpc('tick_task_reminders').catch(console.error);
+    try {
+      // серверная логика
+      await supabase.rpc('rollover_open_tasks_to_today');
+      await supabase.rpc('ensure_payment_tasks_for_today', { p_user: me.id });
+      await supabase.rpc('tick_task_reminders');
 
-    // выборка задач (тип DATE => in([...]) = надёжно)
-    const { data: t, error: tErr } = await supabase
-      .from('tasks')
-      .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
-      .in('due_date', [today])
-      .order('status', { ascending: true })
-      .order('updated_at', { ascending: false });
+      // выборка задач на сегодня (DATE)
+      const { data: t, error: tErr } = await supabase
+        .from('tasks')
+        .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
+        .eq('due_date', today)             // <- вернули eq
+        .order('status', { ascending: true })
+        .order('updated_at', { ascending: false });
 
-    if (tErr) {
-      console.error(tErr);
-      if (mounted.current) { setTasks([]); setComments({}); setLoading(false); }
-      return;
-    }
-    if (mounted.current) setTasks(t || []);
+      if (tErr) throw tErr;
+      if (mounted.current) setTasks(t || []);
 
-    if ((t || []).length) {
-      const ids = t.map(x => x.id);
-      const { data: cs, error: cErr } = await supabase
-        .from('task_comments')
-        .select('id,task_id,body,author_id,created_at, profiles:author_id (full_name)')
-        .in('task_id', ids)
-        .order('created_at', { ascending: false });
-      if (!cErr) {
-        const map = {};
-        (cs || []).forEach(c => {
-          (map[c.task_id] ||= []).push({
-            id: c.id,
-            task_id: c.task_id,
-            body: c.body,
-            author_id: c.author_id,
-            author_name: c?.profiles?.full_name || (c.author_id || '').slice(0, 8),
-            created_at: c.created_at
+      // комментарии (имя автора если есть FK на profiles.id)
+      if ((t || []).length) {
+        const ids = t.map(x => x.id);
+        const { data: cs, error: cErr } = await supabase
+          .from('task_comments')
+          .select('id,task_id,body,author_id,created_at, profiles:author_id (full_name)')
+          .in('task_id', ids)
+          .order('created_at', { ascending: false });
+
+        if (!cErr) {
+          const map = {};
+          (cs || []).forEach(c => {
+            (map[c.task_id] ||= []).push({
+              id: c.id,
+              task_id: c.task_id,
+              body: c.body,
+              author_id: c.author_id,
+              author_name: c?.profiles?.full_name || (c.author_id || '').slice(0, 8),
+              created_at: c.created_at
+            });
           });
-        });
-        if (mounted.current) setComments(map);
-      } else {
-        if (mounted.current) setComments({});
+          if (mounted.current) setComments(map);
+        } else if (mounted.current) {
+          setComments({});
+        }
+      } else if (mounted.current) {
+        setComments({});
       }
-    } else if (mounted.current) {
-      setComments({});
+    } catch (e) {
+      console.error('[TasksToday] load error:', e);
+      if (mounted.current) { setTasks([]); setComments({}); }
+    } finally {
+      if (mounted.current) setLoading(false);
     }
-
-    if (mounted.current) setLoading(false);
   }, [me?.id]);
 
   useEffect(() => { if (me) load(); }, [me]);
@@ -143,14 +143,14 @@ export default function TasksTodayPage() {
 
   /* ---------- derived ---------- */
   const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
-  const done = useMemo(() => (tasks || []).filter(t => t.status === 'done'), [tasks]);
+  const done   = useMemo(() => (tasks || []).filter(t => t.status === 'done'  ), [tasks]);
 
-  /* ---------- actions (оптимистично + sync) ---------- */
+  /* ---------- actions ---------- */
   const toggleStatus = async (t) => {
     const next = t.status === 'active' ? 'done' : 'active';
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, status: next } : x));
     const { error } = await supabase.from('tasks').update({ status: next, updated_at: new Date().toISOString() }).eq('id', t.id);
-    if (error) console.error(error);
+    if (error) console.error('toggleStatus error:', error);
     await load();
   };
 
@@ -169,7 +169,7 @@ export default function TasksTodayPage() {
       return { ...prev, [taskId]: arr };
     });
     const { error } = await supabase.from('task_comments').insert({ task_id: taskId, body: text.trim(), author_id: me.id });
-    if (error) console.error(error);
+    if (error) console.error('addComment error:', error);
     await load();
   };
 
@@ -226,6 +226,7 @@ export default function TasksTodayPage() {
   );
 }
 
+/* ===== helpers ===== */
 function PriBadge({ p }) {
   const map = { low: '#d1fae5', normal: '#e5e7eb', high: '#fee2e2' };
   const txt = { low: '#065f46', normal: '#374151', high: '#991b1b' };
@@ -357,13 +358,10 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
     }
   };
 
-  // если вписали номер — долепим его в заголовок шаблонов
   useEffect(() => {
     if (!jobNumber) return;
-    if (/заявк/i.test(title) && !/#\s*\d+/.test(title)) {
-      setTitle(t => `${t.trim()} #${jobNumber}`);
-    }
-  }, [jobNumber]);
+    if (/заявк/i.test(title) && !/#\s*\d+/.test(title)) setTitle(t => `${t.trim()} #${jobNumber}`);
+  }, [jobNumber, title]);
 
   const save = async () => {
     if (!me) return;
@@ -404,13 +402,8 @@ function CreateTaskModal({ me, managers, onClose, onCreated }) {
         remind_every_minutes: repeatMins ? Number(repeatMins) : null,
         last_reminded_at: null
       });
-      if (!error) {
-        onCreated?.();
-        onClose?.();
-      }
-    } finally {
-      setSaving(false);
-    }
+      if (!error) { onCreated?.(); onClose?.(); }
+    } finally { setSaving(false); }
   };
 
   return (
