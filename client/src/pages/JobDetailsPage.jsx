@@ -17,26 +17,29 @@ function wallFromDb(isoLike) {
     s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
   if (!m) return '';
   const year = m[1].length === 4 ? `${m[1]}-${m[2]}-${m[3]}` : m[1];
-  const hh   = m[m.length - 2];
-  const mm   = m[m.length - 1];
+  const hh = m[m.length - 2];
+  const mm = m[m.length - 1];
   return `${year}T${hh}:${mm}`;
 }
 
 // get NY zone offset for a specific "wall" time (YYYY-MM-DDTHH:mm)
 function nyOffsetForWall(wall) {
   const [dpart, tpart] = String(wall).split('T');
-  the:
   const [y, m, d] = dpart.split('-').map(Number);
   const [H, M] = tpart.split(':').map(Number);
   const fakeUtc = Date.UTC(y, m - 1, d, H, M, 0, 0);
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: NY_TZ,
     timeZoneName: 'short',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
     hour12: false,
   }).formatToParts(new Date(fakeUtc));
-  const tz = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT-00';
+  const tz = parts.find((p) => p.type === 'timeZoneName')?.value || 'GMT-00';
   const m2 = tz.match(/GMT([+-]\d{1,2})(?::?(\d{2}))?/i);
   if (!m2) return '+00:00';
   const sign = m2[1].startsWith('-') ? '-' : '+';
@@ -94,38 +97,43 @@ const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
 /* ---------- Edge helpers ---------- */
-function functionsBase() { return supabaseUrl.replace('.supabase.co', '.functions.supabase.co'); }
+function functionsBase() {
+  return supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
+}
 async function callEdgeAuth(path, body) {
-  const { data: { session} } = await supabase.auth.getSession();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
   const token = session?.access_token || '';
-  const url = `${functionsBase().replace(/\/+$/,'')}/${path}`;
+  const url = `${functionsBase().replace(/\/+$/, '')}/${path}`;
   const res = await fetch(url, {
-    method: 'POST', mode: 'cors',
+    method: 'POST',
+    mode: 'cors',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body ?? {}),
   });
   const text = await res.text();
-  let json; try { json = text ? JSON.parse(text) : null; } catch { json = { message: text }; }
+  let json;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = { message: text };
+  }
   if (!res.ok) throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
   return json;
 }
 
 /* ---------- Dictionaries ---------- */
-/** Канонические значения статуса — в НИЖНЕМ регистре */
 const STATUS_OPTIONS = [
   'recall',
-  'diagnosis',
-  'in progress',
-  'parts ordered',
-  'waiting for parts',
-  'to finish',
-  'completed',
-  'canceled',
+  'Diagnosis',
+  'In progress',
+  'Parts ordered',
+  'Waiting for parts',
+  'To finish',
+  'Completed',
+  'Canceled',
 ];
-
-/* Для вывода подписей в Title Case */
-const titleCase = (s) => s.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1));
-
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Payments ---------- */
@@ -138,7 +146,7 @@ const pmToSave = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
 };
-/** НЕОПЛАЧЕНО, если метод пустой/служебный; любое другое непустое значение считаем оплачено */
+/** UNPAID if method is empty/service value; anything else (cash/zelle/card/check) = paid */
 const isPmUnpaid = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return !s || s === '-' || s === 'none' || s === 'null';
@@ -146,62 +154,108 @@ const isPmUnpaid = (v) => {
 
 /* ---------- Helpers ---------- */
 const toNum = (v) => (v === '' || v === null || Number.isNaN(Number(v)) ? null : Number(v));
-const stringOrNull = (v) => (v == null ? null : (String(v).trim() || null));
-const normalizeEmail = (v) => { const s = (v ?? '').toString().trim(); return s ? s.toLowerCase() : null; };
+const stringOrNull = (v) => (v == null ? null : String(v).trim() || null);
+const normalizeEmail = (v) => {
+  const s = (v ?? '').toString().trim();
+  return s ? s.toLowerCase() : null;
+};
 function makeFrontUrl(path) {
   const base = window.location.origin;
   const isHash = window.location.href.includes('/#/');
   const clean = path.startsWith('/') ? path : `/${path}`;
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
-const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
+const normalizeId = (v) => {
+  if (v === '' || v == null) return null;
+  const s = String(v);
+  return /^\d+$/.test(s) ? Number(s) : s;
+};
 
-/** Приводим ВЕСЬ ввод к нашим каноническим статусам в нижнем регистре */
+/** Keep only English canonicalization; remove Russian aliases */
 const normalizeStatusForDb = (s) => {
   if (!s) return null;
-  const low = String(s).trim().toLowerCase();
-
-  // Мягкие синонимы
-  if (['recall'].includes(low)) return 'recall';
-  if (['diagnosis', 'diag'].includes(low)) return 'diagnosis';
-  if (['in progress', 'progress', 'working'].includes(low)) return 'in progress';
-  if (['parts ordered', 'ordered parts'].includes(low)) return 'parts ordered';
-  if (['waiting for parts', 'wait parts', 'awaiting parts'].includes(low)) return 'waiting for parts';
-  if (['to finish', 'finish'].includes(low)) return 'to finish';
-  if (['completed', 'complete', 'done', 'finished'].includes(low)) return 'completed';
-  if (['canceled', 'cancelled'].includes(low)) return 'canceled';
-
-  // если пришло что-то вроде "Completed" — понизим регистр:
-  return low;
+  const v = String(s).trim();
+  if (v.toLowerCase() === 'recall' || v === 'ReCall') return 'recall';
+  return v;
 };
 
 // is job done?
-const DONE_STATUSES = new Set(['completed']);
+const DONE_STATUSES = new Set(['completed', 'complete', 'done']);
 const isDone = (s) => DONE_STATUSES.has(String(s || '').toLowerCase().trim());
 
 /* ---------- HEIC → JPEG ---------- */
-const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
+const RU_MAP = {
+  а: 'a',
+  б: 'b',
+  в: 'v',
+  г: 'g',
+  д: 'd',
+  е: 'e',
+  ё: 'e',
+  ж: 'zh',
+  з: 'z',
+  и: 'i',
+  й: 'y',
+  к: 'k',
+  л: 'l',
+  м: 'm',
+  н: 'n',
+  о: 'o',
+  п: 'p',
+  р: 'r',
+  с: 's',
+  т: 't',
+  у: 'u',
+  ф: 'f',
+  х: 'h',
+  ц: 'c',
+  ч: 'ch',
+  ш: 'sh',
+  щ: 'sch',
+  ъ: '',
+  ы: 'y',
+  ь: '',
+  э: 'e',
+  ю: 'yu',
+  я: 'ya',
+};
 function slugifyFileName(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'bin';
   const stem = name.replace(/\.[^/.]+$/, '').toLowerCase();
-  const translit = stem.split('').map((ch)=>{
-    if (/[a-z0-9]/.test(ch)) return ch;
-    const m = RU_MAP[ch]; if (m) return m;
-    if (/[ \-_.]/.test(ch)) return '-';
-    return '-';
-  }).join('').replace(/-+/g,'-').replace(/(^-|-$)/g,'');
+  const translit = stem
+    .split('')
+    .map((ch) => {
+      if (/[a-z0-9]/.test(ch)) return ch;
+      const m = RU_MAP[ch];
+      if (m) return m;
+      if (/[ \-_.]/.test(ch)) return '-';
+      return '-';
+    })
+    .join('')
+    .replace(/-+/g, '-')
+    .replace(/(^-|-$)/g, '');
   return `${translit || 'file'}.${ext}`;
 }
 function makeSafeStorageKey(jobId, originalName) {
-  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const safeName = slugifyFileName(originalName);
   return `${jobId}/${stamp}_${safeName}`;
 }
 const isHeicLike = (file) =>
-  file && (file.type === 'image/heic' || file.type === 'image/heif' || /\.heic$/i.test(file.name) || /\.heif$/i.test(file.name));
+  file &&
+  (file.type === 'image/heic' ||
+    file.type === 'image/heif' ||
+    /\.heic$/i.test(file.name) ||
+    /\.heif$/i.test(file.name));
 async function convertIfHeicWeb(file) {
   if (!isHeicLike(file)) return file;
-  let heic2any; try { const mod = await import('heic2any'); heic2any = mod.default || mod; } catch { throw new Error('heic2any is not installed'); }
+  let heic2any;
+  try {
+    const mod = await import('heic2any');
+    heic2any = mod.default || mod;
+  } catch {
+    throw new Error('heic2any is not installed');
+  }
   const jpegBlob = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
   const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
   return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: Date.now() });
@@ -257,23 +311,44 @@ export default function JobDetailsPage() {
       setTechs(techData || []);
 
       const { data: j, error: e1 } = await supabase.from('jobs').select('*').eq('id', jobId).maybeSingle();
-      if (e1 || !j) { alert('Job not found'); navigate('/jobs'); return; }
+      if (e1 || !j) {
+        alert('Job not found');
+        navigate('/jobs');
+        return;
+      }
       setJob(j);
 
       // client
       if (j.client_id) {
         const { data: c } = await supabase
-          .from('clients').select('id, full_name, phone, email, address').eq('id', j.client_id).maybeSingle();
-        setClient(c ? {
-          id: c.id, full_name: c.full_name || '', phone: c.phone || '', email: c.email || '', address: c.address || '',
-        } : {
-          id: null, full_name: j.client_name || j.full_name || '', phone: j.client_phone || j.phone || '',
-          email: j.client_email || j.email || '', address: j.client_address || j.address || '',
-        });
+          .from('clients')
+          .select('id, full_name, phone, email, address')
+          .eq('id', j.client_id)
+          .maybeSingle();
+        setClient(
+          c
+            ? {
+                id: c.id,
+                full_name: c.full_name || '',
+                phone: c.phone || '',
+                email: c.email || '',
+                address: c.address || '',
+              }
+            : {
+                id: null,
+                full_name: j.client_name || j.full_name || '',
+                phone: j.client_phone || j.phone || '',
+                email: j.client_email || j.email || '',
+                address: j.client_address || j.address || '',
+              },
+        );
       } else {
         setClient({
-          id: null, full_name: j.client_name || j.full_name || '', phone: j.client_phone || j.phone || '',
-          email: j.client_email || j.email || '', address: j.client_address || j.address || '',
+          id: null,
+          full_name: j.client_name || j.full_name || '',
+          phone: j.client_phone || j.phone || '',
+          email: j.client_email || j.email || '',
+          address: j.client_address || j.address || '',
         });
       }
 
@@ -321,7 +396,10 @@ export default function JobDetailsPage() {
   /* ---------- photos load ---------- */
   const loadPhotos = async () => {
     const { data, error } = await storage().list(`${jobId}`, { limit: 200, sortBy: { column: 'name', order: 'asc' } });
-    if (error) { setPhotos([]); return; }
+    if (error) {
+      setPhotos([]);
+      return;
+    }
     const mapped = (data || []).map((o) => {
       const full = `${jobId}/${o.name}`;
       const { data: pub } = storage().getPublicUrl(full);
@@ -340,27 +418,42 @@ export default function JobDetailsPage() {
       .eq('job_id', jobId)
       .order('created_at', { ascending: true });
 
-    if (error) { setComments([]); setCommentsLoading(false); return; }
+    if (error) {
+      setComments([]);
+      setCommentsLoading(false);
+      return;
+    }
 
     const list = data || [];
     const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
 
     const nameByUserId = {};
     if (ids.length) {
-      const { data: techPeople } = await supabase.from('technicians').select('auth_user_id, name').in('auth_user_id', ids);
-      (techPeople || []).forEach((t) => { if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name; });
+      const { data: techPeople } = await supabase
+        .from('technicians')
+        .select('auth_user_id, name')
+        .in('auth_user_id', ids);
+      (techPeople || []).forEach((t) => {
+        if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
+      });
       const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
-      (profs || []).forEach((p) => { if (p?.id && !nameByUserId[p.id] && p.full_name?.trim()) nameByUserId[p.id] = p.full_name.trim(); });
+      (profs || []).forEach((p) => {
+        if (p?.id && !nameByUserId[p.id] && p.full_name?.trim()) nameByUserId[p.id] = p.full_name.trim();
+      });
     }
     setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
     setCommentsLoading(false);
   };
 
   const addComment = async () => {
-    const text = commentText.trim(); if (!text) return;
+    const text = commentText.trim();
+    if (!text) return;
     const payload = { job_id: jobId, text, author_user_id: user?.id ?? null };
     const { data, error } = await supabase.from('comments').insert(payload).select().single();
-    if (error) { alert('Failed to save comment'); return; }
+    if (error) {
+      alert('Failed to save comment');
+      return;
+    }
 
     let authorName = null;
     if (user?.id) {
@@ -396,7 +489,7 @@ export default function JobDetailsPage() {
     };
 
     payload.labor_payment_method = pmToSave(job.labor_payment_method);
-    payload.scf_payment_method   = pmToSave(job.scf_payment_method);
+    payload.scf_payment_method = pmToSave(job.scf_payment_method);
 
     if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
       payload.tech_comment = job.tech_comment || null;
@@ -435,7 +528,10 @@ export default function JobDetailsPage() {
   };
 
   /* ---------- client edit ---------- */
-  const setClientField = (k, v) => { setClient((p) => ({ ...p, [k]: v })); setClientDirty(true); };
+  const setClientField = (k, v) => {
+    setClient((p) => ({ ...p, [k]: v }));
+    setClientDirty(true);
+  };
 
   const mirrorClientIntoJob = async (cid, c) => {
     const patch = {};
@@ -513,12 +609,24 @@ export default function JobDetailsPage() {
 
   /* ---------- materials ---------- */
   const addMat = () => {
-    setMaterials((p) => [...p, { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' }]);
+    setMaterials((p) => [
+      ...p,
+      { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' },
+    ]);
   };
-  const chMat = (idx, field, val) => { setMaterials((p) => { const n = [...p]; n[idx] = { ...n[idx], [field]: val }; return n; }); };
+  const chMat = (idx, field, val) => {
+    setMaterials((p) => {
+      const n = [...p];
+      n[idx] = { ...n[idx], [field]: val };
+      return n;
+    });
+  };
   const delMat = async (m) => {
     setMaterials((p) => p.filter((x) => x !== m));
-    if (!String(m.id).startsWith('tmp-')) { const { error } = await supabase.from('materials').delete().eq('id', m.id); if (error) console.error(error); }
+    if (!String(m.id).startsWith('tmp-')) {
+      const { error } = await supabase.from('materials').delete().eq('id', m.id);
+      if (error) console.error(error);
+    }
   };
   const saveMats = async () => {
     const news = materials.filter((m) => String(m.id).startsWith('tmp-'));
@@ -526,31 +634,46 @@ export default function JobDetailsPage() {
 
     if (news.length) {
       const payload = news.map((m) => ({
-        job_id: jobId, name: m.name || '', price: m.price===''||m.price==null?null:Number(m.price),
-        quantity: m.quantity===''||m.quantity==null?1:Number(m.quantity), supplier: m.supplier || null,
+        job_id: jobId,
+        name: m.name || '',
+        price: m.price === '' || m.price == null ? null : Number(m.price),
+        quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity),
+        supplier: m.supplier || null,
       }));
       const { error } = await supabase.from('materials').insert(payload);
-      if (error) { alert(`Failed to save new materials: ${error.message || 'error'}`); return; }
+      if (error) {
+        alert(`Failed to save new materials: ${error.message || 'error'}`);
+        return;
+      }
     }
 
     for (const m of olds) {
       const patch = {
         name: m.name || '',
-        price: m.price===''||m.price==null?null:Number(m.price),
-        quantity: m.quantity===''||m.quantity==null?1:Number(m.quantity),
+        price: m.price === '' || m.price == null ? null : Number(m.price),
+        quantity: m.quantity === '' || m.quantity == null ? 1 : Number(m.quantity),
         supplier: m.supplier || null,
       };
       const { error } = await supabase.from('materials').update(patch).eq('id', m.id);
-      if (error) { alert(`Failed to save material: ${error.message || 'error'}`); return; }
+      if (error) {
+        alert(`Failed to save material: ${error.message || 'error'}`);
+        return;
+      }
     }
 
-    const { data: fresh } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
-    setMaterials(fresh || []); alert('Materials saved');
+    const { data: fresh } = await supabase
+      .from('materials')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('id', { ascending: true });
+    setMaterials(fresh || []);
+    alert('Materials saved');
   };
 
   /* ---------- files ---------- */
   const onPick = async (e) => {
-    const files = Array.from(e.target.files || []); if (!files.length) return;
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
     setUploadBusy(true);
     try {
       for (const original of files) {
@@ -558,18 +681,28 @@ export default function JobDetailsPage() {
           /image\/(jpeg|jpg|png|webp|gif|bmp|heic|heif)/i.test(original.type) ||
           /pdf$/i.test(original.type) ||
           /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|pdf)$/i.test(original.name);
-        if (!allowed) { alert(`Unsupported format: ${original.name}`); continue; }
+        if (!allowed) {
+          alert(`Unsupported format: ${original.name}`);
+          continue;
+        }
 
         let file;
-        try { file = await convertIfHeicWeb(original); } catch (convErr) {
-          if (isHeicLike(original)) { alert('HEIC/HEIF. Conversion failed.'); continue; }
+        try {
+          file = await convertIfHeicWeb(original);
+        } catch (convErr) {
+          if (isHeicLike(original)) {
+            alert('HEIC/HEIF. Conversion failed.');
+            continue;
+          }
           file = original;
         }
 
         const key = makeSafeStorageKey(jobId, file.name);
         try {
           const { error } = await storage().upload(key, file, {
-            cacheControl: '3600', upsert: false, contentType: file.type || 'application/octet-stream',
+            cacheControl: '3600',
+            upsert: false,
+            contentType: file.type || 'application/octet-stream',
           });
           if (error) throw error;
         } catch (upErr) {
@@ -591,19 +724,37 @@ export default function JobDetailsPage() {
       await loadPhotos();
     } catch (e) {
       const { error } = await storage().remove([`${jobId}/${name}`]);
-      if (error) { alert(`Failed to delete file: ${e.message || error.message || 'error'}`); return; }
+      if (error) {
+        alert(`Failed to delete file: ${e.message || error.message || 'error'}`);
+        return;
+      }
       await loadPhotos();
     }
   };
 
-  const toggleAllPhotos = (checkedAll) => { setChecked(checkedAll ? Object.fromEntries(photos.map(p=>[p.name,true])) : {}); };
+  const toggleAllPhotos = (checkedAll) => {
+    setChecked(checkedAll ? Object.fromEntries(photos.map((p) => [p.name, true])) : {});
+  };
   const toggleOnePhoto = (name) => setChecked((s) => ({ ...s, [name]: !s[name] }));
   const downloadOne = async (name) => {
     const { data, error } = await storage().download(`${jobId}/${name}`);
-    if (error || !data) { alert('Failed to download file'); return; }
-    const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    if (error || !data) {
+      alert('Failed to download file');
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
-  const downloadSelected = async () => { const names = photos.filter((p) => checked[p.name]).map((p) => p.name); for (const n of names) await downloadOne(n); };
+  const downloadSelected = async () => {
+    const names = photos.filter((p) => checked[p.name]).map((p) => p.name);
+    for (const n of names) await downloadOne(n);
+  };
 
   /* ---------- invoices ---------- */
   const loadInvoices = async () => {
@@ -611,7 +762,11 @@ export default function JobDetailsPage() {
     try {
       const [stRes, dbRes] = await Promise.all([
         invStorage().list(`${jobId}`, { limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
-        supabase.from('invoices').select('id, invoice_no, created_at').eq('job_id', jobId).order('created_at', { ascending: false }),
+        supabase
+          .from('invoices')
+          .select('id, invoice_no, created_at')
+          .eq('job_id', jobId)
+          .order('created_at', { ascending: false }),
       ]);
 
       const stData = stRes?.data || [];
@@ -622,22 +777,30 @@ export default function JobDetailsPage() {
           const { data: pub } = invStorage().getPublicUrl(full);
           const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
           return {
-            source: 'storage', name: o.name, url: pub?.publicUrl || null,
+            source: 'storage',
+            name: o.name,
+            url: pub?.publicUrl || null,
             updated_at: o.updated_at || o.created_at || null,
-            invoice_no: m ? String(m[1]) : null, hasFile: true,
+            invoice_no: m ? String(m[1]) : null,
+            hasFile: true,
           };
         });
 
       const rows = dbRes?.data || [];
       const db = rows.map((r) => ({
-        source: 'db', name: `invoice_${r.invoice_no}.pdf`, url: null,
-        updated_at: r.created_at, invoice_no: String(r.invoice_no),
+        source: 'db',
+        name: `invoice_${r.invoice_no}.pdf`,
+        url: null,
+        updated_at: r.created_at,
+        invoice_no: String(r.invoice_no),
         db_id: r.id,
         hasFile: stor.some((s) => s.invoice_no === String(r.invoice_no)),
       }));
 
       const merged = [...stor];
-      db.forEach((d) => { if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d); });
+      db.forEach((d) => {
+        if (!merged.some((x) => x.invoice_no === d.invoice_no)) merged.push(d);
+      });
       merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
       setInvoices(merged);
     } catch {
@@ -649,15 +812,26 @@ export default function JobDetailsPage() {
 
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) window.open(item.url, '_blank', 'noopener,noreferrer');
-    else if (item?.invoice_no) window.open(makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`), '_blank','noopener,noreferrer');
-    else window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank','noopener,noreferrer');
+    else if (item?.invoice_no)
+      window.open(makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`), '_blank', 'noopener,noreferrer');
+    else window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
   const downloadInvoice = async (item) => {
     if (!item?.hasFile) return;
     const { data, error } = await invStorage().download(`${jobId}/${item.name}`);
-    if (error || !data) { alert('Failed to download invoice'); return; }
-    const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = item.name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    if (error || !data) {
+      alert('Failed to download invoice');
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = item.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   const deleteInvoice = async (item) => {
@@ -682,12 +856,14 @@ export default function JobDetailsPage() {
     await loadInvoices();
   };
 
-  const createInvoice = () => { window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer'); };
+  const createInvoice = () => {
+    window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
+  };
 
   /* ---------- display ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
   const isUnpaidLabor = (toNum(job?.labor_price) || 0) > 0 && isPmUnpaid(job?.labor_payment_method);
-  const isUnpaidSCF   = (toNum(job?.scf) || 0) > 0 && isPmUnpaid(job?.scf_payment_method);
+  const isUnpaidSCF = (toNum(job?.scf) || 0) > 0 && isPmUnpaid(job?.scf_payment_method);
   const isRecall = String(job?.status || '').toLowerCase().trim() === 'recall';
   const isArchived = !!job?.archived_at;
 
@@ -715,7 +891,9 @@ export default function JobDetailsPage() {
             </span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={BTN} onClick={unarchiveJob}>Unarchive</button>
+            <button style={BTN} onClick={unarchiveJob}>
+              Unarchive
+            </button>
           </div>
         </div>
       )}
@@ -744,10 +922,17 @@ export default function JobDetailsPage() {
                 <select
                   style={SELECT}
                   value={job.technician_id == null ? '' : String(job.technician_id)}
-                  onChange={(e) => { const v = e.target.value; setField('technician_id', v === '' ? null : normalizeId(v)); }}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setField('technician_id', v === '' ? null : normalizeId(v));
+                  }}
                 >
                   <option value="">—</option>
-                  {techs.map((t) => (<option key={t.id} value={String(t.id)}>{t.name}</option>))}
+                  {techs.map((t) => (
+                    <option key={t.id} value={String(t.id)}>
+                      {t.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -757,46 +942,80 @@ export default function JobDetailsPage() {
                   style={INPUT}
                   type="datetime-local"
                   value={wallFromDb(job.appointment_time)}
-                  onChange={(e)=>setField('appointment_time', zonedIsoFromWall(e.target.value, job.appointment_time))}
+                  onChange={(e) => setField('appointment_time', zonedIsoFromWall(e.target.value, job.appointment_time))}
                 />
               </div>
 
               <div style={ROW}>
                 <div>System type</div>
-                <select style={SELECT} value={job.system_type || SYSTEM_OPTIONS[0]} onChange={(e)=>setField('system_type', e.target.value)}>
-                  {SYSTEM_OPTIONS.map((s) => (<option key={s} value={s}>{s}</option>))}
+                <select style={SELECT} value={job.system_type || SYSTEM_OPTIONS[0]} onChange={(e) => setField('system_type', e.target.value)}>
+                  {SYSTEM_OPTIONS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              <div style={ROW}><div>Issue</div><input style={INPUT} value={job.issue || ''} onChange={(e)=>setField('issue', e.target.value)} /></div>
+              <div style={ROW}>
+                <div>Issue</div>
+                <input style={INPUT} value={job.issue || ''} onChange={(e) => setField('issue', e.target.value)} />
+              </div>
 
-              <div style={ROW}><div>SCF ($)</div><input style={INPUT} type="number" value={job.scf ?? ''} onChange={(e)=>setField('scf', toNum(e.target.value))} /></div>
+              <div style={ROW}>
+                <div>SCF ($)</div>
+                <input style={INPUT} type="number" value={job.scf ?? ''} onChange={(e) => setField('scf', toNum(e.target.value))} />
+              </div>
 
               <div style={ROW}>
                 <div>SCF payment</div>
                 <div>
                   <select
-                    style={{ ...SELECT, border: `1px solid ${isUnpaidSCF ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidSCF ? '#fef2f2' : '#fff' }}
+                    style={{
+                      ...SELECT,
+                      border: `1px solid ${isUnpaidSCF ? '#ef4444' : '#e5e7eb'}`,
+                      background: isUnpaidSCF ? '#fef2f2' : '#fff',
+                    }}
                     value={pmToSelect(job.scf_payment_method)}
                     onChange={(e) => setField('scf_payment_method', pmToSave(e.target.value))}
                   >
-                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
+                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
                   </select>
                   {isUnpaidSCF && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>SCF unpaid — select payment method</div>}
                 </div>
               </div>
 
-              <div style={ROW}><div>Labor ($)</div><input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e)=>setField('labor_price', toNum(e.target.value))} /></div>
+              <div style={ROW}>
+                <div>Labor ($)</div>
+                <input
+                  style={INPUT}
+                  type="number"
+                  value={job.labor_price ?? ''}
+                  onChange={(e) => setField('labor_price', toNum(e.target.value))}
+                />
+              </div>
 
               <div style={ROW}>
                 <div>Labor payment</div>
                 <div>
                   <select
-                    style={{ ...SELECT, border: `1px solid ${isUnpaidLabor ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidLabor ? '#fef2f2' : '#fff' }}
+                    style={{
+                      ...SELECT,
+                      border: `1px solid ${isUnpaidLabor ? '#ef4444' : '#e5e7eb'}`,
+                      background: isUnpaidLabor ? '#fef2f2' : '#fff',
+                    }}
                     value={pmToSelect(job.labor_payment_method)}
                     onChange={(e) => setField('labor_payment_method', pmToSave(e.target.value))}
                   >
-                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
+                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
                   </select>
                   {isUnpaidLabor && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Unpaid — select payment method</div>}
                 </div>
@@ -807,16 +1026,346 @@ export default function JobDetailsPage() {
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`, background: isRecall ? '#fef2f2' : '#fff' }}
-                    value={(job.status ? String(job.status).toLowerCase() : STATUS_OPTIONS[0])}
+                    value={job.status || STATUS_OPTIONS[0]}
                     onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
                   >
-                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{titleCase(s)}</option>)}
+                    {STATUS_OPTIONS.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
                   </select>
                   {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>ReCall status</div>}
                 </div>
               </div>
 
-              <div style={ROW}><div>Job # (optional)</div><input style={INPUT} value={job.job_number || ''} onChange={(e)=>setField('job_number', e.target.value)} /></div>
+              <div style={ROW}>
+                <div>Job # (optional)</div>
+                <input style={INPUT} value={job.job_number || ''} onChange={(e) => setField('job_number', e.target.value)} />
+              </div>
 
               {'tech_comment' in (job || {}) && (
-                <div style={ROW}><div>Technician comment</div><textarea style
+                <div style={ROW}>
+                  <div>Technician comment</div>
+                  <textarea style={TA} value={job.tech_comment || ''} onChange={(e) => setField('tech_comment', e.target.value)} />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>
+                  Save job
+                </button>
+                <button style={GHOST} onClick={() => navigate(-1)}>
+                  Back
+                </button>
+                {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right column */}
+        <div style={COL}>
+          {/* Client */}
+          <div style={BOX}>
+            <div style={H2}>Client</div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <Row label="Full name" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
+              <Row label="Phone" value={client.phone} onChange={(v) => setClientField('phone', v)} />
+              <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
+              <Row label="Address" value={client.address} onChange={(v) => setClientField('address', v)} />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>
+                  Save client
+                </button>
+                {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
+              </div>
+              {job?.client_id && <div style={{ ...MUTED, fontSize: 12 }}>Linked client_id: {String(job.client_id)}</div>}
+            </div>
+          </div>
+
+          {/* Invoices */}
+          <div style={BOX}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <div style={H2}>Invoices (PDF)</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
+                  {invoicesLoading ? '...' : 'Refresh'}
+                </button>
+                <button type="button" style={PRIMARY} onClick={createInvoice}>
+                  + Create invoice
+                </button>
+              </div>
+            </div>
+
+            {!invoices || invoices.length === 0 ? (
+              <div style={MUTED}>No invoices for this job yet</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {invoices.map((inv) => (
+                  <div
+                    key={`${inv.source}-${inv.invoice_no || inv.name}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 10px',
+                      border: '1px solid #eef2f7',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600 }}>
+                        {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
+                        {!inv.hasFile && (
+                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                        {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
+                        Open PDF
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                        onClick={() => inv.hasFile && downloadInvoice(inv)}
+                        disabled={!inv.hasFile}
+                      >
+                        Download
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                        onClick={() => inv.hasFile && deleteInvoice(inv)}
+                        disabled={!inv.hasFile}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Materials */}
+      <div style={BOX}>
+        <div style={H2}>Materials</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <Th>Name</Th>
+                <Th>Price</Th>
+                <Th>Qty</Th>
+                <Th>Supplier</Th>
+                <Th center>Actions</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {materials.map((m, i) => (
+                <tr key={m.id}>
+                  <Td>
+                    <input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      type="number"
+                      value={m.price ?? ''}
+                      onChange={(e) => chMat(i, 'price', e.target.value)}
+                    />
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      type="number"
+                      value={m.quantity ?? 1}
+                      onChange={(e) => chMat(i, 'quantity', e.target.value)}
+                    />
+                  </Td>
+                  <Td>
+                    <input
+                      style={INPUT}
+                      value={m.supplier || ''}
+                      onChange={(e) => chMat(i, 'supplier', e.target.value)}
+                    />
+                  </Td>
+                  <Td center>
+                    <button style={DANGER} onClick={() => delMat(m)}>
+                      🗑
+                    </button>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button style={GHOST} onClick={addMat}>
+            + Add
+          </button>
+          <button style={PRIMARY} onClick={saveMats}>
+            Save materials
+          </button>
+        </div>
+      </div>
+
+      {/* Comments */}
+      <div style={BOX}>
+        <div style={H2}>Comments</div>
+        {commentsLoading ? (
+          <div style={MUTED}>Loading…</div>
+        ) : (
+          <>
+            <div
+              style={{
+                maxHeight: 260,
+                overflowY: 'auto',
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                padding: 10,
+                marginBottom: 8,
+              }}
+            >
+              {comments.length === 0 ? (
+                <div style={MUTED}>No comments yet</div>
+              ) : (
+                comments.map((c) => {
+                  const when = new Date(c.created_at).toLocaleString();
+                  const who = c.author_name || '—';
+                  return (
+                    <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>
+                        {when} • {who}
+                      </div>
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <textarea
+                rows={2}
+                style={{ ...TA, minHeight: 60 }}
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Write a comment…"
+              />
+              <button style={PRIMARY} onClick={addComment}>
+                Send
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Photos / files */}
+      <div style={BOX}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={H2}>Photos / Files</div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <label style={{ userSelect: 'none', cursor: 'pointer' }}>
+              <input type="checkbox" checked={allChecked} onChange={(e) => toggleAllPhotos(e.target.checked)} /> Select all
+            </label>
+            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>
+              Download selected
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf"
+            onChange={onPick}
+          />
+          {uploadBusy && <span style={MUTED}>Uploading…</span>}
+        </div>
+
+        {photos.length === 0 && <div style={MUTED}>No files yet (optional)</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
+          {photos.map((p) => (
+            <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  marginBottom: 6,
+                  userSelect: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                <input type="checkbox" checked={!!checked[p.name]} onChange={() => toggleOnePhoto(p.name)} />
+                <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{p.name}</span>
+              </label>
+
+              {/\.(pdf)$/i.test(p.name) ? (
+                <div
+                  style={{
+                    height: 120,
+                    display: 'grid',
+                    placeItems: 'center',
+                    background: '#f1f5f9',
+                    borderRadius: 8,
+                    marginBottom: 6,
+                  }}
+                >
+                  📄 PDF
+                </div>
+              ) : (
+                <img
+                  src={p.url}
+                  alt={p.name}
+                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }}
+                />
+              )}
+
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button style={BTN} onClick={() => downloadOne(p.name)}>
+                  Download
+                </button>
+                <button style={DANGER} onClick={() => delPhoto(p.name)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Small components ---------- */
+function Row({ label, value, onChange }) {
+  return (
+    <div style={ROW}>
+      <div>{label}</div>
+      <input style={INPUT} value={value || ''} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+function Th({ children, center }) {
+  return (
+    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 }}>
+      {children}
+    </th>
+  );
+}
+function Td({ children, center }) {
+  return (
+    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
+  );
+}
