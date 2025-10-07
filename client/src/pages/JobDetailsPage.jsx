@@ -1,6 +1,6 @@
 // client/src/pages/JobDetailsPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
-import React, { useEffect, useMemo, useRef, useState, useRef as useRef2 } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase, supabaseUrl } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
@@ -25,6 +25,7 @@ function wallFromDb(isoLike) {
 // get NY zone offset for a specific "wall" time (YYYY-MM-DDTHH:mm)
 function nyOffsetForWall(wall) {
   const [dpart, tpart] = String(wall).split('T');
+  the:
   const [y, m, d] = dpart.split('-').map(Number);
   const [H, M] = tpart.split(':').map(Number);
   const fakeUtc = Date.UTC(y, m - 1, d, H, M, 0, 0);
@@ -110,7 +111,21 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Dictionaries ---------- */
-const STATUS_OPTIONS = ['recall', 'Diagnosis', 'In progress', 'Parts ordered', 'Waiting for parts', 'To finish', 'Completed', 'Canceled'];
+/** Канонические значения статуса — в НИЖНЕМ регистре */
+const STATUS_OPTIONS = [
+  'recall',
+  'diagnosis',
+  'in progress',
+  'parts ordered',
+  'waiting for parts',
+  'to finish',
+  'completed',
+  'canceled',
+];
+
+/* Для вывода подписей в Title Case */
+const titleCase = (s) => s.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1));
+
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Payments ---------- */
@@ -140,11 +155,29 @@ function makeFrontUrl(path) {
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
-const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
+
+/** Приводим ВЕСЬ ввод к нашим каноническим статусам в нижнем регистре */
+const normalizeStatusForDb = (s) => {
+  if (!s) return null;
+  const low = String(s).trim().toLowerCase();
+
+  // Мягкие синонимы
+  if (['recall'].includes(low)) return 'recall';
+  if (['diagnosis', 'diag'].includes(low)) return 'diagnosis';
+  if (['in progress', 'progress', 'working'].includes(low)) return 'in progress';
+  if (['parts ordered', 'ordered parts'].includes(low)) return 'parts ordered';
+  if (['waiting for parts', 'wait parts', 'awaiting parts'].includes(low)) return 'waiting for parts';
+  if (['to finish', 'finish'].includes(low)) return 'to finish';
+  if (['completed', 'complete', 'done', 'finished'].includes(low)) return 'completed';
+  if (['canceled', 'cancelled'].includes(low)) return 'canceled';
+
+  // если пришло что-то вроде "Completed" — понизим регистр:
+  return low;
+};
 
 // is job done?
-const DONE_STATUSES = new Set(['Completed']);
-const isDone = (s) => DONE_STATUSES.has(String(s||'').toLowerCase().trim());
+const DONE_STATUSES = new Set(['completed']);
+const isDone = (s) => DONE_STATUSES.has(String(s || '').toLowerCase().trim());
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
@@ -774,10 +807,10 @@ export default function JobDetailsPage() {
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`, background: isRecall ? '#fef2f2' : '#fff' }}
-                    value={job.status || STATUS_OPTIONS[0]}
+                    value={(job.status ? String(job.status).toLowerCase() : STATUS_OPTIONS[0])}
                     onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
                   >
-                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{titleCase(s)}</option>)}
                   </select>
                   {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>ReCall status</div>}
                 </div>
@@ -786,199 +819,4 @@ export default function JobDetailsPage() {
               <div style={ROW}><div>Job # (optional)</div><input style={INPUT} value={job.job_number || ''} onChange={(e)=>setField('job_number', e.target.value)} /></div>
 
               {'tech_comment' in (job || {}) && (
-                <div style={ROW}><div>Technician comment</div><textarea style={TA} value={job.tech_comment || ''} onChange={(e)=>setField('tech_comment', e.target.value)} /></div>
-              )}
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>Save job</button>
-                <button style={GHOST} onClick={() => navigate(-1)}>Back</button>
-                {!dirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right column */}
-        <div style={COL}>
-          {/* Client */}
-          <div style={BOX}>
-            <div style={H2}>Client</div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              <Row label="Full name" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
-              <Row label="Phone" value={client.phone} onChange={(v) => setClientField('phone', v)} />
-              <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
-              <Row label="Address" value={client.address} onChange={(v) => setClientField('address', v)} />
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>Save client</button>
-                {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
-              </div>
-              {job?.client_id && <div style={{ ...MUTED, fontSize: 12 }}>Linked client_id: {String(job.client_id)}</div>}
-            </div>
-          </div>
-
-          {/* Invoices */}
-          <div style={BOX}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div style={H2}>Invoices (PDF)</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>{invoicesLoading ? '...' : 'Refresh'}</button>
-                <button type="button" style={PRIMARY} onClick={createInvoice}>+ Create invoice</button>
-              </div>
-            </div>
-
-            {!invoices || invoices.length === 0 ? (
-              <div style={MUTED}>No invoices for this job yet</div>
-            ) : (
-              <div style={{ display: 'grid', gap: 8 }}>
-                {invoices.map((inv) => (
-                  <div
-                    key={`${inv.source}-${inv.invoice_no || inv.name}`}
-                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', border: '1px solid #eef2f7', borderRadius: 8 }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600 }}>
-                        {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                        {!inv.hasFile && (<span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>)}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>Open PDF</button>
-                      <button type="button" style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && downloadInvoice(inv)} disabled={!inv.hasFile}>Download</button>
-                      <button type="button" style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }} onClick={() => inv.hasFile && deleteInvoice(inv)} disabled={!inv.hasFile}>Delete</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Materials */}
-      <div style={BOX}>
-        <div style={H2}>Materials</div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <Th>Name</Th><Th>Price</Th><Th>Qty</Th><Th>Supplier</Th><Th center>Actions</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {materials.map((m, i) => (
-                <tr key={m.id}>
-                  <Td><input style={INPUT} value={m.name || ''} onChange={(e)=>chMat(i,'name',e.target.value)} /></Td>
-                  <Td><input style={INPUT} type="number" value={m.price ?? ''} onChange={(e)=>chMat(i,'price',e.target.value)} /></Td>
-                  <Td><input style={INPUT} type="number" value={m.quantity ?? 1} onChange={(e)=>chMat(i,'quantity',e.target.value)} /></Td>
-                  <Td><input style={INPUT} value={m.supplier || ''} onChange={(e)=>chMat(i,'supplier',e.target.value)} /></Td>
-                  <Td center><button style={DANGER} onClick={()=>delMat(m)}>🗑</button></Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button style={GHOST} onClick={addMat}>+ Add</button>
-          <button style={PRIMARY} onClick={saveMats}>Save materials</button>
-        </div>
-      </div>
-
-      {/* Comments */}
-      <div style={BOX}>
-        <div style={H2}>Comments</div>
-        {commentsLoading ? (
-          <div style={MUTED}>Loading…</div>
-        ) : (
-          <>
-            <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, marginBottom: 8 }}>
-              {comments.length === 0 ? (
-                <div style={MUTED}>No comments yet</div>
-              ) : (
-                comments.map((c) => {
-                  const when = new Date(c.created_at).toLocaleString();
-                  const who = c.author_name || '—';
-                  return (
-                    <div key={c.id} style={{ padding: '6px 0', borderBottom: '1px dashed #e5e7eb' }}>
-                      <div style={{ fontSize: 12, color: '#64748b' }}>{when} • {who}</div>
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{c.text}</div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <textarea rows={2} style={{ ...TA, minHeight: 60 }} value={commentText} onChange={(e)=>setCommentText(e.target.value)} placeholder="Write a comment…" />
-              <button style={PRIMARY} onClick={addComment}>Send</button>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Photos / files */}
-      <div style={BOX}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div style={H2}>Photos / Files</div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <label style={{ userSelect: 'none', cursor: 'pointer' }}>
-              <input type="checkbox" checked={allChecked} onChange={(e)=>toggleAllPhotos(e.target.checked)} /> Select all
-            </label>
-            <button style={PRIMARY} onClick={downloadSelected} disabled={!Object.values(checked).some(Boolean)}>Download selected</button>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-          <input ref={fileRef} type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf" onChange={onPick} />
-          {uploadBusy && <span style={MUTED}>Uploading…</span>}
-        </div>
-
-        {photos.length === 0 && <div style={MUTED}>No files yet (optional)</div>}
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
-          {photos.map((p) => (
-            <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, userSelect: 'none', cursor: 'pointer' }}>
-                <input type="checkbox" checked={!!checked[p.name]} onChange={()=>toggleOnePhoto(p.name)} />
-                <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{p.name}</span>
-              </label>
-
-              {/\.(pdf)$/i.test(p.name) ? (
-                <div style={{ height: 120, display: 'grid', placeItems: 'center', background: '#f1f5f9', borderRadius: 8, marginBottom: 6 }}>📄 PDF</div>
-              ) : (
-                <img src={p.url} alt={p.name} style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }} />
-              )}
-
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button style={BTN} onClick={()=>downloadOne(p.name)}>Download</button>
-                <button style={DANGER} onClick={()=>delPhoto(p.name)}>Delete</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Small components ---------- */
-function Row({ label, value, onChange }) {
-  return (
-    <div style={ROW}>
-      <div>{label}</div>
-      <input style={INPUT} value={value || ''} onChange={(e) => onChange(e.target.value)} />
-    </div>
-  );
-}
-function Th({ children, center }) {
-  return (
-    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 }}>
-      {children}
-    </th>
-  );
-}
-function Td({ children, center }) {
-  return (
-    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
-  );
-}
-
+                <div style={ROW}><div>Technician comment</div><textarea style
