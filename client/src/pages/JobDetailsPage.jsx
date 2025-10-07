@@ -110,7 +110,7 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Dictionaries ---------- */
-const STATUS_OPTIONS = ['recall', 'diagnosis', 'in progress', 'parts ordered', 'waiting for parts', 'to finish', 'completed', 'canceled'];
+const STATUS_OPTIONS = ['recall', 'Diagnosis', 'In progress', 'Parts ordered', 'Waiting for parts', 'To finish', 'Completed', 'Canceled'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Payments ---------- */
@@ -122,6 +122,10 @@ const pmToSelect = (v) => {
 const pmToSave = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
+};
+const isPmUnpaid = (v) => {
+  const s = String(v ?? '').trim().toLowerCase();
+  return !s || s === '-' || s === 'none' || s === 'null';
 };
 
 /* ---------- Helpers ---------- */
@@ -648,8 +652,8 @@ export default function JobDetailsPage() {
 
   /* ---------- display ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
-  const isUnpaidLabor = pmToSelect(job?.labor_payment_method) === '-';
-  const isUnpaidSCF   = (toNum(job?.scf) || 0) > 0 && pmToSelect(job?.scf_payment_method) === '-';
+  const isUnpaidLabor = (toNum(job?.labor_price) || 0) > 0 && isPmUnpaid(job?.labor_payment_method);
+  const isUnpaidSCF   = (toNum(job?.scf) || 0) > 0 && isPmUnpaid(job?.scf_payment_method);
   const isRecall = String(job?.status || '').toLowerCase().trim() === 'recall';
   const isArchived = !!job?.archived_at;
 
@@ -976,3 +980,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
