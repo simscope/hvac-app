@@ -274,7 +274,7 @@ function TagList({ tags }) {
 function TaskRow({ task, comments, onToggle, onAddComment }) {
   const [txt, setTxt] = useState('');
   return (
-    <div style={{ border: '1px solid '#e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
+    <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'start' }}>
         <div style={{ display: 'grid', gap: 6 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
