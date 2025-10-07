@@ -26,29 +26,34 @@ const ALL_STATUS_ORDER = [
   'canceled',
 ];
 
-/* ===== Видим только эти статусы в таблице ===== */
-const VISIBLE_SET = new Set(['recall', 'Diagnosis', 'In progress', 'To finish']);
+/* ===== Видим только эти статусы в таблице (КАНОНИЧЕСКИЕ, нижний регистр) ===== */
+const VISIBLE_SET = new Set(['recall', 'diagnosis', 'in progress', 'to finish']);
 
-/* ===== Нормализация произвольного статуса к канону (нижний регистр) ===== */
+/* ===== Нормализация произвольного статуса к канону (нижний регистр с пробелами) ===== */
 const canonStatus = (raw) => {
-  const s = String(raw ?? '').trim();
+  const s = String(raw ?? '').trim().toLowerCase();
   if (!s) return '';
-  const low = s.toLowerCase();
+  const compact = s.replace(/[\s\-_]+/g, ''); // "in-progress" -> "inprogress"
 
-  if (low.includes('recall')) return 'recall';
-  if (low === 'Diagnosis') return 'Diagnosis';
-  if (low === 'In progress' || low === 'In-progress') return 'In progress';
-  if (low === 'Parts ordered' || low === 'Parts-ordered') return 'Parts ordered';
-  if (low.startsWith('Waiting for')) return 'Waiting for parts';
-  if (low === 'To finish' || low === 'To-finish') return 'To finish';
-  if (low === 'Completed' || low === 'Complete') return 'Completed';
-  if (low === 'Canceled' || low === 'Cancelled' || low === 'Declined') return 'Canceled';
+  // устойчивые сопоставления
+  if (compact.startsWith('rec')) return 'recall';
+  if (compact === 'diagnosis') return 'diagnosis';
+  if (compact === 'inprogress') return 'in progress';
+  if (compact === 'partsordered') return 'parts ordered';
+  if (compact === 'waitingforparts') return 'waiting for parts';
+  if (compact === 'tofinish') return 'to finish';
+  if (compact === 'completed' || compact === 'complete' || compact === 'done') return 'completed';
+  if (compact === 'canceled' || compact === 'cancelled' || compact === 'declined') return 'canceled';
 
-  // если встретился другой текст — вернём как есть (но в нижнем регистре)
-  return low;
+  // если пришёл уже один из канонов в нижнем регистре — вернём как есть
+  if (ALL_STATUS_ORDER.includes(s)) return s;
+
+  // неизвестное значение — вернём исходное в нижнем регистре
+  return s;
 };
 
-const labelFor = (canon) => STATUS_LABELS[canon] ?? (canon ? canon[0].toUpperCase() + canon.slice(1) : '—');
+const labelFor = (canon) =>
+  STATUS_LABELS[canon] ?? (canon ? canon[0].toUpperCase() + canon.slice(1) : '—');
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
@@ -306,4 +311,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
