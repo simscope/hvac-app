@@ -110,50 +110,8 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Dictionaries ---------- */
-/** Полный набор значений, чтобы СЕЛЕКТ ВСЕГДА мог показать то, что в БД */
-const STATUS_OPTIONS = [
-  // English
-  'recall','diagnosis','in progress','parts ordered','waiting for parts','to finish','completed','canceled','cancelled',
-  // Russian (твои рабочие)
-  'рекол','recall', 'диагностика','в работе','заказ деталей','ожидание деталей','к финишу','завершено','выполнено','отменено',
-  // Классические варианты с заглавными / опечатками
-  'ReCall','In progress','Parts ordered','Waiting for parts','To finish','Completed','Canceled'
-];
-// Метки для UI (не обязательно совпадают со значениями)
-const STATUS_LABEL = (s) => {
-  const v = String(s || '').trim().toLowerCase();
-  const map = {
-    recall: 'ReCall / Рекол',
-    'recal l': 'ReCall / Рекол',
-    'рекол': 'ReCall / Рекол',
-    diagnosis: 'Diagnosis / Диагностика',
-    'диагностика': 'Diagnosis / Диагностика',
-    'in progress': 'In progress / В работе',
-    'в работе': 'In progress / В работе',
-    'parts ordered': 'Parts ordered / Заказ деталей',
-    'заказ деталей': 'Parts ordered / Заказ деталей',
-    'waiting for parts': 'Waiting for parts / Ожидание деталей',
-    'ожидание деталей': 'Waiting for parts / Ожидание деталей',
-    'to finish': 'To finish / К финишу',
-    'к финишу': 'To finish / К финишу',
-    completed: 'Completed / Завершено',
-    'завершено': 'Completed / Завершено',
-    'выполнено': 'Completed / Выполнено',
-    canceled: 'Canceled / Отменено',
-    cancelled: 'Canceled / Отменено',
-    'отменено': 'Canceled / Отменено',
-  };
-  return map[v] || s; // если совсем неизвестное — показываем как есть
-};
-
-/** Не насилуем значения: сохраняем как выбрал пользователь.
- * Небольшая нормализация: разные варианты ReCall сводим к 'recall'. */
-const normalizeStatusForDb = (s) => {
-  if (!s) return null;
-  const v = String(s).trim();
-  if (/^recall$/i.test(v) || /^re ?call$/i.test(v) || /^рекол$/i.test(v)) return 'recall';
-  return v; // всё остальное — как есть (может быть русским или английским)
-};
+const STATUS_OPTIONS = ['recall', 'diagnosis', 'in progress', 'parts ordered', 'waiting for parts', 'to finish', 'completed', 'canceled'];
+const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Payments ---------- */
 const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
@@ -177,9 +135,10 @@ function makeFrontUrl(path) {
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
 const normalizeId = (v) => { if (v === '' || v == null) return null; const s = String(v); return /^\d+$/.test(s) ? Number(s) : s; };
+const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).trim(); if (v.toLowerCase()==='recall'||v==='ReCall') return 'recall'; if (v==='выполнено') return 'завершено'; return v; };
 
 // is job done?
-const DONE_STATUSES = new Set(['completed','завершено','выполнено']);
+const DONE_STATUSES = new Set(['completed']);
 const isDone = (s) => DONE_STATUSES.has(String(s||'').toLowerCase().trim());
 
 /* ---------- HEIC → JPEG ---------- */
@@ -394,7 +353,7 @@ export default function JobDetailsPage() {
       issue: job.issue || null,
       scf: toNum(job.scf),
       labor_price: toNum(job.labor_price),
-      status: normalizeStatusForDb(job.status), // 👈 сохраняем почти как есть
+      status: normalizeStatusForDb(job.status),
       job_number: stringOrNull(job.job_number),
     };
 
@@ -703,10 +662,6 @@ export default function JobDetailsPage() {
     );
   }
 
-  // Если в БД лежит значение статуса, которого нет в нашем списке — добавим его как “hidden” опцию, чтобы селект не ломался
-  const statusInOptions = STATUS_OPTIONS.some(opt => String(opt).toLowerCase().trim() === String(job?.status || '').toLowerCase().trim());
-  const UNKNOWN_STATUS = !statusInOptions && job?.status ? String(job.status) : null;
-
   return (
     <div style={PAGE}>
       <div style={H1}>Edit Job {jobNumTitle}</div>
@@ -770,8 +725,8 @@ export default function JobDetailsPage() {
 
               <div style={ROW}>
                 <div>System type</div>
-                <select style={SELECT} value={job.system_type || 'HVAC'} onChange={(e)=>setField('system_type', e.target.value)}>
-                  {['HVAC','Appliance'].map((s) => (<option key={s} value={s}>{s}</option>))}
+                <select style={SELECT} value={job.system_type || SYSTEM_OPTIONS[0]} onChange={(e)=>setField('system_type', e.target.value)}>
+                  {SYSTEM_OPTIONS.map((s) => (<option key={s} value={s}>{s}</option>))}
                 </select>
               </div>
 
@@ -796,22 +751,28 @@ export default function JobDetailsPage() {
               <div style={ROW}><div>Labor ($)</div><input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e)=>setField('labor_price', toNum(e.target.value))} /></div>
 
               <div style={ROW}>
+                <div>Labor payment</div>
+                <div>
+                  <select
+                    style={{ ...SELECT, border: `1px solid ${isUnpaidLabor ? '#ef4444' : '#e5e7eb'}`, background: isUnpaidLabor ? '#fef2f2' : '#fff' }}
+                    value={pmToSelect(job.labor_payment_method)}
+                    onChange={(e) => setField('labor_payment_method', pmToSave(e.target.value))}
+                  >
+                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (<option key={p} value={p}>{p}</option>))}
+                  </select>
+                  {isUnpaidLabor && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>Unpaid — select payment method</div>}
+                </div>
+              </div>
+
+              <div style={ROW}>
                 <div>Status</div>
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`, background: isRecall ? '#fef2f2' : '#fff' }}
-                    value={job.status ?? ''}
-                    onChange={(e) => setField('status', e.target.value)}
+                    value={job.status || STATUS_OPTIONS[0]}
+                    onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
                   >
-                    {/* если в БД лежит нестандартная строка — показываем её первой, чтобы селект не "прыгал" */}
-                    {UNKNOWN_STATUS && <option value={UNKNOWN_STATUS}>{STATUS_LABEL(UNKNOWN_STATUS)}</option>}
-                    {STATUS_OPTIONS
-                      .filter((v, i, a) => a.findIndex(x => String(x).toLowerCase().trim() === String(v).toLowerCase().trim()) === i)
-                      .map((opt) => (
-                        <option key={String(opt)} value={String(opt)}>
-                          {STATUS_LABEL(opt)}
-                        </option>
-                      ))}
+                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                   {isRecall && <div style={{ color: '#ef4444', fontSize: 12, marginTop: 6 }}>ReCall status</div>}
                 </div>
