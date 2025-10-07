@@ -19,7 +19,7 @@ const JoAllJobsPage = () => {
 
   const navigate = useNavigate();
 
-  // Dropdown list (displayed labels). Values are strings we compare via normalizeStatus().
+  // Dropdown labels (визуальные). Для сравнения используем canonStatus().
   const statuses = [
     'ReCall',
     'Diagnosis',
@@ -30,31 +30,27 @@ const JoAllJobsPage = () => {
     'Completed',
   ];
 
-  // === Status normalization (RU/EN → EN canonical) ===
-  const normalizeStatus = (val) => {
-    const v = String(val ?? '').trim().toLowerCase();
+  // === Канонизация статуса ===
+  // Приводим к нижнему регистру + убираем пробелы/дефисы/подчёркивания,
+  // дальше маппим к одному из канонических значений.
+  const canonStatus = (val) => {
+    const raw = String(val ?? '').toLowerCase();
+    const v = raw.replace(/[\s\-_]+/g, '');
     if (!v) return '';
-    if (v === 'recall' || v === 'recal' || v === 'recаll' || v === 'rec all' || v === 'rec all' || v === 'rec all' || v === 'recal' || v === 'rec all' || v === 're cal' || v === 'recal' || v === 'recal' || v === 'recal' || v === 'rec all') return 'recall';
-    if (v === 'recall' || v === 'recаll' || v === 'rec all' || v === 'rec-all' || v === 'recal' || v === 'rec all' || v === 're call' || v === 'recal' || v === 'recal') return 'recall';
-    if (v === 'recall' || v === 'rec all' || v === 'recal' || v === 're call' || v === 'recal') return 'recall';
-    if (v === 'recall' || v === 'recal' || v === 're call' || v === 're-call' || v === 'rec all' || v === 're call') return 'recall';
-    // Short and robust mapping:
-    if (v === 'recall' || v === 'reсall' || v === 'reсall' || v === 're call' || v === 're-call' || v === 're call' || v === 're-call' || v === 're cal' || v === 'recal' || v === 're call' || v === 're cal' || v === 'rec all' || v === 're call') return 'recall';
-    // Russian / standard:
-    if (v === 'recall' || v === 'reсall' || v === 're call' || v === 're-call' || v === 'recal' || v === 'rec all' || v === 'recall' || v === 're call' || v === 'rec all' || v === 'recal' || v === 'recal' || v === 're cal' || v === 're cal') return 'recall';
-    // (The above guards against occasional typos; main ones below:)
-    if (v === 'recall' || v === 'recal' || v === 're call' || v === 're-call' || v === 'rec all' || v === 'recall' || v === 'recal') return 'recall';
-    if (v === 'recall' || v === 'rec all' || v === 'recal') return 'recall';
-    if (v === 'recall' || v === 'ReCall'.toLowerCase()) return 'recall';
-
-    if (v === 'diagnosis') return 'Diagnosis';
-    if (v === 'in progress') return 'In progress';
-    if (v === 'parts ordered') return 'Parts ordered';
-    if (v === 'waiting for parts') return 'Waiting for parts';
-    if (v === 'to finish') return 'To finish';
-    if (v === 'completed') return 'Completed';
-    if (v === 'canceled' || v === 'cancelled') return 'Canceled';
-    return v;
+    // широкое распознавание recall (включая опечатки)
+    if (v.startsWith('rec') || v.startsWith('recal')) return 'recall';
+    if (v === 'diagnosis') return 'diagnosis';
+    if (v === 'inprogress') return 'in progress';
+    if (v === 'partsordered') return 'parts ordered';
+    if (v === 'waitingforparts') return 'waiting for parts';
+    if (v === 'tofinish') return 'to finish';
+    if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
+    if (v === 'canceled' || v === 'cancelled') return 'canceled';
+    // если пришёл уже один из канонов — вернём как есть
+    if ([
+      'recall','diagnosis','in progress','parts ordered','waiting for parts','to finish','completed','canceled'
+    ].includes(raw)) return raw;
+    return v; // неизвестное — пусть будет как есть (в нижнем регистре без пробелов)
   };
 
   useEffect(() => {
@@ -110,15 +106,13 @@ const JoAllJobsPage = () => {
     return val;
   };
 
-  /* ====== Payment helpers (same semantics as FinancePage) ====== */
+  /* ====== Payment helpers ====== */
   const methodChosen = (raw) => {
     const v = String(raw ?? '').trim().toLowerCase();
     return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
   };
 
-  /* ====== Paid logic:
-     (scf <= 0  OR (scf > 0 AND method chosen)) AND
-     (labor <= 0 OR (labor > 0 AND method chosen)) */
+  /* ====== Paid logic ====== */
   const isFullyPaidNow = (j) => {
     const scf = Number(j.scf || 0);
     const labor = Number(j.labor_price || 0);
@@ -133,11 +127,8 @@ const JoAllJobsPage = () => {
   const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !methodChosen(j.labor_payment_method);
 
   /* ====== WARRANTY/ARCHIVE by DB snapshot (origJobs) ====== */
-  const isDone = (s) => {
-    const v = normalizeStatus(s);
-    return v === 'completed';
-  };
-  const isRecall = (s) => normalizeStatus(s) === 'recall';
+  const isDone = (s) => canonStatus(s) === 'completed';
+  const isRecall = (s) => canonStatus(s) === 'recall';
 
   const origById = (id) => origJobs.find((x) => x.id === id) || null;
 
@@ -270,7 +261,7 @@ const JoAllJobsPage = () => {
           ? true
           : filterStatus === 'ReCall'
           ? isRecall(j.status)
-          : normalizeStatus(j.status) === normalizeStatus(filterStatus)
+          : canonStatus(j.status) === canonStatus(filterStatus)
       )
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
       .filter((j) => {
@@ -627,4 +618,3 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
-
