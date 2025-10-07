@@ -164,7 +164,7 @@ export default function CalendarPage() {
   }, [filteredJobs, activeTech, techById, techColor]);
 
   const unassigned = useMemo(
-    () => (jobs || []).filter((j) => !j.technician_id),
+    () => (jobs || []).filter((j) => !j.appointment_time || !j.technician_id),
     [jobs]
   );
 
@@ -483,3 +483,4 @@ function Legend() {
     </div>
   );
 }
+
