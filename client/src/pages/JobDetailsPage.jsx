@@ -123,6 +123,7 @@ const pmToSave = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
 };
+/** НЕОПЛАЧЕНО, если метод пустой/служебный; любое другое непустое значение считаем оплачено */
 const isPmUnpaid = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return !s || s === '-' || s === 'none' || s === 'null';
@@ -144,30 +145,6 @@ const normalizeStatusForDb = (s) => { if (!s) return null; const v = String(s).t
 // is job done?
 const DONE_STATUSES = new Set(['completed']);
 const isDone = (s) => DONE_STATUSES.has(String(s||'').toLowerCase().trim());
-
-/* ===== Warranty / Payment helpers (JS) ===== */
-const isFullyPaid = (j) => {
-  const scfPaid   = (toNum(j?.scf) || 0) === 0 || !isPmUnpaid(j?.scf_payment_method);
-  const laborPaid = (toNum(j?.labor_price) || 0) === 0 || !isPmUnpaid(j?.labor_payment_method);
-  return scfPaid && laborPaid;
-};
-const warrantyBaseDate = (j) => j?.completed_at || j?.appointment_time || j?.created_at || null;
-const warrantyUntil = (j) => {
-  const base = warrantyBaseDate(j);
-  if (!base) return null;
-  const d = new Date(base);
-  if (Number.isNaN(d.getTime())) return null;
-  d.setDate(d.getDate() + 60);
-  return d;
-};
-const isInWarranty = (j) => {
-  if (!j || j.archived_at) return false;
-  if (!isDone(j.status)) return false;      // только completed
-  if (!isFullyPaid(j)) return false;        // и полностью оплачено
-  const until = warrantyUntil(j);
-  return until ? Date.now() < until.getTime() : false;
-};
-const jobBucket = (j) => (j?.archived_at ? 'archived' : (isInWarranty(j) ? 'warranty' : 'active'));
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = { а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',};
@@ -278,16 +255,15 @@ export default function JobDetailsPage() {
     })();
   }, [jobId]);
 
-  // auto-archive by warranty (60 days) — only when completed AND fully paid
+  // auto-archive by warranty (60 days)
   useEffect(() => {
     const run = async () => {
       if (!job || autoArchivedOnce.current) return;
-      if (job.archived_at) return;              // already archived
-      if (!isDone(job.status)) return;          // not completed — ignore
-      if (!isFullyPaid(job)) return;            // not fully paid — ignore
+      if (job.archived_at) return; // already archived
+      if (!isDone(job.status)) return; // not completed — ignore
 
       // warranty base date: completed_at > appointment_time > created_at
-      const baseDateStr = warrantyBaseDate(job);
+      const baseDateStr = job.completed_at || job.appointment_time || job.created_at;
       if (!baseDateStr) return;
 
       const base = new Date(baseDateStr);
@@ -691,29 +667,9 @@ export default function JobDetailsPage() {
     );
   }
 
-  // badge styles
-  const bucket = jobBucket(job);
-  const badgeBg = bucket === 'warranty' ? '#ecfeff' : bucket === 'archived' ? '#fef3c7' : '#eef2ff';
-  const badgeColor = bucket === 'warranty' ? '#0e7490' : bucket === 'archived' ? '#92400e' : '#3730a3';
-
   return (
     <div style={PAGE}>
       <div style={H1}>Edit Job {jobNumTitle}</div>
-
-      {/* Status badge */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
-        <span style={{
-          padding:'4px 10px', borderRadius:999, fontSize:12, fontWeight:700,
-          background: badgeBg, color: badgeColor, border:'1px solid rgba(0,0,0,0.06)'
-        }}>
-          {bucket === 'warranty' ? 'Warranty (60d)' : bucket === 'archived' ? 'Archived' : 'Active'}
-        </span>
-        {isInWarranty(job) && (
-          <span style={{ color:'#64748b', fontSize:12 }}>
-            until {warrantyUntil(job)?.toLocaleDateString()}
-          </span>
-        )}
-      </div>
 
       {/* Archive banner */}
       {isArchived && (
