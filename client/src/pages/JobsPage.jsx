@@ -27,7 +27,7 @@ const ALL_STATUS_ORDER = [
 ];
 
 /* ===== Видим только эти статусы в таблице ===== */
-const VISIBLE_SET = new Set(['recall', 'diagnosis', 'in progress', 'to finish']);
+const VISIBLE_SET = new Set(['recall', 'Diagnosis', 'In progress', 'To finish']);
 
 /* ===== Нормализация произвольного статуса к канону (нижний регистр) ===== */
 const canonStatus = (raw) => {
@@ -36,13 +36,13 @@ const canonStatus = (raw) => {
   const low = s.toLowerCase();
 
   if (low.includes('recall')) return 'recall';
-  if (low === 'diagnosis') return 'diagnosis';
-  if (low === 'in progress' || low === 'in-progress') return 'in progress';
-  if (low === 'parts ordered' || low === 'parts-ordered') return 'parts ordered';
-  if (low.startsWith('waiting for')) return 'waiting for parts';
-  if (low === 'to finish' || low === 'to-finish') return 'to finish';
-  if (low === 'completed' || low === 'complete') return 'completed';
-  if (low === 'canceled' || low === 'cancelled' || low === 'declined') return 'canceled';
+  if (low === 'Diagnosis') return 'Diagnosis';
+  if (low === 'In progress' || low === 'In-progress') return 'In progress';
+  if (low === 'Parts ordered' || low === 'Parts-ordered') return 'Parts ordered';
+  if (low.startsWith('Waiting for')) return 'Waiting for parts';
+  if (low === 'To finish' || low === 'To-finish') return 'To finish';
+  if (low === 'Completed' || low === 'Complete') return 'Completed';
+  if (low === 'Canceled' || low === 'Cancelled' || low === 'Declined') return 'Canceled';
 
   // если встретился другой текст — вернём как есть (но в нижнем регистре)
   return low;
@@ -306,3 +306,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
