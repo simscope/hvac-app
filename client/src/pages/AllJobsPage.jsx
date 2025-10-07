@@ -47,13 +47,13 @@ const JoAllJobsPage = () => {
     if (v === 'recall' || v === 'rec all' || v === 'recal') return 'recall';
     if (v === 'recall' || v === 'ReCall'.toLowerCase()) return 'recall';
 
-    if (v === 'диагностика' || v === 'diagnosis') return 'diagnosis';
-    if (v === 'в работе' || v === 'in progress') return 'in progress';
-    if (v === 'заказ деталей' || v === 'parts ordered') return 'parts ordered';
-    if (v === 'ожидание деталей' || v === 'waiting for parts') return 'waiting for parts';
-    if (v === 'к финишу' || v === 'to finish') return 'to finish';
-    if (v === 'завершено' || v === 'выполнено' || v === 'completed') return 'completed';
-    if (v === 'отменено' || v === 'отказ' || v === 'canceled' || v === 'cancelled') return 'canceled';
+    if (v === 'diagnosis') return 'Diagnosis';
+    if (v === 'in progress') return 'In progress';
+    if (v === 'parts ordered') return 'Parts ordered';
+    if (v === 'waiting for parts') return 'Waiting for parts';
+    if (v === 'to finish') return 'To finish';
+    if (v === 'completed') return 'Completed';
+    if (v === 'canceled' || v === 'cancelled') return 'Canceled';
     return v;
   };
 
@@ -627,3 +627,4 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
+
