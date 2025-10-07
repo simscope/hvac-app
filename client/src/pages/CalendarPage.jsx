@@ -8,7 +8,8 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
-/* ===== helpers ===== */
+/* ========== helpers ========== */
+// ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
@@ -21,21 +22,18 @@ export default function CalendarPage() {
   const [clients, setClients] = useState([]);
 
   const [activeTech, setActiveTech] = useState('all'); // 'all' | technician_id
-  const [view, setView] = useState('timeGridWeek');
+  const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
 
   const extRef = useRef(null);
   const calRef = useRef(null);
   const navigate = useNavigate();
 
-  /* ---------- load ---------- */
+  /* ---------- load data ---------- */
   useEffect(() => {
     (async () => {
       const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
-        supabase
-          .from('jobs')
-          .select('id, job_number, client_id, client_name, client_address, address, issue, status, technician_id, appointment_time, scf, scf_payment_method, labor_price, labor_payment_method')
-          .order('created_at', { ascending: false }),
+        supabase.from('jobs').select('*'),
         supabase
           .from('technicians')
           .select('id, name, role')
@@ -49,65 +47,7 @@ export default function CalendarPage() {
     })();
   }, []);
 
-  /* ---------- realtime ---------- */
-  useEffect(() => {
-    const ch = supabase
-      .channel('calendar_jobs_changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'jobs' },
-        (payload) => {
-          setJobs((prev) => {
-            const row = (payload.new || payload.old);
-            const id = String(row.id);
-            if (payload.eventType === 'INSERT') {
-              if (prev.some(p => String(p.id) === id)) return prev;
-              return [payload.new, ...prev];
-            }
-            if (payload.eventType === 'UPDATE') {
-              return prev.map(p => (String(p.id) === id ? { ...p, ...payload.new } : p));
-            }
-            if (payload.eventType === 'DELETE') {
-              return prev.filter(p => String(p.id) !== id);
-            }
-            return prev;
-          });
-        }
-      )
-      .subscribe();
-    return () => { try { supabase.removeChannel(ch); } catch {} };
-  }, []);
-
-  /* ---------- lookups ---------- */
-  const clientsById = useMemo(() => {
-    const m = new Map();
-    for (const c of clients) m.set(String(c.id), c);
-    return m;
-  }, [clients]);
-
-  const techById = useMemo(() => {
-    const m = new Map();
-    for (const t of techs) m.set(String(t.id), t);
-    return m;
-  }, [techs]);
-
-  const getClientName = (job) =>
-    clientsById.get(String(job?.client_id))?.full_name ||
-    job?.client_name ||
-    job?.full_name ||
-    'No name';
-
-  const getClientAddress = (job) =>
-    clientsById.get(String(job?.client_id))?.address ||
-    job?.client_address ||
-    job?.address ||
-    '';
-
-  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
-  const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
-  const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
-
-  /* ---------- palette ---------- */
+  /* ---------- palettes ---------- */
   const statusKey = (s) => {
     if (!s) return 'default';
     const v = String(s).toLowerCase().trim();
@@ -139,40 +79,37 @@ export default function CalendarPage() {
     return map;
   }, [techs]);
 
-  /* ---------- filters ---------- */
-  const hasTime = (v) => v != null && !(typeof v === 'string' && v.trim() === '');
+  /* ---------- indexes ---------- */
+  const clientsById = useMemo(() => {
+    const m = new Map();
+    for (const c of clients) m.set(String(c.id), c);
+    return m;
+  }, [clients]);
 
-  // В календаре показываем только заявки с назначенным временем
-  const calendarJobs = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return (jobs || []).filter((j) => {
-      if (!hasTime(j.appointment_time)) return false;
-      if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
-      if (!q) return true;
-      const name = getClientName(j).toLowerCase();
-      const addr = getClientAddress(j).toLowerCase();
-      return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
-    });
-  }, [jobs, activeTech, query, clientsById]);
+  const techById = useMemo(() => {
+    const m = new Map();
+    for (const t of techs) m.set(String(t.id), t);
+    return m;
+  }, [techs]);
 
-  // Список над календарём — ВСЕ без времени (appointment_time = null/пусто), сгруппировано по технику
-  const unplannedByTech = useMemo(() => {
-    const rows = (jobs || []).filter((j) => !hasTime(j.appointment_time));
-    const groups = new Map();
-    for (const j of rows) {
-      const key = String(j.technician_id ?? 'none');
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(j);
-    }
-    // сортировка внутри групп: новые сверху
-    for (const [k, arr] of groups) {
-      arr.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-      groups.set(k, arr);
-    }
-    return groups; // Map<string, Job[]>
-  }, [jobs]);
+  /* ---------- utils ---------- */
+  const getClientName = (job) =>
+    clientsById.get(String(job?.client_id))?.full_name ||
+    job?.client_name ||
+    job?.full_name ||
+    'No name';
 
-  /* ---------- draggable init ---------- */
+  const getClientAddress = (job) =>
+    clientsById.get(String(job?.client_id))?.address ||
+    job?.client_address ||
+    job?.address ||
+    '';
+
+  const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
+  const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
+  const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
+
+  /* ---------- external cards (unassigned) ---------- */
   useEffect(() => {
     if (!extRef.current) return;
     const d = new Draggable(extRef.current, {
@@ -186,18 +123,31 @@ export default function CalendarPage() {
     return () => d.destroy();
   }, [extRef, jobs]);
 
-  /* ---------- events for FullCalendar ---------- */
+  /* ---------- calendar events ---------- */
+  const filteredJobs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (jobs || []).filter((j) => {
+      if (!j.appointment_time) return false;
+      if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
+      if (!q) return true;
+      const name = getClientName(j).toLowerCase();
+      const addr = getClientAddress(j).toLowerCase();
+      return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
+    });
+  }, [jobs, activeTech, query, clientsById]);
+
   const events = useMemo(() => {
-    return calendarJobs.map((j) => {
+    return filteredJobs.map((j) => {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
       const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
+
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // отдаём как есть
+        start: j.appointment_time, // UTC (timestamptz) — FullCalendar shows correctly in America/New_York
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -211,12 +161,17 @@ export default function CalendarPage() {
         },
       };
     });
-  }, [calendarJobs, activeTech, techById, techColor]);
+  }, [filteredJobs, activeTech, techById, techColor]);
 
-  /* ---------- handlers ---------- */
+  const unassigned = useMemo(
+    () => (jobs || []).filter((j) => !j.technician_id),
+    [jobs]
+  );
+
+  /* ---------- DnD/click handlers ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? info.event.start.toISOString() : null;
+    const newStart = info.event.start ? info.event.start.toISOString() : null; // write UTC for timestamptz
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -230,12 +185,11 @@ export default function CalendarPage() {
   const handleEventReceive = async (info) => {
     const id = info.event.id;
     if (activeTech === 'all') {
-      // Требуем выбрать вкладку техника — куда ставим
       info.event.remove();
-      alert('Select a technician tab, then drop the job into a time slot.');
+      alert('Select a specific technician tab first, then drop the job onto the calendar.');
       return;
     }
-    const newStart = info.event.start ? info.event.start.toISOString() : null;
+    const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
@@ -289,7 +243,10 @@ export default function CalendarPage() {
 
   /* ---------- UI ---------- */
   return (
-    <div style={{ padding: 16, background: 'linear-gradient(180deg, #f7faff 0%, #ffffff 40%)' }}>
+    <div style={{
+      padding: 16,
+      background: 'linear-gradient(180deg, #f7faff 0%, #ffffff 40%)'
+    }}>
       <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12, letterSpacing: 0.3 }}>🗓 Calendar</h1>
 
       {/* controls */}
@@ -352,76 +309,63 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {/* ===== Unplanned (no appointment_time) ===== */}
+      {/* unassigned */}
       <div style={{ marginBottom: 12 }}>
-        <div style={{ marginBottom: 6, fontWeight: 800, color: '#111827' }}>
-          Без времени (перетащи на календарь выбранного техника):
+        <div style={{ marginBottom: 6, fontWeight: 700, color: '#111827' }}>
+          Unassigned <span style={{ color: '#6b7280', fontWeight: 500 }}>(drag onto the calendar of a selected technician tab)</span>:
         </div>
-
-        {/* общий контейнер для Draggable (важно один корневой ref) */}
         <div
           ref={extRef}
           style={{
-            display: 'grid',
-            gap: 10,
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
             padding: 10,
             border: '1px dashed #e5e7eb',
             borderRadius: 12,
             background: '#fafafa'
           }}
         >
-          {unplannedByTech.size === 0 && <div style={{ color: '#6b7280' }}>— нет заявок —</div>}
-
-          {[...unplannedByTech.entries()].map(([key, arr]) => {
-            const techName =
-              key === 'none'
-                ? 'Без техника'
-                : (techById.get(key)?.name || `Tech ${key}`);
+          {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
+          {unassigned.map((j) => {
+            const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
+            const addr = getClientAddress(j);
             return (
-              <div key={key} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 10 }}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>{techName}</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {arr.map((j) => {
-                    const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
-                    const addr = getClientAddress(j);
-                    const pal = statusPalette[statusKey(j.status)] || statusPalette.default;
-                    return (
-                      <div
-                        key={j.id}
-                        className="ext-evt"
-                        data-id={String(j.id)}
-                        data-title={title}
-                        title="Drag onto a time slot in the calendar"
-                        onDoubleClick={() => navigate(`/job/${j.id}`)}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'auto 1fr',
-                          gap: 6,
-                          minWidth: 280,
-                          maxWidth: 420,
-                          border: `1px solid ${pal.ring}`,
-                          borderRadius: 12,
-                          background: pal.bg,
-                          padding: '8px 10px',
-                          cursor: 'grab',
-                          boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
-                        }}
-                      >
-                        <div style={{ fontWeight: 800, color: pal.fg }}>#{j.job_number || j.id}</div>
-                        <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
-                        {addr && <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>}
-                        {j.issue && <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
+              <div
+                key={j.id}
+                className="ext-evt"
+                data-id={String(j.id)}
+                data-title={title}
+                title="Drag onto a technician's calendar"
+                onDoubleClick={() => navigate(`/job/${j.id}`)}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'auto 1fr',
+                  gap: 6,
+                  minWidth: 280,
+                  maxWidth: 420,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 12,
+                  background: '#fff',
+                  padding: '8px 10px',
+                  cursor: 'grab',
+                  boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
+                }}
+              >
+                <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
+                <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
+                {addr && (
+                  <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
+                )}
+                {j.issue && (
+                  <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>
+                )}
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* ===== Calendar ===== */}
       <div
         style={{
           background: '#fff',
@@ -437,30 +381,40 @@ export default function CalendarPage() {
           initialView={view}
           headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
           locale="en"
+
+          /* ===== time settings ===== */
           timeZone="America/New_York"
           slotMinTime="08:00:00"
           slotMaxTime="20:00:00"
           businessHours={{ daysOfWeek: [0,1,2,3,4,5,6], startTime: '08:00', endTime: '20:00' }}
           allDaySlot={false}
-          nowIndicator
-          expandRows
+          nowIndicator={true}
+          expandRows={true}
           slotDuration="01:00:00"
           slotLabelInterval="01:00"
           slotLabelFormat={{ hour: '2-digit', minute: '2-digit' }}
           dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
-          stickyHeaderDates
+          stickyHeaderDates={true}
+
+          /* ===== visuals ===== */
           height="72vh"
           eventDisplay="block"
           eventTimeFormat={{ hour: '2-digit', minute: '2-digit' }}
           dragScroll
           longPressDelay={150}
-          eventOverlap
+          eventOverlap={true}
           slotEventOverlap={false}
+
+          /* ===== DnD/edit ===== */
           editable
           eventStartEditable
           eventDurationEditable={false}
           droppable
+
+          /* ===== data ===== */
           events={events}
+
+          /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
           eventClick={handleEventClick}
@@ -474,7 +428,7 @@ export default function CalendarPage() {
   );
 }
 
-/* ===== small UI ===== */
+/* ========== small UI components ========== */
 function Tab({ active, onClick, children }) {
   return (
     <button
@@ -509,7 +463,7 @@ function Legend() {
         color: text,
         fontSize: 12,
         marginRight: 8,
-        boxShadow: 'inset 1px 1px 0 rgba(255,255,255,0.6)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6)',
         border: '1px solid rgba(0,0,0,0.04)'
       }}
     >
