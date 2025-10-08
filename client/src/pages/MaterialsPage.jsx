@@ -3,38 +3,38 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-/* ---------- Status values stored in DB (normalized) ---------- */
+/* ---------- Status values stored in DB (Title Case) ---------- */
 const STATUS_VALUES = [
-  'recall',
-  'parts ordered',
-  'waiting for parts',
-  'in progress',
-  'to finish',
-  'completed',
+  'Recall',
+  'Parts ordered',
+  'Waiting for parts',
+  'In progress',
+  'To finish',
+  'Completed',
 ];
 
-// Human-readable labels
-const STATUS_LABEL = (v) => (v === 'recall' ? 'ReCall' : v);
+// Human-readable labels (здесь просто возвращаем как есть)
+const STATUS_LABEL = (v) => v;
 
-// Normalize any incoming value to DB format
+/* Normalize any incoming value → DB format with Capitalized form */
 const normalizeStatusForDb = (s) => {
   if (!s) return null;
-  const v = String(s).trim();
-  const low = v.toLowerCase();
+  const raw = String(s).trim();
+  const low = raw.toLowerCase();
 
-  if (low === 'recall' || v === 'ReCall') return 'recall';
-  if (low === 'parts ordered') return 'parts ordered';
-  if (low === 'waiting for parts') return 'waiting for parts';
-  if (low === 'in progress') return 'in progress';
-  if (low === 'to finish') return 'to finish';
-  if (low === 'completed' || low === 'done' || v === 'выполнено') return 'completed';
+  if (low === 'recall' || raw === 'ReCall') return 'Recall';
+  if (low === 'parts ordered') return 'Parts ordered';
+  if (low === 'waiting for parts') return 'Waiting for parts';
+  if (low === 'in progress') return 'In progress';
+  if (low === 'to finish') return 'To finish';
+  if (low === 'completed' || low === 'done' || raw === 'выполнено') return 'Completed';
 
-  // fallback: return as is (lets us display unknown but existing values)
-  return v;
+  // fallback — вернём исходное, но в UI оно останется видимым
+  return raw;
 };
 
 /* ---------- Rows are shown only for these statuses ---------- */
-const SHOW_STATUSES = new Set(['recall', 'parts ordered', 'waiting for parts']);
+const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 /* ---------- Small helpers ---------- */
 const toIntOrNull = (v) => {
@@ -56,8 +56,8 @@ export default function MaterialsPage() {
 
   // quick filters
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
-  const [filterTech, setFilterTech] = useState('all'); // 'all' | techId(string)
-  const [searchJob, setSearchJob] = useState(''); // job number/id search
+  const [filterTech, setFilterTech] = useState('all');     // 'all' | techId(string)
+  const [searchJob, setSearchJob] = useState('');          // job number/id search
 
   // modal state
   const [modalJob, setModalJob] = useState(null);
@@ -133,25 +133,17 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: j, error: ej }, { data: m, error: em }, { data: t, error: et }, { data: c, error: ec }] =
-        await Promise.all([
-          supabase.from('jobs').select('*'),
-          supabase.from('materials').select('*'),
-          // IMPORTANT: include both 'technician' and 'tech', only active ones
-          supabase
-            .from('technicians')
-            .select('id, name, role, is_active')
-            .in('role', ['technician', 'tech'])
-            .eq('is_active', true)
-            .order('name', { ascending: true }),
-          supabase.from('comments').select('*'),
-        ]);
-
-      if (ej) console.error(ej);
-      if (em) console.error(em);
-      if (et) console.error(et);
-      if (ec) console.error(ec);
-
+      const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
+        supabase.from('jobs').select('*'),
+        supabase.from('materials').select('*'),
+        supabase
+          .from('technicians')
+          .select('id, name, role, is_active')
+          .in('role', ['technician', 'tech'])
+          .eq('is_active', true)
+          .order('name', { ascending: true }),
+        supabase.from('comments').select('*'),
+      ]);
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
@@ -195,7 +187,7 @@ export default function MaterialsPage() {
   const handleModalSave = async () => {
     if (!modalJob) return;
 
-    // Save technician & job status
+    // Save technician & job status (status → Title Case)
     await supabase
       .from('jobs')
       .update({
@@ -270,7 +262,7 @@ export default function MaterialsPage() {
     },
   });
 
-  // inline: change status
+  // inline: change status (→ Title Case)
   const handleInlineStatusChange = async (job, newVal) => {
     const newStatus = normalizeStatusForDb(newVal);
     const prevStatus = normalizeStatusForDb(job.status);
@@ -372,7 +364,7 @@ export default function MaterialsPage() {
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Materials by Jobs</h2>
 
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the materials editor. You can change <strong>status</strong> and <strong>technician</strong> inline.
+        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the materials editor. You can change <strong>Status</strong> and <strong>Technician</strong> inline.
       </div>
 
       {/* Quick filters */}
@@ -384,7 +376,7 @@ export default function MaterialsPage() {
             onChange={(e) => setFilterStatus(e.target.value)}
             style={{ ...input, width: 220 }}
           >
-            <option value="all">All (showing only: recall / parts ordered / waiting for parts)</option>
+            <option value="all">All (showing only: Recall / Parts ordered / Waiting for parts)</option>
             {STATUS_VALUES.map((s) => (
               <option key={s} value={s}>
                 {STATUS_LABEL(s)}
@@ -444,7 +436,7 @@ export default function MaterialsPage() {
         </div>
       )}
 
-      {/* Materials table for active (SHOW_STATUSES) */}
+      {/* Materials table */}
       <div style={{ overflowX: 'auto', marginBottom: 20 }}>
         <table style={tableStyle}>
           <colgroup>
@@ -472,7 +464,6 @@ export default function MaterialsPage() {
               const job = jobsMap.get(row.job_id);
               if (!job) return null;
 
-              // technician select value as string
               const jobTechVal = job.technician_id == null ? '' : String(job.technician_id);
               const techExists = jobTechVal === '' || technicians.some((t) => String(t.id) === jobTechVal);
 
@@ -494,7 +485,6 @@ export default function MaterialsPage() {
                       style={input}
                     >
                       <option value="">—</option>
-                      {/* if DB has a non-active technician not in the list — show it */}
                       {!techExists && jobTechVal && (
                         <option value={jobTechVal}>{techName(job.technician_id) || `ID ${jobTechVal}`}</option>
                       )}
@@ -539,7 +529,6 @@ export default function MaterialsPage() {
               );
             })}
 
-            {/* empty state */}
             {filteredMaterials.length === 0 && (
               <tr>
                 <td colSpan={7} style={{ padding: 8, border: '1px solid #ccc' }}>
@@ -593,7 +582,6 @@ export default function MaterialsPage() {
                 style={input}
               >
                 <option value="">—</option>
-                {/* safeguard: if current tech is not active/not in list */}
                 {modalTechnician &&
                   !technicians.some((t) => String(t.id) === String(modalTechnician)) && (
                     <option value={String(modalTechnician)}>
@@ -615,7 +603,6 @@ export default function MaterialsPage() {
                 onChange={(e) => setModalStatus(e.target.value)}
                 style={input}
               >
-                {/* unknown status */}
                 {!STATUS_VALUES.includes(normalizeStatusForDb(modalStatus) || '') && (
                   <option value={normalizeStatusForDb(modalStatus) || ''}>
                     {STATUS_LABEL(normalizeStatusForDb(modalStatus) || '')}
