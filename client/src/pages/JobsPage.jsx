@@ -4,56 +4,45 @@ import { useNavigate } from 'react-router-dom';
 import CreateJob from '../components/CreateJob';
 import { supabase } from '../supabaseClient';
 
-/* ===== Полный набор статусов для выбора (лейблы для UI) ===== */
-const STATUS_LABELS = {
-  recall: 'ReCall',
-  diagnosis: 'Diagnosis',
-  'in progress': 'In progress',
-  'parts ordered': 'Parts ordered',
-  'waiting for parts': 'Waiting for parts',
-  'to finish': 'To finish',
-  completed: 'Completed',
-  canceled: 'Canceled',
-};
-const ALL_STATUS_ORDER = [
-  'recall',
-  'diagnosis',
-  'in progress',
-  'parts ordered',
-  'waiting for parts',
-  'to finish',
-  'completed',
-  'canceled',
+/* ===== Полный набор статусов (Title Case) ===== */
+const STATUS_VALUES = [
+  'Recall',
+  'Diagnosis',
+  'In progress',
+  'Parts ordered',
+  'Waiting for parts',
+  'To finish',
+  'Completed',
+  'Canceled',
 ];
 
-/* ===== Видим только эти статусы в таблице (КАНОНИЧЕСКИЕ, нижний регистр) ===== */
-const VISIBLE_SET = new Set(['recall', 'diagnosis', 'in progress', 'to finish']);
+/* ===== Для сортировки — заданный порядок ===== */
+const ALL_STATUS_ORDER = [...STATUS_VALUES];
 
-/* ===== Нормализация произвольного статуса к канону (нижний регистр с пробелами) ===== */
-const canonStatus = (raw) => {
-  const s = String(raw ?? '').trim().toLowerCase();
+/* ===== Какие статусы показываем в таблице ===== */
+const VISIBLE_SET = new Set(['Recall', 'Diagnosis', 'In progress', 'To finish']);
+
+/* ===== Нормализация произвольного значения к Title Case (как в БД) ===== */
+const toDbStatus = (raw) => {
+  const s = String(raw ?? '').trim();
   if (!s) return '';
-  const compact = s.replace(/[\s\-_]+/g, ''); // "in-progress" -> "inprogress"
+  const low = s.toLowerCase().replace(/[\s\-_]+/g, '');
 
-  // устойчивые сопоставления
-  if (compact.startsWith('rec')) return 'recall';
-  if (compact === 'diagnosis') return 'diagnosis';
-  if (compact === 'inprogress') return 'in progress';
-  if (compact === 'partsordered') return 'parts ordered';
-  if (compact === 'waitingforparts') return 'waiting for parts';
-  if (compact === 'tofinish') return 'to finish';
-  if (compact === 'completed' || compact === 'complete' || compact === 'done') return 'completed';
-  if (compact === 'canceled' || compact === 'cancelled' || compact === 'declined') return 'canceled';
+  if (low.startsWith('rec')) return 'Recall';
+  if (low === 'diagnosis') return 'Diagnosis';
+  if (low === 'inprogress') return 'In progress';
+  if (low === 'partsordered') return 'Parts ordered';
+  if (low === 'waitingforparts') return 'Waiting for parts';
+  if (low === 'tofinish') return 'To finish';
+  if (low === 'completed' || low === 'complete' || low === 'done' || s === 'Выполнено') return 'Completed';
+  if (low === 'canceled' || low === 'cancelled' || low === 'declined') return 'Canceled';
 
-  // если пришёл уже один из канонов в нижнем регистре — вернём как есть
-  if (ALL_STATUS_ORDER.includes(s)) return s;
+  // если это уже одно из канонических значений — вернём как есть
+  if (STATUS_VALUES.includes(s)) return s;
 
-  // неизвестное значение — вернём исходное в нижнем регистре
-  return s;
+  // fallback: капнем первую букву (чтобы не терять)
+  return s[0].toUpperCase() + s.slice(1);
 };
-
-const labelFor = (canon) =>
-  STATUS_LABELS[canon] ?? (canon ? canon[0].toUpperCase() + canon.slice(1) : '—');
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState([]);
@@ -95,10 +84,10 @@ export default function JobsPage() {
   const jobsView = useMemo(() => {
     return (jobs || []).map((j) => {
       const c = clients.find((x) => x.id === j.client_id);
-      const canon = canonStatus(j.status);
+      const canon = toDbStatus(j.status);
       return {
         ...j,
-        status_canon: canon,
+        status_canon: canon, // всегда Title Case
         client_name: c?.full_name || c?.name || '—',
         client_phone: c?.phone || '',
         created_at_fmt: fmtDate(j.created_at),
@@ -106,13 +95,13 @@ export default function JobsPage() {
     });
   }, [jobs, clients]);
 
-  // Показываем ТОЛЬКО нужные статусы и неархивные заявки
+  // Видимость: только определённые статусы и неархивные
   const visibleJobs = useMemo(
-    () => jobsView.filter((j) => !j.archived_at && VISIBLE_SET.has(String(j.status_canon || ''))),
+    () => jobsView.filter((j) => !j.archived_at && VISIBLE_SET.has(j.status_canon || '')),
     [jobsView]
   );
 
-  // Сортировка: по приоритету статуса, затем по дате (новые выше)
+  // Сортировка: по порядку статусов, затем по дате
   const orderMap = useMemo(() => new Map(ALL_STATUS_ORDER.map((s, i) => [s, i])), []);
   const sortedJobs = useMemo(() => {
     return [...visibleJobs].sort((a, b) => {
@@ -132,8 +121,8 @@ export default function JobsPage() {
     try {
       const payload = {
         technician_id: job.technician_id ? job.technician_id : null,
-        // сохраняем в каноне, чтобы дальше всё было единообразно
-        status: job.status ? canonStatus(job.status) : (job.status_canon ?? null),
+        // Сохраняем в БД сразу в Title Case
+        status: job.status ? toDbStatus(job.status) : (job.status_canon ?? null),
         scf:
           job.scf === '' || job.scf == null
             ? null
@@ -154,9 +143,9 @@ export default function JobsPage() {
 
   const openJob = (id) => navigate(`/job/${id}`);
 
-  // Полный набор опций для выбора статуса в каждой строке
+  // Опции статусов для селекта (Title Case)
   const STATUS_OPTIONS = useMemo(
-    () => ALL_STATUS_ORDER.map((value) => ({ value, label: labelFor(value) })),
+    () => STATUS_VALUES.map((value) => ({ value, label: value })),
     []
   );
 
@@ -268,11 +257,10 @@ export default function JobsPage() {
                 <td className="col-date"><div className="cell-wrap">{job.created_at_fmt}</div></td>
 
                 <td onClick={(e) => e.stopPropagation()}>
-                  {/* Полный набор опций; строка при смене на "невидимый" статус пропадёт после сохранения/обновления */}
                   <select
                     value={job.status_canon || ''}
                     onChange={(e) => {
-                      const canon = e.target.value;
+                      const canon = toDbStatus(e.target.value);
                       setJobs((prev) =>
                         prev.map((j) =>
                           j.id === job.id ? { ...j, status: canon, status_canon: canon } : j
@@ -281,8 +269,8 @@ export default function JobsPage() {
                     }}
                   >
                     <option value="">—</option>
-                    {STATUS_OPTIONS.map(({ value, label }) => (
-                      <option key={value} value={value}>{label}</option>
+                    {STATUS_VALUES.map((value) => (
+                      <option key={value} value={value}>{value}</option>
                     ))}
                   </select>
                 </td>
