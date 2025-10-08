@@ -47,7 +47,7 @@ const S = {
   tableWrap: { marginTop: 16, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { background: '#3c3c3c', color: '#fff', textAlign: 'left', padding: '10px 12px', fontWeight: 700 },
-  td: { padding: '10px 12px', borderBottom: '1px solid #f1f5f9' },
+  td: { padding: '10px 12px', borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' },
   input: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
   select: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
   totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, marginTop: 18 },
@@ -57,6 +57,13 @@ const S = {
   taCenter: { textAlign: 'center' },
   taRight: { textAlign: 'right' },
 };
+
+/* --- autosize для textarea --- */
+function autoResizeTextarea(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
 
 /* ---------------- компонент ---------------- */
 export default function InvoicePage() {
@@ -373,21 +380,51 @@ export default function InvoicePage() {
           <option value="material">material</option>
         </select>
       </td>
+
       <td style={S.td}>
-        <input style={S.input} value={r.name} onChange={(e) => changeRow(i, 'name', e.target.value)}
-          placeholder={r.type === 'service' ? 'Service' : 'Item'} />
+        {/* Многострочное поле: Enter переносит строку; автоподстройка высоты */}
+        <textarea
+          style={{
+            ...S.input,
+            minHeight: 36,
+            height: 'auto',
+            resize: 'vertical',
+            lineHeight: 1.4,
+            whiteSpace: 'pre-wrap',
+          }}
+          value={r.name}
+          onChange={(e) => {
+            changeRow(i, 'name', e.target.value);
+            autoResizeTextarea(e.target);
+          }}
+          onInput={(e) => autoResizeTextarea(e.target)}
+          placeholder={r.type === 'service' ? 'Service' : 'Item'}
+          rows={1}
+        />
       </td>
+
       <td style={{ ...S.td, ...S.taCenter }}>
-        <input type="number" style={{ ...S.input, width: 84, textAlign: 'center' }}
-          value={r.qty} onChange={(e) => changeRow(i, 'qty', e.target.value)} />
+        <input
+          type="number"
+          style={{ ...S.input, width: 84, textAlign: 'center' }}
+          value={r.qty}
+          onChange={(e) => changeRow(i, 'qty', e.target.value)}
+        />
       </td>
+
       <td style={{ ...S.td, ...S.taRight }}>
-        <input type="number" style={{ ...S.input, width: 120, textAlign: 'right' }}
-          value={r.price} onChange={(e) => changeRow(i, 'price', e.target.value)} />
+        <input
+          type="number"
+          style={{ ...S.input, width: 120, textAlign: 'right' }}
+          value={r.price}
+          onChange={(e) => changeRow(i, 'price', e.target.value)}
+        />
       </td>
+
       <td style={{ ...S.td, ...S.taRight }}>
         ${((N(r.qty) || 0) * (N(r.price) || 0)).toFixed(2)}
       </td>
+
       <td style={{ ...S.td, ...S.taCenter }}>
         <button
           style={{ ...S.ghost, color: '#ef4444', borderColor: '#ef4444', background: '#fff' }}
