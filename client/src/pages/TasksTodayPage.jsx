@@ -31,6 +31,7 @@ function toNYTzISO(dateStr, timeStr) {
 
 export default function TasksTodayPage() {
   const mounted = useRef(true);
+  const lastTick = useRef(0); // защита от слишком частых вызовов
   useEffect(() => () => { mounted.current = false; }, []);
 
   const [me, setMe] = useState(null);
@@ -83,7 +84,7 @@ export default function TasksTodayPage() {
       const { data: t, error: tErr } = await supabase
         .from('tasks')
         .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
-        .eq('due_date', today)             // <- вернули eq
+        .eq('due_date', today)
         .order('status', { ascending: true })
         .order('updated_at', { ascending: false });
 
@@ -127,6 +128,48 @@ export default function TasksTodayPage() {
   }, [me?.id]);
 
   useEffect(() => { if (me) load(); }, [me]);
+
+  /* ---------- background reminders tick (каждую минуту, когда вкладка видима) ---------- */
+  useEffect(() => {
+    if (!me) return;
+    let timer = null;
+    const TICK_MS = 30 * 60 * 1000;
+
+    const tick = async () => {
+      if (!mounted.current) return;
+      if (document.visibilityState !== 'visible') return; // экономим, когда вкладка неактивна
+      const now = Date.now();
+      if (now - lastTick.current < TICK_MS - 250) return;
+      lastTick.current = now;
+      try {
+        await supabase.rpc('tick_task_reminders');
+      } catch (e) {
+        console.warn('tick_task_reminders failed', e?.message || e);
+      }
+    };
+
+    // первый вызов быстро, затем по интервалу
+     const alignAndStart = () => {
+     const now = Date.now();
+     const halfHour = 30 * 60 * 1000;
+     const offset = halfHour - (now % halfHour);
+     setTimeout(() => {
+     tick(); // первый вызов ровно на границе получаса
+     timer = setInterval(tick, halfHour);
+      }, offset);
+    };
+
+    alignAndStart();
+
+
+    const onVis = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [me]);
 
   /* ---------- realtime ---------- */
   useEffect(() => {
@@ -173,10 +216,33 @@ export default function TasksTodayPage() {
     await load();
   };
 
-  // уведомления
+  // уведомления (Web Notifications с запасным alert)
   useEffect(() => {
     if (!notif) return;
-    try { alert(notif.payload?.message || 'Активные задачи'); } catch {}
+    const msg = notif.payload?.message || 'Активные задачи';
+
+    const showFallback = () => { try { alert(msg); } catch {} };
+
+    (async () => {
+      if ('Notification' in window) {
+        try {
+          if (Notification.permission === 'default') {
+            await Notification.requestPermission();
+          }
+          if (Notification.permission === 'granted') {
+            const n = new Notification('Напоминание', { body: msg });
+            setTimeout(() => n.close?.(), 8000);
+          } else {
+            showFallback();
+          }
+        } catch {
+          showFallback();
+        }
+      } else {
+        showFallback();
+      }
+    })();
+
     supabase.from('task_notifications').update({ read_at: new Date().toISOString() }).eq('id', notif.id);
   }, [notif]);
 
