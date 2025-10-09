@@ -1,6 +1,13 @@
 // client/src/App.js
 import React, { useEffect, useState } from 'react';
-import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+  useParams,
+} from 'react-router-dom';
 
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { supabase } from './supabaseClient';
@@ -8,8 +15,7 @@ import { supabase } from './supabaseClient';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import TopNav from './components/TopNav.jsx';
 
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import EmailTab from "./pages/EmailTab";
+import EmailTab from './pages/EmailTab.jsx';
 
 // страницы
 import LoginPage from './pages/LoginPage.jsx';
@@ -28,7 +34,7 @@ import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
 
-// 🔹 добавили страницу задач
+// 🔹 страница задач
 import TasksTodayPage from './pages/TasksTodayPage.jsx';
 
 /* ──────────────────────────────────────────────────────────────────────────────
@@ -167,7 +173,8 @@ function Shell() {
             }
           />
 
-         <Route
+          {/* Email — менеджер + админ */}
+          <Route
             path="/email"
             element={
               <ProtectedRoute allow={['admin', 'manager']}>
@@ -176,7 +183,7 @@ function Shell() {
             }
           />
 
-         {/* Инвойс — менеджер + админ */}
+          {/* Инвойс — менеджер + админ */}
           <Route
             path="/invoice/:id"
             element={
@@ -249,8 +256,10 @@ function Shell() {
    ─────────────────────────────────────────────────────────────────────────── */
 export default function App() {
   return (
-    <AuthProvider>
-      <Shell />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <Shell />
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
