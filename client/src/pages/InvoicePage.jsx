@@ -386,7 +386,7 @@ export default function InvoicePage() {
       </td>
 
       {/* ШИРОКАЯ колонка Name/Description с textarea (Enter — перенос строки) */}
-      <td style={{ ...S.td, width: '40%' }}>
+      <td style={{ ...S.td, width: '50%' }}>
         <textarea
           style={{
             ...S.input,
@@ -602,4 +602,5 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
