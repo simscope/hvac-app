@@ -102,7 +102,7 @@ export default function CreateJob({ onCreated }) {
         scf: toNum(form.scf),
         technician_id: form.technician_id ? Number(form.technician_id) : null,
         client_id: clientId,
-        status: 'diagnosis',
+        status: 'Diagnosis',
       };
 
       const { error: jobErr } = await supabase.from('jobs').insert(jobPayload);
@@ -162,10 +162,8 @@ export default function CreateJob({ onCreated }) {
           <div style={row}>
             <div>System</div>
             <select style={input} value={form.system_type} onChange={set('system_type')}>
-              <option value="HVAC">HVAC</option>
               <option value="Appliance">Appliance</option>
-              <option value="Plumbing">Plumbing</option>
-              <option value="Electrical">Electrical</option>
+              <option value="HVAC">HVAC</option>
             </select>
           </div>
 
@@ -248,3 +246,4 @@ export default function CreateJob({ onCreated }) {
     </form>
   );
 }
+
