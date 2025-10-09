@@ -8,6 +8,9 @@ import { supabase } from './supabaseClient';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import TopNav from './components/TopNav.jsx';
 
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import EmailTab from "./pages/EmailTab";
+
 // страницы
 import LoginPage from './pages/LoginPage.jsx';
 import NoAccessPage from './pages/NoAccessPage.jsx';
@@ -164,7 +167,16 @@ function Shell() {
             }
           />
 
-          {/* Инвойс — менеджер + админ */}
+         <Route
+            path="/email"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <EmailTab />
+              </ProtectedRoute>
+            }
+          />
+
+         {/* Инвойс — менеджер + админ */}
           <Route
             path="/invoice/:id"
             element={
