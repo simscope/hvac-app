@@ -1,3 +1,4 @@
+// Updated visual layout: tighter spacing & stronger borders — October 2025
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -29,36 +30,38 @@ async function loadLogoDataURL(timeoutMs = 2500) {
 }
 
 /* ---------------- styles (UI) ---------------- */
+const BORDER = '#d1d5db';        // контрастнее границы (раньше #e5e7eb)
+const BORDER_SOFT = '#e2e8f0';   // для нижних границ строк таблицы
 const S = {
   page: { maxWidth: 1000, margin: '24px auto 80px', padding: '0 16px' },
-  bar: { display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 },
-  primary: { padding: '10px 16px', borderRadius: 10, border: '1px solid #2563eb', background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 },
-  ghost: { padding: '9px 14px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#f8fafc', cursor: 'pointer' },
-  card: { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 16, padding: 24, boxShadow: '0 2px 24px rgba(0,0,0,0.04)' },
-  header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 16 },
+  bar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }, // немного плотнее
+  primary: { padding: '10px 16px', borderRadius: 10, border: `1px solid #2563eb`, background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 },
+  ghost: { padding: '9px 14px', borderRadius: 10, border: `1px solid ${BORDER}`, background: '#f8fafc', cursor: 'pointer' },
+  card: { background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 16, padding: 24, boxShadow: '0 2px 24px rgba(0,0,0,0.04)' },
+  header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 12 }, // плотнее
   brandName: { fontWeight: 700, fontSize: 16 },
   invoiceTitle: { fontWeight: 800, fontSize: 30, color: '#444', letterSpacing: 1 },
   invoiceNo: { textAlign: 'right', color: '#6b7280' },
-  sep: { height: 1, background: '#eef2f7', margin: '16px 0' },
-  pill: { borderRadius: 12, overflow: 'hidden', border: '1px solid #e5e7eb' },
+  sep: { height: 1, background: '#eef2f7', margin: '14px 0' }, // чуть меньше
+  pill: { borderRadius: 12, overflow: 'hidden', border: `1px solid ${BORDER}` },
   pillRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#f6f7fb' },
   pillCellLeft: { padding: '10px 12px', fontWeight: 700, color: '#333', textAlign: 'right' },
   pillCellRight: { padding: '10px 12px', fontWeight: 700, textAlign: 'right' },
-  tableWrap: { marginTop: 16, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' },
+  tableWrap: { marginTop: 12, border: `1px solid ${BORDER}`, borderRadius: 12, overflow: 'hidden' }, // плотнее
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { background: '#3c3c3c', color: '#fff', textAlign: 'left', padding: '10px 12px', fontWeight: 700 },
-  td: { padding: '10px 12px', borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' },
-  input: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
-  select: { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
-  totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 16, marginTop: 18 },
-  totalsCard: { border: '1px solid #eef2f7', borderRadius: 12, padding: 14 },
+  td: { padding: '10px 12px', borderBottom: `1px solid ${BORDER_SOFT}`, verticalAlign: 'top' },
+  input: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' }, // высоту не трогаем
+  select: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
+  totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 14, marginTop: 16 }, // немного плотнее
+  totalsCard: { border: `1px solid ${BORDER}`, borderRadius: 12, padding: 14 },
   totalsLine: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' },
   totalsStrong: { fontWeight: 800, fontSize: 18 },
   taCenter: { textAlign: 'center' },
   taRight: { textAlign: 'right' },
 };
 
-/* --- autosize для textarea --- */
+/* --- autosize для textarea (для поля Name/Description) --- */
 function autoResizeTextarea(el) {
   if (!el) return;
   el.style.height = 'auto';
@@ -382,12 +385,12 @@ export default function InvoicePage() {
         </select>
       </td>
 
-      {/* ШИРОКАЯ колонка Name/Description с textarea */}
+      {/* ШИРОКАЯ колонка Name/Description с textarea (Enter — перенос строки) */}
       <td style={{ ...S.td, width: '60%' }}>
         <textarea
           style={{
             ...S.input,
-            minHeight: 36,
+            minHeight: 36,     // высоту не трогаем: базовая 36
             height: 'auto',
             resize: 'vertical',
             lineHeight: 1.4,
@@ -404,7 +407,7 @@ export default function InvoicePage() {
         />
       </td>
 
-      {/* Компактные Qty/Price/Amount/× */}
+      {/* Компактные Qty/Price/Amount/× (горизонтально плотнее, высоту не меняем) */}
       <td style={{ ...S.td, width: 70, ...S.taCenter }}>
         <input
           type="number"
