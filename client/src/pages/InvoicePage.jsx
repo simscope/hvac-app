@@ -294,7 +294,7 @@ export default function InvoicePage() {
         services.forEach(r => body.push(toPdfRow(r)));
       }
       if (materials.length) {
-        if (services.length) body.push([{ content: ' ', colSpan: 4, styles: { fillColor: [255,255,255], lineWidth: 0 } }]); // небольшой пустой разделитель
+        if (services.length) body.push([{ content: ' ', colSpan: 4, styles: { fillColor: [255,255,255], lineWidth: 0 } }]);
         body.push([{ content: 'Materials', colSpan: 4, styles: { fillColor: [238,242,247], fontStyle: 'bold', halign: 'left' } }]);
         materials.forEach(r => body.push(toPdfRow(r)));
       }
@@ -316,7 +316,7 @@ export default function InvoicePage() {
       doc.setFont(undefined,'bold');
       doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 16;
 
-      if (N(discount) > 0) { // Discount только если > 0
+      if (N(discount) > 0) {
         doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
         endY += 18;
       }
@@ -374,15 +374,16 @@ export default function InvoicePage() {
   /* ---------------- таблица UI ---------------- */
   const tableRow = (r, i) => (
     <tr key={i}>
-      <td style={S.td}>
-        <select style={S.select} value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)}>
+      {/* Узкая колонка Type */}
+      <td style={{ ...S.td, width: 110 }}>
+        <select style={{ ...S.select, height: 34 }} value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)}>
           <option value="service">service</option>
           <option value="material">material</option>
         </select>
       </td>
 
-      <td style={S.td}>
-        {/* Многострочное поле: Enter переносит строку; автоподстройка высоты */}
+      {/* ШИРОКАЯ колонка Name/Description с textarea */}
+      <td style={{ ...S.td, width: '60%' }}>
         <textarea
           style={{
             ...S.input,
@@ -398,36 +399,37 @@ export default function InvoicePage() {
             autoResizeTextarea(e.target);
           }}
           onInput={(e) => autoResizeTextarea(e.target)}
-          placeholder={r.type === 'service' ? 'Service' : 'Item'}
+          placeholder={r.type === 'service' ? 'Service description' : 'Material name'}
           rows={1}
         />
       </td>
 
-      <td style={{ ...S.td, ...S.taCenter }}>
+      {/* Компактные Qty/Price/Amount/× */}
+      <td style={{ ...S.td, width: 70, ...S.taCenter }}>
         <input
           type="number"
-          style={{ ...S.input, width: 84, textAlign: 'center' }}
+          style={{ ...S.input, width: '100%', textAlign: 'center' }}
           value={r.qty}
           onChange={(e) => changeRow(i, 'qty', e.target.value)}
         />
       </td>
 
-      <td style={{ ...S.td, ...S.taRight }}>
+      <td style={{ ...S.td, width: 90, ...S.taRight }}>
         <input
           type="number"
-          style={{ ...S.input, width: 120, textAlign: 'right' }}
+          style={{ ...S.input, width: '100%', textAlign: 'right' }}
           value={r.price}
           onChange={(e) => changeRow(i, 'price', e.target.value)}
         />
       </td>
 
-      <td style={{ ...S.td, ...S.taRight }}>
+      <td style={{ ...S.td, width: 100, ...S.taRight }}>
         ${((N(r.qty) || 0) * (N(r.price) || 0)).toFixed(2)}
       </td>
 
-      <td style={{ ...S.td, ...S.taCenter }}>
+      <td style={{ ...S.td, width: 50, ...S.taCenter }}>
         <button
-          style={{ ...S.ghost, color: '#ef4444', borderColor: '#ef4444', background: '#fff' }}
+          style={{ ...S.ghost, color: '#ef4444', borderColor: '#ef4444', background: '#fff', padding: '4px 8px' }}
           onClick={() => delRow(i)} title="Remove"
         >
           ✕
@@ -539,12 +541,12 @@ export default function InvoicePage() {
           <table style={S.table}>
             <thead>
               <tr>
-                <th style={{ ...S.th, width: 140 }}>Type</th>
+                <th style={{ ...S.th, width: 110 }}>Type</th>
                 <th style={S.th}>Name</th>
-                <th style={{ ...S.th, textAlign: 'center', width: 90 }}>Qty</th>
-                <th style={{ ...S.th, textAlign: 'right', width: 120 }}>Price</th>
-                <th style={{ ...S.th, textAlign: 'right', width: 120 }}>Amount</th>
-                <th style={{ ...S.th, width: 56 }} />
+                <th style={{ ...S.th, textAlign: 'center', width: 70 }}>Qty</th>
+                <th style={{ ...S.th, textAlign: 'right', width: 90 }}>Price</th>
+                <th style={{ ...S.th, textAlign: 'right', width: 100 }}>Amount</th>
+                <th style={{ ...S.th, width: 50 }} />
               </tr>
             </thead>
             <tbody>{rows.map(tableRow)}</tbody>
