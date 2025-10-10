@@ -4,12 +4,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabase'; // replace with ../supabaseClient if needed
 
 const STATUSES = [
-  'diagnosis',
-  'in progress',
-  'parts ordered',
-  'waiting for parts',
-  'to finish',
-  'completed',
+  'Diagnosis',
+  'In progress',
+  'Parts ordered',
+  'Waiting for parts',
+  'To finish',
+  'Completed',
 ];
 
 const toISO = (val) => {
@@ -549,3 +549,4 @@ export default function JobDetailsPage() {
     </div>
   );
 }
+
