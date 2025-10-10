@@ -145,12 +145,12 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
         >
           <option value="recall">ReCall</option>
           <option value="">—</option>
-          <option value="diagnosis">diagnosis</option>
-          <option value="in progress">in progress</option>
-          <option value="parts ordered">parts ordered</option>
-          <option value="waiting for parts">waiting for parts</option>
-          <option value="to finish">to finish</option>
-          <option value="completed">completed</option>
+          <option value="Diagnosis">Diagnosis</option>
+          <option value="In progress">In progress</option>
+          <option value="Parts ordered">Parts ordered</option>
+          <option value="Waiting for parts">Waiting for parts</option>
+          <option value="To finish">To finish</option>
+          <option value="Completed">Completed</option>
         </select>
       </td>
 
@@ -166,3 +166,4 @@ export default function JobRowEditable({ job, technicians = [], onUpdate, onSele
     </tr>
   );
 }
+
