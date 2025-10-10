@@ -46,13 +46,13 @@ export default function TechnicianCalendar({ jobs, onJobUpdated }) {
   const normalizeStatus = (s) => {
     if (!s) return '';
     const v = String(s).toLowerCase().trim();
-    if (v === 'recall' || v === 'recal' || v === 'reсall' || v === 'рекол' || v === 'реколл' || v === 'recаll') return 'recall';
-    if (v === 'diagnosis') return 'diagnostics';
-    if (v === 'in progress') return 'to_finish';
-    if (v === 'waiting for parts') return 'waiting_parts';
-    if (v === 'parts ordered') return 'parts_ordered';
-    if (v === 'in progress') return 'in_progress';
-    if (v === 'completed') return 'finished';
+    if (v === 'recall' || v === 'recal' || v === 'reсall' || v === 'рекол' || v === 'Recall' || v === 'recаll') return 'Recall';
+    if (v === 'Diagnosis') return 'Diagnostics';
+    if (v === 'In progress') return 'In progress';
+    if (v === 'Waiting for parts') return 'Waiting parts';
+    if (v === 'Parts ordered') return 'Parts ordered';
+    if (v === 'To finish') return 'To finish';
+    if (v === 'Completed') return 'Completed';
     return v;
   };
 
@@ -60,13 +60,13 @@ export default function TechnicianCalendar({ jobs, onJobUpdated }) {
     const s = normalizeStatus(statusRaw);
     const pal = {
       recall:        { bg: '#fee2e2', fg: '#b91c1c', ring: '#fecaca' },
-      diagnostics:   { bg: '#fef9c3', fg: '#a16207', ring: '#fde68a' },
-      to_finish:     { bg: '#fffbeb', fg: '#92400e', ring: '#fde68a' },
-      waiting_parts: { bg: '#ede9fe', fg: '#5b21b6', ring: '#ddd6fe' },
-      parts_ordered: { bg: '#e0e7ff', fg: '#3730a3', ring: '#c7d2fe' },
-      in_progress:   { bg: '#e0f2fe', fg: '#075985', ring: '#bae6fd' },
-      finished:      { bg: '#d1fae5', fg: '#065f46', ring: '#a7f3d0' },
-      default:       { bg: '#f3f4f6', fg: '#374151', ring: '#e5e7eb' },
+      Diagnostics:   { bg: '#fef9c3', fg: '#a16207', ring: '#fde68a' },
+      To_finish:     { bg: '#fffbeb', fg: '#92400e', ring: '#fde68a' },
+      Waiting_parts: { bg: '#ede9fe', fg: '#5b21b6', ring: '#ddd6fe' },
+      Parts_ordered: { bg: '#e0e7ff', fg: '#3730a3', ring: '#c7d2fe' },
+      In_progress:   { bg: '#e0f2fe', fg: '#075985', ring: '#bae6fd' },
+      Finished:      { bg: '#d1fae5', fg: '#065f46', ring: '#a7f3d0' },
+      Default:       { bg: '#f3f4f6', fg: '#374151', ring: '#e5e7eb' },
     };
     const base = pal[s] || pal.default;
     return {
@@ -263,4 +263,5 @@ export default function TechnicianCalendar({ jobs, onJobUpdated }) {
     </div>
   );
 }
+
 
