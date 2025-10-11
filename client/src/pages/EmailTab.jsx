@@ -2,16 +2,40 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 
+/**
+ * Просмотрщик общего ящика (read-only) прямо в приложении.
+ * Ящик: simscope.office@gmail.com
+ * Для работы нужны Supabase Edge Functions:
+ *   - oauth_google_start / oauth_google_callback (однократно подключить ящик)
+ *   - gmail_list (список писем), gmail_get (одно письмо)
+ *
+ * ENV (Create React App):
+ *   REACT_APP_SUPABASE_URL=https://<PROJECT_REF>.supabase.co
+ *   REACT_APP_SUPABASE_ANON_KEY=<anon>
+ *   (опционально) REACT_APP_SUPABASE_FUNCTIONS_URL=https://<PROJECT_REF>.supabase.co/functions/v1
+ */
+
 const SHARED_EMAIL = "simscope.office@gmail.com";
 
+// CRA-совместимый способ получить URL функций:
+const FUNCTIONS_URL =
+  process.env.REACT_APP_SUPABASE_FUNCTIONS_URL ||
+  (process.env.REACT_APP_SUPABASE_URL
+    ? `${process.env.REACT_APP_SUPABASE_URL}/functions/v1`
+    : "");
+
+// общая обёртка для вызова Edge Functions с авторизацией
 async function fetchWithAuth(fnPath, method = "POST", body = {}) {
   const token = (await supabase.auth.getSession()).data.session?.access_token;
-  const url = `${import.meta.env.VITE_SUPABASE_FUNCTIONS_URL}/${fnPath}`;
+  if (!FUNCTIONS_URL) {
+    throw new Error("SUPABASE FUNCTIONS URL not set (REACT_APP_SUPABASE_URL/REACT_APP_SUPABASE_FUNCTIONS_URL)");
+  }
+  const url = `${FUNCTIONS_URL}/${fnPath}`;
   const res = await fetch(url, {
     method,
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${token || ""}`,
+      Authorization: `Bearer ${token || ""}`,
     },
     body: method === "POST" ? JSON.stringify(body) : undefined,
   });
@@ -22,10 +46,10 @@ async function fetchWithAuth(fnPath, method = "POST", body = {}) {
 export default function EmailTab() {
   const [connected, setConnected] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState([]); // [{id, subject, from, date, snippet}]
+  const [items, setItems] = useState([]);           // [{id, subject, from, date_human, snippet}]
   const [nextPageToken, setNextPageToken] = useState(null);
-  const [q, setQ] = useState(""); // gmail-синтаксис
-  const [active, setActive] = useState(null); // message object
+  const [q, setQ] = useState("");                   // gmail query
+  const [active, setActive] = useState(null);       // детальное письмо
   const [error, setError] = useState("");
 
   const subtitle = useMemo(
@@ -46,13 +70,11 @@ export default function EmailTab() {
       setItems((prev) => (append ? [...prev, ...list] : list));
       setNextPageToken(res.nextPageToken || null);
       if (!append && list[0]) {
-        // авто-открыть первое письмо
         loadMessage(list[0].id).catch(() => {});
       }
       setConnected(true);
     } catch (e) {
       const msg = String(e.message || e);
-      // если ящик не подключен — предложить подключить
       if (msg.includes("MAIL_ACCOUNT_NOT_FOUND")) setConnected(false);
       setError(msg);
     } finally {
@@ -89,8 +111,12 @@ export default function EmailTab() {
   };
 
   const connectGmail = () => {
-    // редирект на функцию старта OAuth
-    window.location.href = `${import.meta.env.VITE_SUPABASE_FUNCTIONS_URL}/oauth_google_start`;
+    if (!FUNCTIONS_URL) {
+      alert("SUPABASE FUNCTIONS URL not set");
+      return;
+    }
+    // запускаем OAuth для подключения общего ящика
+    window.location.href = `${FUNCTIONS_URL}/oauth_google_start`;
   };
 
   return (
@@ -148,7 +174,9 @@ export default function EmailTab() {
                 }
                 onClick={() => loadMessage(m.id)}
               >
-                <div className="text-sm font-semibold line-clamp-1">{m.subject || "(без темы)"}</div>
+                <div className="text-sm font-semibold line-clamp-1">
+                  {m.subject || "(без темы)"}
+                </div>
                 <div className="text-xs text-gray-600 line-clamp-1">
                   {m.from} • {m.date_human}
                 </div>
@@ -182,7 +210,6 @@ export default function EmailTab() {
             {active && (
               <div className="p-4">
                 {active.html ? (
-                  // Gmail HTML уже приведён на сервере, но всё равно отображаем в «изолированном» контейнере
                   <div
                     className="prose prose-sm max-w-none"
                     dangerouslySetInnerHTML={{ __html: active.html }}
