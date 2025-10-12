@@ -2,18 +2,52 @@
 import React, { useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 
-const getFunctionsBase = () => {
+// Без TypeScript-кастов и с совместимым кодом для CRA/ESLint
+function getFunctionsBase() {
   // 1) Явная переменная окружения
-  const env = import.meta?.env?.VITE_SUPABASE_FUNCTIONS_URL?.trim();
-  if (env) return env.replace(/\/+$/, "");
+  try {
+    const env =
+      import.meta &&
+      import.meta.env &&
+      import.meta.env.VITE_SUPABASE_FUNCTIONS_URL
+        ? String(import.meta.env.VITE_SUPABASE_FUNCTIONS_URL).trim()
+        : "";
+    if (env) return env.replace(/\/+$/, "");
+  } catch (_) {}
+
   // 2) Резерв: строим из URL проекта Supabase
-  const sbUrl = (supabase as any)?.rest?.url || (supabase as any)?.supabaseUrl;
+  const sbUrl =
+    (supabase && supabase.rest && supabase.rest.url) ||
+    (supabase && supabase.supabaseUrl) ||
+    "";
+
   if (sbUrl) {
-    const u = new URL(sbUrl);
-    return `${u.origin}/functions/v1`;
+    try {
+      const u = new URL(sbUrl);
+      return (u.origin || "").replace(/\/+$/, "") + "/functions/v1";
+    } catch (_) {}
   }
+
   // 3) На крайний случай
   return "/functions/v1";
+}
+
+// --- утилиты клиента ---
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ""));
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+const inpStyle = {
+  width: "100%",
+  padding: "8px 10px",
+  borderRadius: 8,
+  border: "1px solid #d1d5db",
+  outline: "none",
 };
 
 export default function EmailTab() {
@@ -25,20 +59,27 @@ export default function EmailTab() {
   const [attachments, setAttachments] = useState([]);
   const inputRef = useRef(null);
 
-  // Временно держим access_token в памяти/вводе (до того как подключите из БД)
+  // Временно: вводим access_token вручную, пока не подтянем из БД
   const [accessToken, setAccessToken] = useState("");
 
   const onPickFiles = async (ev) => {
     const files = Array.from(ev.target.files || []);
     if (!files.length) return;
     const arr = [];
-    for (const f of files) {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
       const b64 = await fileToBase64(f);
-      arr.push({ filename: f.name, mimeType: f.type || "application/octet-stream", base64: b64 });
+      arr.push({
+        filename: f.name,
+        mimeType: f.type || "application/octet-stream",
+        base64: b64,
+      });
     }
     setAttachments((prev) => prev.concat(arr));
-    // очистить value, чтобы повторно можно было выбирать те же файлы
-    try { ev.target.value = ""; } catch {}
+    try {
+      // чтобы можно было выбрать те же файлы повторно
+      ev.target.value = "";
+    } catch (_) {}
   };
 
   const removeAttachment = (idx) => {
@@ -46,29 +87,46 @@ export default function EmailTab() {
   };
 
   const onSend = async () => {
-    if (!to.trim()) return alert("Укажите получателя");
-    if (!accessToken.trim()) return alert("Укажите access_token (временное поле)");
+    if (!to.trim()) {
+      alert("Укажите получателя");
+      return;
+    }
+    if (!accessToken.trim()) {
+      alert("Укажите access_token (временно)");
+      return;
+    }
 
     setSending(true);
     try {
       const payload = {
-        to: to.split(",").map((s) => s.trim()).filter(Boolean),
+        to: to
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
         subject: subject,
         text: text,
-        attachments,
-        access_token: accessToken.trim(), // временно берём отсюда
+        attachments: attachments,
+        access_token: accessToken.trim(),
       };
 
-      const r = await fetch(`${base}/gmail_send`, {
+      const r = await fetch(base.replace(/\/+$/, "") + "/gmail_send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || data?.ok === false) {
+      let data = {};
+      try {
+        data = await r.json();
+      } catch (_) {}
+
+      if (!r.ok || (data && data.ok === false)) {
+        // Показать тело/ошибку
+        const msg =
+          (data && (data.error || data.body)) ||
+          ("HTTP " + r.status + " " + r.statusText);
         console.error("gmail_send error:", data);
-        alert(`Ошибка отправки: ${data?.error || data?.body || r.status}`);
+        alert("Ошибка отправки: " + msg);
         return;
       }
 
@@ -123,7 +181,9 @@ export default function EmailTab() {
         </label>
 
         <div>
-          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>Вложения</div>
+          <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>
+            Вложения
+          </div>
           <input
             ref={inputRef}
             type="file"
@@ -145,14 +205,16 @@ export default function EmailTab() {
           )}
         </div>
 
-        {/* Временное поле access_token, пока не подключим его из БД */}
+        {/* Временно: вводим access_token вручную */}
         <label>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Google access_token (временно)</div>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>
+            Google access_token (временно)
+          </div>
           <input
             value={accessToken}
             onChange={(e) => setAccessToken(e.target.value)}
             className="inp"
-            placeholder="ya29.a0...."
+            placeholder="ya29.a0..."
             style={inpStyle}
           />
         </label>
@@ -166,22 +228,3 @@ export default function EmailTab() {
     </div>
   );
 }
-
-// ---------- утилиты клиента ----------
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result || ""));
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-
-const inpStyle = {
-  width: "100%",
-  padding: "8px 10px",
-  borderRadius: 8,
-  border: "1px solid #d1d5db",
-  outline: "none",
-};
-
