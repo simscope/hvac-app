@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
-// ── ENV для CRA
+// ENV (CRA)
 const SUPABASE_URL = (process.env.REACT_APP_SUPABASE_URL || "").replace(/\/+$/, "");
 const FUNCTIONS_BASE =
   (process.env.REACT_APP_SUPABASE_FUNCTIONS_URL || "").replace(/\/+$/, "") ||
@@ -10,26 +10,9 @@ const FUNCTIONS_BASE =
 // общий ящик
 const SHARED_EMAIL = "simscope.office@gmail.com";
 
-// ── Простые «вшитые» шаблоны и подпись (редактируйте здесь один раз)
+// простая подпись (правьте здесь)
 const SIGNATURE_TEXT =
   "--\nSim Scope — HVAC\n+1 (555) 123-4567\nsimscope.office@gmail.com";
-
-const TEMPLATES = [
-  {
-    id: "thanks",
-    name: "Спасибо за обращение",
-    subject: "Спасибо за обращение",
-    text:
-      "Здравствуйте!\n\nСпасибо за обращение. Мы получили ваш запрос и вернёмся с ответом в ближайшее время.\n\nХорошего дня!",
-  },
-  {
-    id: "invoice",
-    name: "Счёт на обслуживание",
-    subject: "Счёт на обслуживание",
-    text:
-      "Здравствуйте!\n\nВысылаем счёт за выполненное обслуживание. Если будут вопросы — просто ответьте на это письмо.",
-  },
-];
 
 const fmtDate = (d) => {
   if (!d) return "";
@@ -55,7 +38,6 @@ export default function EmailTab() {
 
   const needConnect = useMemo(() => !FUNCTIONS_BASE || errList === "MAIL_ACCOUNT_NOT_FOUND", [errList]);
 
-  // ── общий helper для Edge-функций
   const api = async (path, payload) => {
     if (!FUNCTIONS_BASE) throw new Error("Не задан URL функций");
     const r = await fetch(`${FUNCTIONS_BASE}/${path}`, {
@@ -69,7 +51,6 @@ export default function EmailTab() {
     return r;
   };
 
-  // ── список
   const loadList = async (opts = {}) => {
     setLoadingList(true);
     setErrList(null);
@@ -102,7 +83,6 @@ export default function EmailTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [FUNCTIONS_BASE]);
 
-  // ── письмо
   const loadMessage = async (id) => {
     if (!id) return;
     setLoadingMsg(true);
@@ -120,10 +100,10 @@ export default function EmailTab() {
     }
   };
 
-  // ── пометки: только прочитано/непрочитано (БЕЗ удаления)
+  // только пометки прочитано/непрочитано (удаление отключено)
   const modify = async (id, action) => {
     if (!id) return;
-    if (!["read", "unread"].includes(action)) return; // страховка
+    if (!["read", "unread"].includes(action)) return;
     setBusyAction(true);
     try {
       const r = await api("gmail_modify", { shared_email: SHARED_EMAIL, message_id: id, action });
@@ -137,14 +117,14 @@ export default function EmailTab() {
     }
   };
 
-  // ── скачивание вложений
+  // скачивание вложений (оставляем)
   const downloadAttachment = async (att) => {
     try {
       const r = await api("gmail_attachment", {
         message_id: selected.id,
         attachment_id: att.attachmentId,
         filename: att.filename,
-        access_token: selected.access_token, // обычно возвращается из gmail_get
+        access_token: selected.access_token,
       });
       if (!r.ok) throw new Error(await r.text());
       const blob = await r.blob();
@@ -158,20 +138,18 @@ export default function EmailTab() {
     }
   };
 
-  // ── Compose (plain only) + шаблоны + вложения, подпись добавляем автоматически
+  // Compose: только to, subject, text + attachments
   const [composeOpen, setComposeOpen] = useState(false);
-  const [draft, setDraft] = useState({ to: "", cc: "", bcc: "", subject: "", text: "", attachments: [] });
-  const fileInputRef = useRef(null);
+  const [draft, setDraft] = useState({ to: "", subject: "", text: "" });
+  const [files, setFiles] = useState([]); // File[]
 
   const openCompose = (prefill = {}) => {
     setDraft({
       to: prefill.to || "",
-      cc: prefill.cc || "",
-      bcc: prefill.bcc || "",
       subject: prefill.subject || "",
       text: prefill.text || "",
-      attachments: [],
     });
+    setFiles([]);
     setComposeOpen(true);
   };
 
@@ -207,51 +185,46 @@ export default function EmailTab() {
     });
   };
 
-  const applyTemplate = (tplId) => {
-    const t = TEMPLATES.find((x) => x.id === tplId);
-    if (!t) return;
-    setDraft((d) => ({
-      ...d,
-      subject: d.subject || t.subject || "",
-      text: (t.text || "") + (d.text ? `\n\n${d.text}` : ""),
-    }));
-  };
-
-  const pickFiles = () => fileInputRef.current?.click();
-  const onFiles = async (e) => {
-    const files = Array.from(e.target.files || []);
-    const mapped = await Promise.all(
-      files.map(
-        (f) =>
-          new Promise((resolve, reject) => {
-            const rd = new FileReader();
-            rd.onload = () => {
-              const base64 = String(rd.result).split(",")[1] || "";
-              resolve({
-                filename: f.name,
-                mimeType: f.type || "application/octet-stream",
-                base64,
-              });
-            };
-            rd.onerror = reject;
-            rd.readAsDataURL(f);
-          })
-      )
-    );
-    setDraft((d) => ({ ...d, attachments: [...d.attachments, ...mapped] }));
-    e.target.value = "";
-  };
+  const fileToBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const res = String(reader.result || "");
+        const base64 = res.includes(",") ? res.split(",")[1] : res;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
 
   const sendMail = async () => {
-    const to = toArr(draft.to),
-      cc = toArr(draft.cc),
-      bcc = toArr(draft.bcc);
+    const to = toArr(draft.to);
     if (!to.length) return alert("Укажите получателя");
 
-    // автоматически приклеиваем подпись (один раз)
+    // подпись
     const withSign = draft.text?.includes(SIGNATURE_TEXT)
       ? draft.text
       : (draft.text ? `${draft.text}\n\n${SIGNATURE_TEXT}` : SIGNATURE_TEXT);
+
+    // вложения -> [{filename, mimeType, base64}]
+    let attachments = [];
+    try {
+      attachments = await Promise.all(
+        files.map(async (f) => ({
+          filename: f.name,
+          mimeType: f.type || "application/octet-stream",
+          base64: await fileToBase64(f),
+        }))
+      );
+    } catch (e) {
+      return alert("Не удалось прочитать файл(ы)");
+    }
+
+    // простая проверка суммарного размера (gmail ~25 МБ)
+    const totalBytes = files.reduce((s, f) => s + (f.size || 0), 0);
+    if (totalBytes > 24 * 1024 * 1024) {
+      return alert("Суммарный размер вложений превышает ~24 МБ.");
+    }
 
     setBusyAction(true);
     try {
@@ -259,16 +232,17 @@ export default function EmailTab() {
         shared_email: SHARED_EMAIL,
         from: SHARED_EMAIL,
         to,
-        cc,
-        bcc,
+        cc: [],
+        bcc: [],
         subject: draft.subject || "",
         text: withSign,
-        html: "", // HTML не используем
-        attachments: draft.attachments || [],
+        html: "",
+        attachments,
       });
       if (!r.ok) throw new Error(await r.text());
       setComposeOpen(false);
-      setDraft({ to: "", cc: "", bcc: "", subject: "", text: "", attachments: [] });
+      setDraft({ to: "", subject: "", text: "" });
+      setFiles([]);
       await loadList();
     } catch (e) {
       alert(e?.message || "Не удалось отправить");
@@ -277,13 +251,12 @@ export default function EmailTab() {
     }
   };
 
-  // ── OAuth connect
   const connectGmail = () => {
     if (!FUNCTIONS_BASE) return alert("Не задан REACT_APP_SUPABASE_URL / REACT_APP_SUPABASE_FUNCTIONS_URL");
     window.open(`${FUNCTIONS_BASE}/oauth_google_start`, "_blank", "width=480,height=640");
   };
 
-  // ── безопасный просмотр html/text
+  // безопасный просмотр
   const iframeRef = useRef(null);
   useEffect(() => {
     if (!iframeRef.current || !selected) return;
@@ -384,7 +357,6 @@ export default function EmailTab() {
                   <button onClick={openForward}>Переслать</button>
                   <button disabled={busyAction} onClick={() => modify(selected.id, "read")}>Прочитано</button>
                   <button disabled={busyAction} onClick={() => modify(selected.id, "unread")}>Не прочитано</button>
-                  {/* УДАЛЕНИЕ УБРАНО */}
                 </div>
 
                 {!!selected.attachments?.length && (
@@ -412,7 +384,7 @@ export default function EmailTab() {
         </section>
       </div>
 
-      {/* Compose (plain + шаблоны + вложения; подпись добавится автоматически) */}
+      {/* Compose: Кому / Тема / Текст / Вложения */}
       {composeOpen && (
         <div className="mail__modal">
           <div className="mail__modal-inner">
@@ -428,47 +400,9 @@ export default function EmailTab() {
                   placeholder="email1@example.com, email2@example.com"
                 />
               </label>
-              <label>Копия (CC)
-                <input value={draft.cc} onChange={(e) => setDraft({ ...draft, cc: e.target.value })} />
-              </label>
-              <label>Скрытая копия (BCC)
-                <input value={draft.bcc} onChange={(e) => setDraft({ ...draft, bcc: e.target.value })} />
-              </label>
               <label>Тема
                 <input value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
               </label>
-
-              <div className="mail__tpls">
-                <select onChange={(e) => applyTemplate(e.target.value)} defaultValue="">
-                  <option value="" disabled>Вставить шаблон…</option>
-                  {TEMPLATES.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
-                <button onClick={pickFiles}>+ Файл</button>
-                <input type="file" ref={fileInputRef} multiple hidden onChange={onFiles} />
-              </div>
-
-              {!!draft.attachments.length && (
-                <div className="mail__attlist">
-                  {draft.attachments.map((a, i) => (
-                    <div key={i} className="mail__att">
-                      {a.filename}
-                      <button
-                        onClick={() =>
-                          setDraft((d) => ({
-                            ...d,
-                            attachments: d.attachments.filter((_, k) => k !== i),
-                          }))
-                        }
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               <label>Текст (plain)
                 <textarea
                   rows={10}
@@ -477,6 +411,32 @@ export default function EmailTab() {
                   placeholder="Напишите сообщение…"
                 />
               </label>
+
+              <div className="mail__files">
+                <label className="file-btn">
+                  + Файл
+                  <input
+                    type="file"
+                    multiple
+                    onChange={(e) => {
+                      const arr = Array.from(e.target.files || []);
+                      if (arr.length) setFiles((prev) => [...prev, ...arr]);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {!!files.length && (
+                  <div className="file-list">
+                    {files.map((f, i) => (
+                      <span key={i} className="file-chip">
+                        {f.name} ({Math.round((f.size || 0) / 1024)} кБ)
+                        <button onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="file-hint">Макс. суммарно ~24 МБ</div>
+              </div>
             </div>
             <div className="mail__modal-actions">
               <button className="is-primary" disabled={busyAction} onClick={sendMail}>Отправить</button>
@@ -529,10 +489,15 @@ export default function EmailTab() {
         .mail__modal-inner{width:min(860px,92vw);max-height:92vh;overflow:auto;background:#fff;border-radius:14px;border:1px solid #e5e7eb;box-shadow:0 20px 60px rgba(0,0,0,.25)}
         .mail__modal-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid #f3f4f6;font-weight:700}
         .mail__modal-body{display:grid;gap:10px;padding:12px 14px}
-        .mail__modal-body input, .mail__modal-body textarea, .mail__modal-body select{width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:10px; font:inherit}
-        .mail__tpls{display:flex;gap:8px;align-items:center}
-        .mail__attlist{display:flex;gap:8px;flex-wrap:wrap}
-        .mail__att{display:flex;gap:6px;align-items:center;padding:4px 8px;border:1px solid #e5e7eb;border-radius:10px}
+        .mail__modal-body input, .mail__modal-body textarea{width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:10px; font:inherit}
+        .mail__files{display:grid;gap:8px}
+        .file-btn{display:inline-flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #d1d5db;border-radius:10px;background:#fff;cursor:pointer;width:max-content}
+        .file-btn input{display:none}
+        .file-list{display:flex;flex-wrap:wrap;gap:6px}
+        .file-chip{background:#f3f4f6;border:1px solid #e5e7eb;border-radius:999px;padding:4px 8px;display:inline-flex;gap:6px;align-items:center;font-size:12px}
+        .file-chip button{border:none;background:transparent;cursor:pointer;font-weight:700}
+        .file-hint{font-size:12px;color:#6b7280}
+
         .mail__modal-actions{display:flex;justify-content:flex-end;gap:10px;padding:12px 14px;border-top:1px solid #f3f4f6}
         .mail__modal-actions .is-primary{background:#2563eb;color:#fff;border:1px solid #2563eb}
         .mail__modal-actions button{padding:8px 10px;border-radius:10px;border:1px solid #d1d5db;background:#fff;cursor:pointer}
