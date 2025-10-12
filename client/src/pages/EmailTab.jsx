@@ -1,12 +1,16 @@
 // client/src/pages/EmailTab.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, FUNCTIONS_URL, SHARED_EMAIL } from '../supabaseClient';
+import { supabase, FUNCTIONS_URL } from '../supabaseClient';
 
 export default function EmailTab() {
   const [loading, setLoading] = useState(false);
   const [list, setList] = useState([]);
   const [error, setError] = useState('');
   const [composeOpen, setComposeOpen] = useState(false);
+
+  // фильтр и поиск
+  const [folder, setFolder] = useState('inbox'); // inbox | sent | all
+  const [search, setSearch] = useState('');
 
   const toRef = useRef();
   const subjectRef = useRef();
@@ -21,6 +25,16 @@ export default function EmailTab() {
     }),
     []
   );
+
+  // Собрать gmail query string по текущему фильтру
+  function buildQuery() {
+    const parts = [];
+    if (folder === 'inbox') parts.push('in:inbox');
+    else if (folder === 'sent') parts.push('in:sent');
+    // если "all" — не добавляем ограничение по папке
+    if (search.trim()) parts.push(search.trim());
+    return parts.join(' ');
+  }
 
   async function load() {
     try {
@@ -39,10 +53,7 @@ export default function EmailTab() {
             ? { Authorization: `Bearer ${session.access_token}` }
             : {}),
         },
-        body: JSON.stringify({
-          shared_email: SHARED_EMAIL, // ВАЖНО
-          q: '',
-        }),
+        body: JSON.stringify({ q: buildQuery() }),
       });
 
       if (!r.ok) {
@@ -62,12 +73,18 @@ export default function EmailTab() {
 
   useEffect(() => {
     if (!FUNCTIONS_URL) {
-      setError('Не задан FUNCTIONS_URL. Проверьте .env');
+      setError('Не задан FUNCTIONS_URL. Проверьте переменные окружения.');
       return;
     }
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // первый рендер
+
+  // обновлять список при смене фильтра/поиска
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folder]);
 
   async function send(e) {
     e.preventDefault();
@@ -77,7 +94,6 @@ export default function EmailTab() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-
     const subject = subjectRef.current?.value || '';
     const text = textRef.current?.value || '';
 
@@ -101,7 +117,6 @@ export default function EmailTab() {
 
     try {
       setLoading(true);
-
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -114,14 +129,7 @@ export default function EmailTab() {
             ? { Authorization: `Bearer ${session.access_token}` }
             : {}),
         },
-        body: JSON.stringify({
-          shared_email: SHARED_EMAIL, // ВАЖНО
-          from: SHARED_EMAIL,         // чаще всего требуется и from
-          to,
-          subject,
-          text,
-          attachments,
-        }),
+        body: JSON.stringify({ to, subject, text, attachments }),
       });
 
       if (!r.ok) {
@@ -130,6 +138,8 @@ export default function EmailTab() {
       }
 
       setComposeOpen(false);
+      // после отправки покажем «Отправленные»
+      setFolder('sent');
       await load();
       alert('Письмо отправлено');
     } catch (e2) {
@@ -151,10 +161,41 @@ export default function EmailTab() {
         </div>
       )}
 
-      <div style={{ marginBottom: 12 }}>
+      {/* Панель управления списком */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          marginBottom: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <label>
+          Папка:{' '}
+          <select
+            value={folder}
+            onChange={(e) => setFolder(e.target.value)}
+            disabled={loading}
+          >
+            <option value="inbox">Входящие</option>
+            <option value="sent">Отправленные</option>
+            <option value="all">Все</option>
+          </select>
+        </label>
+
+        <input
+          placeholder="Поиск (любой gmail-запрос: from:, subject:, has:attachment, и т.д.)"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && load()}
+          style={{ flex: 1, minWidth: 280 }}
+        />
+
         <button onClick={() => load()} disabled={loading}>
           Обновить
-        </button>{' '}
+        </button>
+
         <button onClick={() => setComposeOpen(true)} disabled={loading}>
           Написать
         </button>
