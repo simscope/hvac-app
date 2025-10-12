@@ -4,11 +4,7 @@ import { supabase, FUNCTIONS_URL } from '../supabaseClient';
 
 const styles = {
   wrap: { display: 'flex', gap: 16, padding: 16 },
-  left: {
-    width: 320,
-    borderRight: '1px solid #e5e7eb',
-    paddingRight: 16,
-  },
+  left: { width: 320, borderRight: '1px solid #e5e7eb', paddingRight: 16 },
   right: { flex: 1 },
   row: { marginBottom: 8 },
   input: { width: '100%', padding: 8, border: '1px solid #ddd', borderRadius: 6 },
@@ -42,8 +38,8 @@ export default function EmailTab() {
   const [listLoading, setListLoading] = useState(false);
   const [list, setList] = useState([]);
   const [error, setError] = useState('');
-  const [connected, setConnected] = useState(true); // если получим 401/404 — станет false
-  const [folder, setFolder] = useState('inbox'); // inbox | sent
+  const [connected, setConnected] = useState(true);
+  const [folder, setFolder] = useState('inbox'); // 'inbox' | 'sent'
   const [q, setQ] = useState('');
 
   const [composeOpen, setComposeOpen] = useState(false);
@@ -52,32 +48,36 @@ export default function EmailTab() {
   const textRef = useRef();
   const filesRef = useRef();
 
-  const API = useMemo(() => {
-    return {
+  const API = useMemo(
+    () => ({
       list: `${FUNCTIONS_URL}/gmail_list`,
       send: `${FUNCTIONS_URL}/gmail_send`,
-      // вспомогательно — дернуть и понять «привязан ли аккаунт»
       get: `${FUNCTIONS_URL}/gmail_get`,
       oauthStart: `${FUNCTIONS_URL}/oauth_google_start`,
-    };
-  }, []);
+    }),
+    []
+  );
 
-  // Универсальный хелпер с авторизацией
+  // Авторизованный fetch (обязателен Bearer)
   async function authedFetch(url, options = {}) {
     const {
       data: { session },
     } = await supabase.auth.getSession();
 
+    if (!session?.access_token) {
+      throw new Error('Нет сессии Supabase. Войдите в систему и повторите.');
+    }
+
     const headers = {
       'Content-Type': 'application/json',
       ...(options.headers || {}),
-      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      Authorization: `Bearer ${session.access_token}`,
     };
 
     return fetch(url, { ...options, headers });
   }
 
-  // ------------------ загрузка писем -------------------
+  // ------------- Загрузка списка писем -------------
   async function loadList() {
     if (!FUNCTIONS_URL) {
       setError('Не задан FUNCTIONS_URL. Проверьте переменные окружения.');
@@ -86,7 +86,6 @@ export default function EmailTab() {
 
     try {
       setError('');
-      setConnected(true);
       setListLoading(true);
 
       const r = await authedFetch(API.list, {
@@ -95,8 +94,8 @@ export default function EmailTab() {
       });
 
       if (!r.ok) {
-        // Обработка типовых ситуаций
         const txt = await r.text();
+
         if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) {
           setConnected(false);
           throw new Error('Аккаунт Gmail не привязан.');
@@ -108,8 +107,14 @@ export default function EmailTab() {
         throw new Error(`gmail_list: ${r.status} ${txt}`);
       }
 
-      const data = await r.json();
-      setList(data?.messages || []);
+      // Диагностическое логирование — поможет увидеть сырой ответ
+      const raw = await r.clone().text();
+      console.log('gmail_list status=', r.status);
+      console.log('gmail_list raw=', raw);
+
+      const data = JSON.parse(raw || '{}');
+      setList(Array.isArray(data?.messages) ? data.messages : []);
+      setConnected(true);
     } catch (e) {
       console.error(e);
       setList([]);
@@ -124,7 +129,7 @@ export default function EmailTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder]);
 
-  // ------------------ отправка письма -------------------
+  // ------------- Отправка письма -------------
   async function send(e) {
     e.preventDefault();
     setError('');
@@ -133,10 +138,11 @@ export default function EmailTab() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+
     const subject = subjectRef.current?.value || '';
     const text = textRef.current?.value || '';
 
-    // вложения
+    // Вложения
     const files = Array.from(filesRef.current?.files || []);
     const attachments = await Promise.all(
       files.map(
@@ -160,17 +166,11 @@ export default function EmailTab() {
 
       const r = await authedFetch(API.send, {
         method: 'POST',
-        body: JSON.stringify({
-          to,
-          subject,
-          text,
-          attachments,
-        }),
+        body: JSON.stringify({ to, subject, text, attachments }),
       });
 
       if (!r.ok) {
         const txt = await r.text();
-        // Если refresh_token протух, сервер может вернуть 401/500 — показываем понятный текст
         if (r.status === 401 && txt.includes('NEEDS_RELINK')) {
           setConnected(false);
         }
@@ -178,10 +178,11 @@ export default function EmailTab() {
       }
 
       alert('Письмо отправлено');
-      setComposeOpen(false);
-      // после отправки — покажем «Отправленные»
+      // сначала переключаем папку и обновляем список
       setFolder('sent');
       await loadList();
+      // затем закрываем модалку
+      setComposeOpen(false);
     } catch (e2) {
       console.error(e2);
       setError(e2.message || String(e2));
@@ -191,13 +192,17 @@ export default function EmailTab() {
     }
   }
 
-  // ------------------ привязка (OAuth) -------------------
+  // ------------- Привязка (OAuth) -------------
   async function connectGmail() {
     setError('');
     try {
-      // открываем окно oauth_start
       const w = window.open(API.oauthStart, 'oauth_gmail', 'width=600,height=700');
-      // ждём закрытия и затем пробуем получить список
+      if (!w) {
+        setError(
+          'Браузер заблокировал всплывающее окно. Разрешите всплывающие окна для этого домена и попробуйте снова.'
+        );
+        return;
+      }
       const timer = setInterval(() => {
         if (!w || w.closed) {
           clearInterval(timer);
@@ -210,7 +215,7 @@ export default function EmailTab() {
     }
   }
 
-  // ------------------ UI -------------------
+  // ------------- UI -------------
   return (
     <div style={styles.wrap}>
       {/* ЛЕВАЯ ПАНЕЛЬ */}
