@@ -2,24 +2,44 @@
 import { createClient } from '@supabase/supabase-js';
 
 /**
- * Для CRA (react-scripts) переменные должны начинаться с REACT_APP_
- * Для Vite — с VITE_
- * Если у вас CRA, используйте REACT_APP_ (как ниже).
+ * Поддерживаем и CRA, и Vite, и старые импорты.
+ * CRA:   REACT_APP_*
+ * Vite:  VITE_*
  */
 
-export const SUPABASE_URL       = process.env.REACT_APP_SUPABASE_URL;
-export const SUPABASE_ANON_KEY  = process.env.REACT_APP_SUPABASE_ANON_KEY;
+// Базовые переменные (оба префикса)
+const URL =
+  process.env.REACT_APP_SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  '';
 
-// URL до edge-функций Supabase
-export const FUNCTIONS_URL =
+const ANON =
+  process.env.REACT_APP_SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  '';
+
+// URL функций
+const FN_URL =
   process.env.REACT_APP_SUPABASE_FUNCTIONS_URL ||
-  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1` : '');
+  process.env.VITE_SUPABASE_FUNCTIONS_URL ||
+  (URL ? `${URL}/functions/v1` : '');
 
-// Общая почта (можно переопределить из .env)
-export const SHARED_EMAIL =
-  process.env.REACT_APP_SHARED_EMAIL || 'simscope.office@gmail.com';
+// Общая почта
+const SHARED =
+  process.env.REACT_APP_SHARED_EMAIL ||
+  process.env.VITE_SHARED_EMAIL ||
+  'simscope.office@gmail.com';
 
-// Инициализация клиента
+// --- Экспорт в новом стиле
+export const SUPABASE_URL = URL;
+export const SUPABASE_ANON_KEY = ANON;
+export const FUNCTIONS_URL = FN_URL;
+export const SHARED_EMAIL = SHARED;
+
+// --- Алиасы для обратной совместимости (чтобы не править старые импорты)
+export const supabaseUrl = SUPABASE_URL;
+export const supabaseAnonKey = SUPABASE_ANON_KEY;
+
+// --- Клиент
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
 export default supabase;
