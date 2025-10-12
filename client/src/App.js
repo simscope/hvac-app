@@ -166,7 +166,7 @@ function Shell() {
           <Route
             path="/email"
             element={
-              <ProtectedRoute allow="admin">
+              <ProtectedRoute allow={['admin', 'manager']}>
                 <EmailTab />
               </ProtectedRoute>
             }
