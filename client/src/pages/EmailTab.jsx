@@ -5,31 +5,24 @@ import { supabase } from "../supabaseClient";
 /* --------------------------- helpers --------------------------- */
 
 function getFunctionsBase() {
-  // 1) пробуем .env (Vite)
+  // 1) .env (Vite)
   try {
     const env =
-      import.meta &&
-      import.meta.env &&
-      import.meta.env.VITE_SUPABASE_FUNCTIONS_URL
-        ? String(import.meta.env.VITE_SUPABASE_FUNCTIONS_URL).trim()
-        : "";
+      import.meta?.env?.VITE_SUPABASE_FUNCTIONS_URL?.trim() || "";
     if (env) return env.replace(/\/+$/, "");
-  } catch (_) {}
+  } catch {}
 
-  // 2) строим по URL проекта Supabase
+  // 2) Собираем по URL проекта Supabase
   const sbUrl =
-    (supabase && supabase.rest && supabase.rest.url) ||
-    (supabase && supabase.supabaseUrl) ||
-    "";
-
+    (supabase && (supabase.supabaseUrl || supabase.rest?.url)) || "";
   if (sbUrl) {
     try {
       const u = new URL(sbUrl);
       return (u.origin || "").replace(/\/+$/, "") + "/functions/v1";
-    } catch (_) {}
+    } catch {}
   }
 
-  // 3) резерв
+  // 3) Резерв
   return "/functions/v1";
 }
 
@@ -53,11 +46,15 @@ function fileToBase64(file) {
 
 export default function EmailTab() {
   const base = useMemo(getFunctionsBase, []);
+  // общий ящик можно задать в .env (VITE_SHARED_EMAIL) — иначе дефолт
+  const SHARED_EMAIL =
+    (import.meta?.env?.VITE_SHARED_EMAIL || "simscope.office@gmail.com").trim();
+
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
-  const [list, setList] = useState([]); // [{id, subject, from, snippet, internalDate, unread, hasAttachments}]
+  const [list, setList] = useState([]);
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState(null); // объект письма с контентом
+  const [selected, setSelected] = useState(null);
 
   const [composeOpen, setComposeOpen] = useState(false);
   const [to, setTo] = useState("");
@@ -65,9 +62,51 @@ export default function EmailTab() {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [sending, setSending] = useState(false);
-  const [accessToken, setAccessToken] = useState(""); // временно
+
+  const [isLinked, setIsLinked] = useState(null); // null=не знаем, true/false
+  const [linking, setLinking] = useState(false);
 
   const fileRef = useRef(null);
+
+  /* -------------------- статус привязки ящика -------------------- */
+  const checkLinked = async () => {
+    try {
+      const url =
+        base.replace(/\/+$/, "") +
+        "/gmail_status?shared_email=" +
+        encodeURIComponent(SHARED_EMAIL);
+      const r = await fetch(url);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.message || "status error");
+      setIsLinked(!!data?.linked);
+    } catch {
+      // если функции нет — не показываем баннер
+      setIsLinked(true);
+    }
+  };
+
+  const startOauth = async () => {
+    setLinking(true);
+    try {
+      const url =
+        base.replace(/\/+$/, "") +
+        "/oauth_google_start?shared_email=" +
+        encodeURIComponent(SHARED_EMAIL);
+      // открываем auth-окно
+      const w = window.open(url, "oauth_google", "width=720,height=800");
+      // простое ожидание закрытия
+      const timer = setInterval(async () => {
+        if (!w || w.closed) {
+          clearInterval(timer);
+          await checkLinked();
+          setLinking(false);
+        }
+      }, 800);
+    } catch (e) {
+      console.error(e);
+      setLinking(false);
+    }
+  };
 
   /* --------------------------- list --------------------------- */
 
@@ -80,23 +119,20 @@ export default function EmailTab() {
       const url =
         base.replace(/\/+$/, "") +
         "/gmail_list" +
-        (query ? "?q=" + encodeURIComponent(query) : "");
+        "?shared_email=" +
+        encodeURIComponent(SHARED_EMAIL) +
+        (query ? "&q=" + encodeURIComponent(query) : "");
 
       const r = await fetch(url, { method: "GET" });
       const data = await r.json().catch(() => ({}));
 
       if (!r.ok) {
         throw new Error(
-          (data && (data.error || data.message)) ||
-            `HTTP ${r.status} ${r.statusText}`
+          data?.error || data?.message || `HTTP ${r.status} ${r.statusText}`
         );
       }
 
-      // Нормализуем возможные форматы результатов
-      const items =
-        (data && (data.items || data.messages || data.data || [])) || [];
-
-      // Приводим к простому виду
+      const items = data?.items || data?.messages || data?.data || [];
       const mapped = items.map((it) => ({
         id: it.id || it.messageId || it.gmailId || "",
         subject: it.subject || it.snippetSubject || "(без темы)",
@@ -118,9 +154,10 @@ export default function EmailTab() {
   };
 
   useEffect(() => {
+    checkLinked();
     loadList("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base]);
+  }, [base, SHARED_EMAIL]);
 
   const onSearch = (e) => {
     e.preventDefault();
@@ -133,18 +170,20 @@ export default function EmailTab() {
     setSelected({ id, loading: true });
     try {
       const url =
-        base.replace(/\/+$/, "") + "/gmail_get?id=" + encodeURIComponent(id);
+        base.replace(/\/+$/, "") +
+        "/gmail_get?id=" +
+        encodeURIComponent(id) +
+        "&shared_email=" +
+        encodeURIComponent(SHARED_EMAIL);
       const r = await fetch(url, { method: "GET" });
       const data = await r.json().catch(() => ({}));
 
       if (!r.ok) {
         throw new Error(
-          (data && (data.error || data.message)) ||
-            `HTTP ${r.status} ${r.statusText}`
+          data?.error || data?.message || `HTTP ${r.status} ${r.statusText}`
         );
       }
 
-      // ожидаем поля html/text/attachments + служебные заголовки
       const msg = {
         id,
         subject: data.subject || "(без темы)",
@@ -153,9 +192,7 @@ export default function EmailTab() {
         date: data.date || data.internalDate || "",
         html: data.html || "",
         text: data.text || "",
-        attachments: Array.isArray(data.attachments)
-          ? data.attachments
-          : [], // [{filename, size, mimeType, url/id}]
+        attachments: Array.isArray(data.attachments) ? data.attachments : [],
       };
 
       setSelected({ ...msg, loading: false });
@@ -182,7 +219,7 @@ export default function EmailTab() {
     setAttachments((p) => p.concat(arr));
     try {
       ev.target.value = "";
-    } catch (_) {}
+    } catch {}
   };
 
   const removeAttachment = (i) => {
@@ -194,14 +231,10 @@ export default function EmailTab() {
       alert("Укажите получателя");
       return;
     }
-    if (!accessToken.trim()) {
-      alert("Временно требуется access_token (Google OAuth)");
-      return;
-    }
-
     setSending(true);
     try {
       const payload = {
+        shared_email: SHARED_EMAIL,
         to: to
           .split(",")
           .map((s) => s.trim())
@@ -209,7 +242,6 @@ export default function EmailTab() {
         subject,
         text,
         attachments,
-        access_token: accessToken.trim(),
       };
 
       const r = await fetch(base.replace(/\/+$/, "") + "/gmail_send", {
@@ -219,10 +251,9 @@ export default function EmailTab() {
       });
 
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || (data && data.ok === false)) {
+      if (!r.ok || data?.ok === false) {
         throw new Error(
-          (data && (data.error || data.message || data.body)) ||
-            `HTTP ${r.status} ${r.statusText}`
+          data?.error || data?.message || data?.body || "Send error"
         );
       }
 
@@ -232,7 +263,6 @@ export default function EmailTab() {
       setSubject("");
       setText("");
       setAttachments([]);
-      // обновим входящие
       loadList(q);
     } catch (e) {
       console.error("gmail_send error:", e);
@@ -248,10 +278,36 @@ export default function EmailTab() {
     <div style={{ padding: 12, height: "calc(100vh - 64px)" }}>
       <h2 style={{ margin: "8px 0 12px" }}>Email</h2>
 
+      {/* баннер статуса общего ящика */}
+      {isLinked === false && (
+        <div
+          style={{
+            background: "#fff7ed",
+            border: "1px solid #fed7aa",
+            color: "#7c2d12",
+            padding: "10px 12px",
+            borderRadius: 10,
+            marginBottom: 10,
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            Общий ящик <b>{SHARED_EMAIL}</b> не подключён. Нажмите
+            «Подключить Gmail» под администратором один раз.
+          </div>
+          <button disabled={linking} onClick={startOauth}>
+            {linking ? "Ожидание…" : "Подключить Gmail"}
+          </button>
+        </div>
+      )}
+
       {/* панель действий */}
       <form onSubmit={onSearch} style={{ display: "flex", gap: 8 }}>
         <input
-          placeholder="Поиск (Gmail синтаксис: from:, subject:, has:attachment ...)"
+          placeholder="Поиск (Gmail: from:, subject:, has:attachment ...)"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           style={{
@@ -286,7 +342,7 @@ export default function EmailTab() {
           minHeight: 420,
         }}
       >
-        {/* левая колонка — список */}
+        {/* список */}
         <div
           style={{
             border: "1px solid #e5e7eb",
@@ -370,7 +426,7 @@ export default function EmailTab() {
           </div>
         </div>
 
-        {/* правая колонка — просмотр письма */}
+        {/* просмотр */}
         <div
           style={{
             border: "1px solid #e5e7eb",
@@ -420,7 +476,6 @@ export default function EmailTab() {
                     </div>
                   </div>
 
-                  {/* html приоритетно, fallback — text */}
                   {selected.html ? (
                     <iframe
                       title={"mail-" + selected.id}
@@ -447,7 +502,6 @@ export default function EmailTab() {
                     </pre>
                   )}
 
-                  {/* вложения */}
                   {!!(selected.attachments || []).length && (
                     <div style={{ marginTop: 12 }}>
                       <div style={{ fontWeight: 700, marginBottom: 6 }}>
@@ -464,7 +518,9 @@ export default function EmailTab() {
                                 "/gmail_get?id=" +
                                 encodeURIComponent(selected.id) +
                                 "&att=" +
-                                encodeURIComponent(a.id)
+                                encodeURIComponent(a.id) +
+                                "&shared_email=" +
+                                encodeURIComponent(SHARED_EMAIL)
                               : "");
                           return (
                             <li key={i}>
@@ -608,24 +664,6 @@ export default function EmailTab() {
                   </ul>
                 )}
               </div>
-
-              <label>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>
-                  Google access_token (временно)
-                </div>
-                <input
-                  value={accessToken}
-                  onChange={(e) => setAccessToken(e.target.value)}
-                  placeholder="ya29.a0..."
-                  style={{
-                    width: "100%",
-                    padding: "8px 10px",
-                    borderRadius: 8,
-                    border: "1px solid #d1d5db",
-                    outline: "none",
-                  }}
-                />
-              </label>
 
               <div style={{ display: "flex", gap: 8, justifyContent: "end" }}>
                 <button onClick={() => setComposeOpen(false)}>Отмена</button>
