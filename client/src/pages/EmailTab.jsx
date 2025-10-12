@@ -7,12 +7,12 @@ export default function EmailTab() {
   const [list, setList] = useState([]);
   const [error, setError] = useState('');
   const [composeOpen, setComposeOpen] = useState(false);
+
   const toRef = useRef();
   const subjectRef = useRef();
   const textRef = useRef();
   const filesRef = useRef();
 
-  // Готовые URL для edge-функций
   const API = useMemo(
     () => ({
       list: `${FUNCTIONS_URL}/gmail_list`,
@@ -40,7 +40,7 @@ export default function EmailTab() {
             : {}),
         },
         body: JSON.stringify({
-          shared_email: SHARED_EMAIL, // ВАЖНО: прокидываем общую почту
+          shared_email: SHARED_EMAIL, // ВАЖНО
           q: '',
         }),
       });
@@ -62,7 +62,7 @@ export default function EmailTab() {
 
   useEffect(() => {
     if (!FUNCTIONS_URL) {
-      setError('Не задан FUNCTIONS_URL. Проверьте переменные окружения.');
+      setError('Не задан FUNCTIONS_URL. Проверьте .env');
       return;
     }
     load();
@@ -81,7 +81,6 @@ export default function EmailTab() {
     const subject = subjectRef.current?.value || '';
     const text = textRef.current?.value || '';
 
-    // вложения -> base64
     const files = Array.from(filesRef.current?.files || []);
     const attachments = await Promise.all(
       files.map(
@@ -117,7 +116,7 @@ export default function EmailTab() {
         },
         body: JSON.stringify({
           shared_email: SHARED_EMAIL, // ВАЖНО
-          from: SHARED_EMAIL,         // многие реализации ожидают ещё и from
+          from: SHARED_EMAIL,         // чаще всего требуется и from
           to,
           subject,
           text,
