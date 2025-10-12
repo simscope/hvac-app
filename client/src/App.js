@@ -1,13 +1,6 @@
-// client/src/App.js
+// src/App.js
 import React, { useEffect, useState } from 'react';
-import {
-  BrowserRouter,
-  Routes,
-  Route,
-  Navigate,
-  useLocation,
-  useParams,
-} from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { supabase } from './supabaseClient';
@@ -34,13 +27,10 @@ import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
 
-// 🔹 страница задач
+// Задачи
 import TasksTodayPage from './pages/TasksTodayPage.jsx';
 
-/* ──────────────────────────────────────────────────────────────────────────────
-   Гард на доступ к конкретной заявке для техника:
-   admin / manager — всегда; tech — только если заявка назначена на него
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ───────────── Гард доступа к конкретной заявке (для техника) ───────────── */
 function JobAccess({ children }) {
   const { role, profile, user, loading } = useAuth();
   const { id } = useParams();
@@ -52,17 +42,20 @@ function JobAccess({ children }) {
   useEffect(() => {
     let alive = true;
 
-    async function run() {
+    (async () => {
       if (loading) return;
+
       if (!user) {
         if (alive) { setOk(false); setChecking(false); }
         return;
       }
+
       if (role === 'admin' || role === 'manager') {
         if (alive) { setOk(true); setChecking(false); }
         return;
       }
-      // tech: проверяем владельца заявки
+
+      // role = tech → проверяем, что заявка назначена на этого техника
       setChecking(true);
       const { data, error } = await supabase
         .from('jobs')
@@ -83,9 +76,8 @@ function JobAccess({ children }) {
       const allow = !!profile?.id && jobTechId === profile.id;
       setOk(!!allow);
       setChecking(false);
-    }
+    })();
 
-    run();
     return () => { alive = false; };
   }, [id, role, profile?.id, user, loading]);
 
@@ -95,9 +87,7 @@ function JobAccess({ children }) {
   return children;
 }
 
-/* ──────────────────────────────────────────────────────────────────────────────
-   Оболочка с верхним меню
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────── Оболочка с верхним меню ─────────────────────── */
 function Shell() {
   const { pathname } = useLocation();
   const hideNav = pathname === '/login' || pathname === '/no-access';
@@ -111,7 +101,7 @@ function Shell() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/no-access" element={<NoAccessPage />} />
 
-          {/* 🔹 Задачи на сегодня — менеджер + админ */}
+          {/* Задачи — менеджер + админ */}
           <Route
             path="/tasks/today"
             element={
@@ -120,10 +110,9 @@ function Shell() {
               </ProtectedRoute>
             }
           />
-          {/* Алиас /tasks → /tasks/today */}
           <Route path="/tasks" element={<Navigate to="/tasks/today" replace />} />
 
-          {/* Заявки (список) — менеджер + админ */}
+          {/* Заявки — менеджер + админ */}
           <Route
             path="/jobs"
             element={
@@ -133,7 +122,7 @@ function Shell() {
             }
           />
 
-          {/* Все заявки (расширенный список) — менеджер + админ */}
+          {/* Все заявки — менеджер + админ */}
           <Route
             path="/jobs/all"
             element={
@@ -230,7 +219,7 @@ function Shell() {
               </ProtectedRoute>
             }
           />
-          {/* Алиас для старых ссылок /job/:id */}
+          {/* Алиас для старых ссылок */}
           <Route
             path="/job/:id"
             element={
@@ -251,15 +240,11 @@ function Shell() {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────────────────
-   Корневой экспорт
-   ─────────────────────────────────────────────────────────────────────────── */
+/* ───────────────────────────── Корневой экспорт ──────────────────────────── */
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Shell />
-      </AuthProvider>
-    </BrowserRouter>
+    <AuthProvider>
+      <Shell />
+    </AuthProvider>
   );
 }
