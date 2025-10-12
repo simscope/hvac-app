@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, FUNCTIONS_URL } from '../supabaseClient';
 
+const SHARED_EMAIL = 'simscope.office@gmail.com'; // <<< ваш подключённый ящик
+
 export default function EmailTab() {
   const [loading, setLoading] = useState(false);
   const [list, setList] = useState([]);
@@ -26,12 +28,10 @@ export default function EmailTab() {
     []
   );
 
-  // Собрать gmail query string по текущему фильтру
   function buildQuery() {
     const parts = [];
     if (folder === 'inbox') parts.push('in:inbox');
     else if (folder === 'sent') parts.push('in:sent');
-    // если "all" — не добавляем ограничение по папке
     if (search.trim()) parts.push(search.trim());
     return parts.join(' ');
   }
@@ -53,7 +53,10 @@ export default function EmailTab() {
             ? { Authorization: `Bearer ${session.access_token}` }
             : {}),
         },
-        body: JSON.stringify({ q: buildQuery() }),
+        body: JSON.stringify({
+          q: buildQuery(),
+          shared_email: SHARED_EMAIL,        // <<<< добавлено
+        }),
       });
 
       if (!r.ok) {
@@ -78,9 +81,8 @@ export default function EmailTab() {
     }
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // первый рендер
+  }, []);
 
-  // обновлять список при смене фильтра/поиска
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,7 +131,13 @@ export default function EmailTab() {
             ? { Authorization: `Bearer ${session.access_token}` }
             : {}),
         },
-        body: JSON.stringify({ to, subject, text, attachments }),
+        body: JSON.stringify({
+          shared_email: SHARED_EMAIL,   // <<<< добавлено
+          to,
+          subject,
+          text,
+          attachments,
+        }),
       });
 
       if (!r.ok) {
@@ -138,7 +146,6 @@ export default function EmailTab() {
       }
 
       setComposeOpen(false);
-      // после отправки покажем «Отправленные»
       setFolder('sent');
       await load();
       alert('Письмо отправлено');
@@ -161,7 +168,6 @@ export default function EmailTab() {
         </div>
       )}
 
-      {/* Панель управления списком */}
       <div
         style={{
           display: 'flex',
@@ -185,7 +191,7 @@ export default function EmailTab() {
         </label>
 
         <input
-          placeholder="Поиск (любой gmail-запрос: from:, subject:, has:attachment, и т.д.)"
+          placeholder="Поиск (gmail-запрос: from:, subject:, has:attachment, …)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && load()}
