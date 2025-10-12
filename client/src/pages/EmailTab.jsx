@@ -1,11 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CRA: берём env через process.env.REACT_APP_*
-// ─────────────────────────────────────────────────────────────────────────────
-const SUPABASE_URL =
-  (process.env.REACT_APP_SUPABASE_URL || "").replace(/\/+$/, "");
+// ── ENV для CRA
+const SUPABASE_URL = (process.env.REACT_APP_SUPABASE_URL || "").replace(/\/+$/, "");
 const FUNCTIONS_BASE =
   (process.env.REACT_APP_SUPABASE_FUNCTIONS_URL || "").replace(/\/+$/, "") ||
   (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1` : "");
@@ -39,9 +36,7 @@ export default function EmailTab() {
     return !FUNCTIONS_BASE || errList === "MAIL_ACCOUNT_NOT_FOUND";
   }, [errList]);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // API helpers
-  // ───────────────────────────────────────────────────────────────────────────
+  // helper для вызова Edge-функций
   const api = async (path, payload) => {
     if (!FUNCTIONS_BASE) throw new Error("Не задан URL функций");
     const r = await fetch(`${FUNCTIONS_BASE}/${path}`, {
@@ -55,9 +50,7 @@ export default function EmailTab() {
     return r;
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Список
-  // ───────────────────────────────────────────────────────────────────────────
+  // список
   const loadList = async (opts = {}) => {
     setLoadingList(true);
     setErrList(null);
@@ -90,9 +83,7 @@ export default function EmailTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [FUNCTIONS_BASE]);
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Письмо
-  // ───────────────────────────────────────────────────────────────────────────
+  // письмо
   const loadMessage = async (id) => {
     if (!id) return;
     setLoadingMsg(true);
@@ -110,9 +101,7 @@ export default function EmailTab() {
     }
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Modify
-  // ───────────────────────────────────────────────────────────────────────────
+  // modify
   const modify = async (id, action) => {
     if (!id) return;
     setBusyAction(true);
@@ -128,11 +117,9 @@ export default function EmailTab() {
     }
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Compose / Send
-  // ───────────────────────────────────────────────────────────────────────────
+  // compose (plain only)
   const [composeOpen, setComposeOpen] = useState(false);
-  const [draft, setDraft] = useState({ to: "", subject: "", text: "", html: "" });
+  const [draft, setDraft] = useState({ to: "", subject: "", text: "" });
 
   const sendMail = async () => {
     if (!draft.to) return alert("Укажите получателя");
@@ -144,12 +131,12 @@ export default function EmailTab() {
         to: draft.to.split(/[,\s;]+/).filter(Boolean),
         subject: draft.subject || "",
         text: draft.text || "",
-        html: draft.html || "",
+        html: "", // HTML убрали
         attachments: [],
       });
       if (!r.ok) throw new Error(await r.text());
       setComposeOpen(false);
-      setDraft({ to: "", subject: "", text: "", html: "" });
+      setDraft({ to: "", subject: "", text: "" });
       await loadList();
     } catch (e) {
       alert(e?.message || "Не удалось отправить");
@@ -158,9 +145,7 @@ export default function EmailTab() {
     }
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Connect Gmail
-  // ───────────────────────────────────────────────────────────────────────────
+  // подключение Gmail
   const connectGmail = () => {
     if (!FUNCTIONS_BASE) {
       alert("Не задан REACT_APP_SUPABASE_URL / REACT_APP_SUPABASE_FUNCTIONS_URL");
@@ -169,7 +154,7 @@ export default function EmailTab() {
     window.open(`${FUNCTIONS_BASE}/oauth_google_start`, "_blank", "width=480,height=640");
   };
 
-  // безопасный HTML → iframe
+  // безопасный просмотр HTML
   const iframeRef = useRef(null);
   useEffect(() => {
     if (iframeRef.current && selected && (selected.html != null || selected.text != null)) {
@@ -215,7 +200,7 @@ export default function EmailTab() {
       </div>
 
       <div className="mail__body">
-        {/* Список */}
+        {/* список */}
         <aside className="mail__list">
           {loadingList && <div className="mail__empty">Загрузка…</div>}
           {!loadingList && errList && (
@@ -249,7 +234,7 @@ export default function EmailTab() {
           )}
         </aside>
 
-        {/* Просмотр */}
+        {/* просмотр */}
         <section className="mail__viewer">
           {!selected && !loadingMsg && <div className="mail__placeholder">Выберите письмо слева</div>}
           {loadingMsg && <div className="mail__placeholder">Открываем…</div>}
@@ -284,7 +269,7 @@ export default function EmailTab() {
         </section>
       </div>
 
-      {/* Compose */}
+      {/* Compose — БЕЗ HTML поля */}
       {composeOpen && (
         <div className="mail__modal">
           <div className="mail__modal-inner">
@@ -311,18 +296,10 @@ export default function EmailTab() {
               <label>
                 Текст (plain)
                 <textarea
-                  rows={6}
+                  rows={8}
                   value={draft.text}
                   onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-                />
-              </label>
-              <label>
-                HTML (необязательно)
-                <textarea
-                  rows={6}
-                  value={draft.html}
-                  onChange={(e) => setDraft({ ...draft, html: e.target.value })}
-                  placeholder="<p>Здравствуйте…</p>"
+                  placeholder="Напишите сообщение…"
                 />
               </label>
             </div>
