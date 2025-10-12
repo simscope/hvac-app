@@ -1,6 +1,5 @@
-// src/pages/EmailTab.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, FUNCTIONS_URL } from '../supabaseClient';
+import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
 
 const styles = {
   wrap: { display: 'flex', gap: 16, padding: 16 },
@@ -24,6 +23,9 @@ const styles = {
     marginBottom: 8,
     background: '#fff',
   },
+  meta: { color: '#64748b', fontSize: 12, marginBottom: 4 },
+  from: { fontWeight: 600 },
+  subject: { marginLeft: 6 },
   modal: {
     border: '1px solid #ddd',
     padding: 12,
@@ -58,11 +60,9 @@ export default function EmailTab() {
     []
   );
 
-  // Авторизованный fetch (обязателен Bearer)
+  // Авторизованный fetch (Bearer + apikey на всякий случай)
   async function authedFetch(url, options = {}) {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const { data: { session } = {} } = await supabase.auth.getSession();
 
     if (!session?.access_token) {
       throw new Error('Нет сессии Supabase. Войдите в систему и повторите.');
@@ -70,8 +70,9 @@ export default function EmailTab() {
 
     const headers = {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${session.access_token}`,
+      ...(options.headers || {}),
     };
 
     return fetch(url, { ...options, headers });
@@ -95,7 +96,6 @@ export default function EmailTab() {
 
       if (!r.ok) {
         const txt = await r.text();
-
         if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) {
           setConnected(false);
           throw new Error('Аккаунт Gmail не привязан.');
@@ -107,13 +107,10 @@ export default function EmailTab() {
         throw new Error(`gmail_list: ${r.status} ${txt}`);
       }
 
-      // Диагностическое логирование — поможет увидеть сырой ответ
-      const raw = await r.clone().text();
-      console.log('gmail_list status=', r.status);
-      console.log('gmail_list raw=', raw);
-
-      const data = JSON.parse(raw || '{}');
-      setList(Array.isArray(data?.messages) ? data.messages : []);
+      const data = await r.json();
+      // <-- ВАЖНО: сервер отдаёт data.emails
+      const emails = Array.isArray(data?.emails) ? data.emails : [];
+      setList(emails);
       setConnected(true);
     } catch (e) {
       console.error(e);
@@ -178,10 +175,8 @@ export default function EmailTab() {
       }
 
       alert('Письмо отправлено');
-      // сначала переключаем папку и обновляем список
       setFolder('sent');
       await loadList();
-      // затем закрываем модалку
       setComposeOpen(false);
     } catch (e2) {
       console.error(e2);
@@ -198,9 +193,7 @@ export default function EmailTab() {
     try {
       const w = window.open(API.oauthStart, 'oauth_gmail', 'width=600,height=700');
       if (!w) {
-        setError(
-          'Браузер заблокировал всплывающее окно. Разрешите всплывающие окна для этого домена и попробуйте снова.'
-        );
+        setError('Браузер заблокировал всплывающее окно. Разрешите попапы и попробуйте снова.');
         return;
       }
       const timer = setInterval(() => {
@@ -246,6 +239,7 @@ export default function EmailTab() {
             placeholder="Поиск (gmail-синтаксис: from:, subject:, has:attachment, …)"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && loadList()}
           />
         </div>
 
@@ -330,10 +324,15 @@ export default function EmailTab() {
             <ul style={styles.list}>
               {list.map((m) => (
                 <li key={m.id} style={styles.listItem}>
-                  <div style={{ color: '#64748b', fontSize: 12 }}>
-                    <code>{m.id}</code>
+                  <div style={styles.meta}>
+                    <span style={styles.from}>{m.from || '(без отправителя)'}</span>
+                    <span style={styles.subject}>{m.subject || '(без темы)'}</span>
                   </div>
-                  <div>{m.snippet || '(без темы)'} </div>
+                  <div style={styles.meta}>
+                    {m.date ? new Date(m.date).toLocaleString() : ''}
+                    <span style={{ marginLeft: 8, color: '#94a3b8' }}><code>{m.id}</code></span>
+                  </div>
+                  <div>{m.snippet || ''}</div>
                 </li>
               ))}
             </ul>
