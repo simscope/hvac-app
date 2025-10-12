@@ -1,6 +1,6 @@
 // client/src/pages/EmailTab.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, FUNCTIONS_URL } from '../supabaseClient';
+import { supabase, FUNCTIONS_URL, SHARED_EMAIL } from '../supabaseClient';
 
 export default function EmailTab() {
   const [loading, setLoading] = useState(false);
@@ -12,22 +12,21 @@ export default function EmailTab() {
   const textRef = useRef();
   const filesRef = useRef();
 
-  // Готовые URL для функций — больше ни одного обращения к import.meta.env
-  const API = useMemo(() => {
-    return {
+  // Готовые URL для edge-функций
+  const API = useMemo(
+    () => ({
       list: `${FUNCTIONS_URL}/gmail_list`,
       send: `${FUNCTIONS_URL}/gmail_send`,
       unreadByChat: `${FUNCTIONS_URL}/get_unread_by_chat`,
-    };
-  }, []);
+    }),
+    []
+  );
 
-  // --- Загрузка списка писем
   async function load() {
     try {
       setError('');
       setLoading(true);
 
-      // Берём сессию, чтобы выслать access_token в Authorization
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -40,7 +39,10 @@ export default function EmailTab() {
             ? { Authorization: `Bearer ${session.access_token}` }
             : {}),
         },
-        body: JSON.stringify({ q: '' }),
+        body: JSON.stringify({
+          shared_email: SHARED_EMAIL, // ВАЖНО: прокидываем общую почту
+          q: '',
+        }),
       });
 
       if (!r.ok) {
@@ -67,7 +69,6 @@ export default function EmailTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Отправка письма
   async function send(e) {
     e.preventDefault();
     setError('');
@@ -76,10 +77,11 @@ export default function EmailTab() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+
     const subject = subjectRef.current?.value || '';
     const text = textRef.current?.value || '';
 
-    // собираем вложения
+    // вложения -> base64
     const files = Array.from(filesRef.current?.files || []);
     const attachments = await Promise.all(
       files.map(
@@ -114,6 +116,8 @@ export default function EmailTab() {
             : {}),
         },
         body: JSON.stringify({
+          shared_email: SHARED_EMAIL, // ВАЖНО
+          from: SHARED_EMAIL,         // многие реализации ожидают ещё и from
           to,
           subject,
           text,
@@ -125,6 +129,7 @@ export default function EmailTab() {
         const txt = await r.text();
         throw new Error(`gmail_send: ${r.status} ${txt}`);
       }
+
       setComposeOpen(false);
       await load();
       alert('Письмо отправлено');
