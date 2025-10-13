@@ -1,5 +1,12 @@
+// src/pages/EmailTab.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
+
+/* ====== КОНСТАНТЫ ====== */
+const SIGNATURE =
+  `\n\n—\nSim HVAC & Appliance repair\n📍 New York City, NY\n📞 Phone: (929) 412-9042\n🌐 Website: https://s-im.repair\nHVAC • Appliance Repair\nServices Licensed & Insured | Serving NYC and NJ`;
+
+const ACCOUNT_EMAIL = 'simscope.office@gmail.com';
 
 /* ====== СТИЛИ ====== */
 const colors = {
@@ -62,7 +69,6 @@ const styles = {
     padding: '12px', borderBottom: `1px solid ${colors.border}`,
     cursor: 'pointer',
   },
-  rowHover: { background: '#f1f5f9' },
   from: { fontWeight: 600, marginRight: 8 },
   subject: { color: '#111827' },
   snippet: { color: colors.subtext, marginLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -77,6 +83,7 @@ const styles = {
   btnLine: { display: 'flex', gap: 8, marginTop: 8 },
   btnPrimary: { padding: '8px 14px', borderRadius: 10, background: colors.blue, color: '#fff', border: 'none', cursor: 'pointer' },
   btn: { padding: '8px 14px', borderRadius: 10, background: colors.bg, border: `1px solid ${colors.border}`, cursor: 'pointer' },
+  signatureHint: { fontSize: 12, color: colors.subtext, marginTop: 6, whiteSpace: 'pre-wrap' },
 };
 /* ================== */
 
@@ -99,6 +106,7 @@ export default function EmailTab() {
   // compose
   const [composeOpen, setComposeOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [includeSignature, setIncludeSignature] = useState(true);
   const toRef = useRef(); const subjectRef = useRef(); const textRef = useRef(); const filesRef = useRef();
 
   // read
@@ -109,7 +117,7 @@ export default function EmailTab() {
   const API = useMemo(() => ({
     list: `${FUNCTIONS_URL}/gmail_list`,
     send: `${FUNCTIONS_URL}/gmail_send`,
-    get:  `${FUNCTIONS_URL}/gmail_get`,   // должен существовать на бэке
+    get:  `${FUNCTIONS_URL}/gmail_get`,
     oauthStart: `${FUNCTIONS_URL}/oauth_google_start`,
   }), []);
 
@@ -164,12 +172,9 @@ export default function EmailTab() {
       const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id }) });
       if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
       const data = await r.json();
-      // ожидаемый ответ бэка:
-      // { ok:true, id, threadId, from, to, subject, date, text, html, attachments:[{filename, mimeType, size}] }
       setCurrent(data || {});
     } catch (e) {
       console.error(e);
-      // fallback: найдём в текущем списке и покажем сниппет
       const m = list.find(x => x.id === id);
       setCurrent({
         id,
@@ -189,7 +194,12 @@ export default function EmailTab() {
       setSending(true);
       const to = (toRef.current?.value || '').split(',').map(s => s.trim()).filter(Boolean);
       const subject = subjectRef.current?.value || '';
-      const text = textRef.current?.value || '';
+      const baseText = textRef.current?.value || '';
+
+      // Добавляем подпись при отправке (если включена и её ещё нет в тексте)
+      const shouldAppend = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
+      const text = shouldAppend ? `${baseText}${SIGNATURE}` : baseText;
+
       const files = Array.from(filesRef.current?.files || []);
       const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
         const fr = new FileReader();
@@ -224,7 +234,7 @@ export default function EmailTab() {
     <div style={styles.app}>
       {/* LEFT */}
       <aside style={styles.left}>
-        <div style={styles.account}>simscope.office@gmail.com</div>
+        <div style={styles.account}>{ACCOUNT_EMAIL}</div>
         <button style={styles.compose} onClick={() => setComposeOpen(true)}>
           <span>✉️</span> <span>Написать</span>
         </button>
@@ -312,6 +322,10 @@ export default function EmailTab() {
             <h3 style={{ marginTop: 0 }}>Новое письмо</h3>
             <form onSubmit={onSubmit}>
               <div style={styles.formRow}>
+                <div>От</div>
+                <input value={ACCOUNT_EMAIL} disabled style={styles.input} />
+              </div>
+              <div style={styles.formRow}>
                 <div>Кому (через запятую)</div>
                 <input ref={toRef} style={styles.input} placeholder="user@example.com, ..." />
               </div>
@@ -321,7 +335,19 @@ export default function EmailTab() {
               </div>
               <div style={styles.formRow}>
                 <div>Текст</div>
-                <textarea ref={textRef} rows={8} style={styles.input} />
+                <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={includeSignature}
+                    onChange={(e) => setIncludeSignature(e.target.checked)}
+                  />
+                  Добавлять подпись компании
+                </label>
+                <div style={styles.signatureHint}>
+                  Подпись будет добавлена в конец письма:
+                  {SIGNATURE}
+                </div>
               </div>
               <div style={styles.formRow}>
                 <div>Вложения</div>
