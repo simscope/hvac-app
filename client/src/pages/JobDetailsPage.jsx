@@ -906,7 +906,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
   <div style="font-size:12px;color:#334155">
     <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
     <div>📍 New York City, NY</div>
-    <div>📞 Phone: (929) 412-9042</div>
+    <div>📞 Phone: (929) 412-9042 Zelle</div>
     <div>🌐 Website: <a href="https://appliance-hvac-repair.com/" target="_blank">https://appliance-hvac-repair.com/</a></div>
     <div>HVAC • Appliance Repair</div>
     <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
@@ -1478,4 +1478,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
