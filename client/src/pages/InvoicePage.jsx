@@ -263,7 +263,7 @@ export default function InvoicePage() {
       const alignY = rightY; let compTop = Math.max(logoBottom + 8, alignY);
       doc.setTextColor(0); doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', marginX, compTop);
       compTop += 14; doc.setFont(undefined, 'normal');
-      ['1587 E 19th St apt 6F', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscopeinc@gmail.com'].forEach((t) => { doc.text(t, marginX, compTop); compTop += 12; });
+      ['1587 E 19th St apt 6F', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscope.office@gmail.com'].forEach((t) => { doc.text(t, marginX, compTop); compTop += 12; });
 
       // Bill To
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', pageW - marginX - pillW, rightY); rightY += 16;
@@ -463,7 +463,7 @@ export default function InvoicePage() {
               1587 E 19th St apt 6F<br />
               Brooklyn, NY 11230<br />
               (929) 412-9042 Zelle<br />
-              simscopeinc@gmail.com
+              simscope.office@gmail.com
             </div>
           </div>
 
@@ -602,6 +602,7 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
 
