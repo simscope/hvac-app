@@ -293,6 +293,7 @@ export default function JobDetailsPage() {
   // invoices
   const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,db_id}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
+  const [sendingInvId, setSendingInvId] = useState(null); // UI: show spinner/disable per-invoice send
 
   // to avoid auto-archive loop
   const autoArchivedOnce = useRef(false);
@@ -860,6 +861,90 @@ export default function JobDetailsPage() {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
+  // NEW: send invoice email via Edge Function
+  const sendInvoiceEmail = async (inv) => {
+    if (!inv?.hasFile) {
+      alert('Invoice PDF is not in storage yet. Open the invoice and save it first, then press Refresh.');
+      return;
+    }
+    const to = normalizeEmail(client?.email);
+    if (!to) {
+      alert('Client email is empty. Please fill in the email in the Client section and save.');
+      return;
+    }
+
+    const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
+    const fileName = inv?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : null);
+    const key = fileName ? `${jobId}/${fileName}` : null;
+
+    const jobNo = job?.job_number ? `#${job.job_number}` : '';
+    const subj = `Invoice ${invoiceNo ? '#' + invoiceNo : ''} — Sim Scope Inc.`;
+
+    // Plain text body (fallback)
+    const text =
+`Hello${client?.full_name ? ' ' + client.full_name : ''},
+
+Please find your invoice ${invoiceNo ? '#' + invoiceNo : ''} ${jobNo ? 'for job ' + jobNo : ''} attached as a PDF.
+
+If you have any questions, just reply to this email.
+
+—
+Sim HVAC & Appliance repair
+New York City, NY
+Phone: (929) 412-9042
+Website: https://s-im.repair
+HVAC • Appliance Repair
+Services Licensed & Insured | Serving NYC and NJ`;
+
+    // Simple HTML body
+    const html = `
+<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
+  <p>Hello${client?.full_name ? ' ' + escapeHtml(client.full_name) : ''},</p>
+  <p>Please find your invoice ${invoiceNo ? '<strong>#' + invoiceNo + '</strong>' : ''}${jobNo ? ' for job <strong>' + escapeHtml(jobNo) + '</strong>' : ''} attached as a PDF.</p>
+  <p>If you have any questions, just reply to this email.</p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+  <div style="font-size:12px;color:#334155">
+    <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
+    <div>📍 New York City, NY</div>
+    <div>📞 Phone: (929) 412-9042</div>
+    <div>🌐 Website: <a href="https://s-im.repair" target="_blank">https://s-im.repair</a></div>
+    <div>HVAC • Appliance Repair</div>
+    <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
+  </div>
+</div>`.trim();
+
+    try {
+      setSendingInvId(`${inv.source}-${inv.invoice_no || inv.name}`);
+      // Edge Function must fetch the file from Storage and send the email with attachment
+      await callEdgeAuth('send-invoice-email', {
+        to,
+        subject: subj,
+        text,
+        html,
+        bucket: INVOICES_BUCKET,
+        key,           // "<jobId>/<fileName>"
+        job_id: jobId,
+        invoice_no: invoiceNo ? Number(invoiceNo) : null,
+        client_name: client?.full_name || null,
+        client_address: client?.address || null,
+        job_number: job?.job_number || null,
+      });
+      alert('Invoice sent to ' + to);
+    } catch (e) {
+      alert('Failed to send invoice: ' + (e.message || e));
+    } finally {
+      setSendingInvId(null);
+    }
+  };
+
+  // util for html
+  const escapeHtml = (s) => String(s ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+
   /* ---------- display ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
   const isUnpaidLabor = (toNum(job?.labor_price) || 0) > 0 && isPmUnpaid(job?.labor_payment_method);
@@ -1086,7 +1171,7 @@ export default function JobDetailsPage() {
 
           {/* Invoices */}
           <div style={BOX}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ display: 'flex,', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Invoices (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
@@ -1102,52 +1187,76 @@ export default function JobDetailsPage() {
               <div style={MUTED}>No invoices for this job yet</div>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
-                {invoices.map((inv) => (
-                  <div
-                    key={`${inv.source}-${inv.invoice_no || inv.name}`}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      padding: '8px 10px',
-                      border: '1px solid #eef2f7',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600 }}>
-                        {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                        {!inv.hasFile && (
-                          <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>
+                {invoices.map((inv) => {
+                  const invKey = `${inv.source}-${inv.invoice_no || inv.name}`;
+                  const canSend = !!inv.hasFile && !!normalizeEmail(client?.email);
+                  const sending = sendingInvId === invKey;
+                  return (
+                    <div
+                      key={invKey}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '8px 10px',
+                        border: '1px solid #eef2f7',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600 }}>
+                          {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
+                          {!inv.hasFile && (
+                            <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>
+                          {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
+                        </div>
+                        {!normalizeEmail(client?.email) && (
+                          <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
+                            Client email is empty — fill it above to enable sending.
+                          </div>
                         )}
                       </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>
-                        {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
+                          Open PDF
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                          onClick={() => inv.hasFile && downloadInvoice(inv)}
+                          disabled={!inv.hasFile}
+                        >
+                          Download
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
+                          onClick={() => inv.hasFile && deleteInvoice(inv)}
+                          disabled={!inv.hasFile}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          title={!inv.hasFile ? 'PDF not saved yet' : (!normalizeEmail(client?.email) ? 'Client email is empty' : 'Send invoice by email')}
+                          style={{
+                            ...PRIMARY,
+                            opacity: canSend ? 1 : 0.5,
+                            cursor: canSend ? 'pointer' : 'not-allowed',
+                            minWidth: 120,
+                          }}
+                          onClick={() => canSend && sendInvoiceEmail(inv)}
+                          disabled={!canSend || sending}
+                        >
+                          {sending ? 'Sending…' : 'Send email'}
+                        </button>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
-                        Open PDF
-                      </button>
-                      <button
-                        type="button"
-                        style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
-                        onClick={() => inv.hasFile && downloadInvoice(inv)}
-                        disabled={!inv.hasFile}
-                      >
-                        Download
-                      </button>
-                      <button
-                        type="button"
-                        style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
-                        onClick={() => inv.hasFile && deleteInvoice(inv)}
-                        disabled={!inv.hasFile}
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
