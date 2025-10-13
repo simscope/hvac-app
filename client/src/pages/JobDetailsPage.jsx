@@ -892,7 +892,7 @@ If you have any questions, just reply to this email.
 Sim HVAC & Appliance repair
 New York City, NY
 Phone: (929) 412-9042 Zelle
-Website: https:///appliance-hvac-repair.com
+Website: https://appliance-hvac-repair.com
 HVAC • Appliance Repair
 Services Licensed & Insured | Serving NYC and NJ`;
 
@@ -1478,6 +1478,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
