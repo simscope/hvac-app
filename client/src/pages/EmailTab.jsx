@@ -4,7 +4,7 @@ import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
 
 /* ====== КОНСТАНТЫ ====== */
 const SIGNATURE =
-  `\n\n—\nSim HVAC & Appliance repair\n📍 New York City, NY\n📞 Phone: (929) 412-9042\n🌐 Website: https://appliance-hvac-repair.com/\nHVAC • Appliance Repair\nServices Licensed & Insured | Serving NYC and NJ`;
+  `\n\n—\nSim HVAC & Appliance repair\n📍 New York City, NY\n📞 Phone: (929) 412-9042\n🌐 Website: https://appliance-hvac-repair.com\nHVAC • Appliance Repair\nServices Licensed & Insured | Serving NYC and NJ`;
 
 const ACCOUNT_EMAIL = 'simscope.office@gmail.com';
 
