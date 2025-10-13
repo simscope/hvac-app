@@ -721,7 +721,7 @@ export default function JobDetailsPage() {
   const delPhoto = async (name) => {
     if (!window.confirm('Delete file?')) return;
     try {
-      await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
+      await ('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
       await loadPhotos();
     } catch (e) {
       const { error } = await storage().remove([`${jobId}/${name}`]);
@@ -842,7 +842,7 @@ export default function JobDetailsPage() {
     if (!window.confirm(`Delete invoice${item?.invoice_no ? ' #' + item.invoice_no : ''}?`)) return;
 
     try {
-      await callEdgeAuth('admin-delete-invoice-bundle', {
+      await ('admin-delete-invoice-bundle', {
         bucket: INVOICES_BUCKET,
         key,
         db_id: item?.db_id || null,
@@ -907,7 +907,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
     <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
     <div>📍 New York City, NY</div>
     <div>📞 Phone: (929) 412-9042</div>
-    <div>🌐 Website: <a href="https://s-im.repair" target="_blank">https://s-im.repair</a></div>
+    <div>🌐 Website: <a href="https://appliance-hvac-repair.com/" target="_blank">https://appliance-hvac-repair.com/</a></div>
     <div>HVAC • Appliance Repair</div>
     <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
   </div>
@@ -1478,3 +1478,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
