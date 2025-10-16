@@ -276,7 +276,8 @@ export default function JobDetailsPage() {
   const [techs, setTechs] = useState([]);
   const [materials, setMaterials] = useState([]);
 
-  const [client, setClient] = useState({ id: null, full_name: '', phone: '', email: '', address: '' });
+  // company добавлено
+  const [client, setClient] = useState({ id: null, company: '', full_name: '', phone: '', email: '', address: '' });
   const [clientDirty, setClientDirty] = useState(false);
 
   const [photos, setPhotos] = useState([]);
@@ -323,13 +324,14 @@ export default function JobDetailsPage() {
       if (j.client_id) {
         const { data: c } = await supabase
           .from('clients')
-          .select('id, full_name, phone, email, address')
+          .select('id, company, full_name, phone, email, address')
           .eq('id', j.client_id)
           .maybeSingle();
         setClient(
           c
             ? {
                 id: c.id,
+                company: c.company || '',
                 full_name: c.full_name || '',
                 phone: c.phone || '',
                 email: c.email || '',
@@ -337,6 +339,7 @@ export default function JobDetailsPage() {
               }
             : {
                 id: null,
+                company: '',
                 full_name: j.client_name || j.full_name || '',
                 phone: j.client_phone || j.phone || '',
                 email: j.client_email || j.email || '',
@@ -346,6 +349,7 @@ export default function JobDetailsPage() {
       } else {
         setClient({
           id: null,
+          company: '',
           full_name: j.client_name || j.full_name || '',
           phone: j.client_phone || j.phone || '',
           email: j.client_email || j.email || '',
@@ -550,6 +554,7 @@ export default function JobDetailsPage() {
 
   const saveClient = async () => {
     const payload = {
+      company: stringOrNull(client.company) ?? '',
       full_name: stringOrNull(client.full_name) ?? '',
       phone: stringOrNull(client.phone) ?? '',
       email: normalizeEmail(client.email),
@@ -565,7 +570,7 @@ export default function JobDetailsPage() {
 
         const { data: fresh, error: selErr } = await supabase
           .from('clients')
-          .select('id, full_name, phone, email, address')
+          .select('id, company, full_name, phone, email, address')
           .eq('id', cid)
           .maybeSingle();
         if (selErr) throw selErr;
@@ -575,6 +580,7 @@ export default function JobDetailsPage() {
         await mirrorClientIntoJob(cid, merged);
         setClient({
           id: cid,
+          company: merged.company || '',
           full_name: merged.full_name || '',
           phone: merged.phone || '',
           email: merged.email || '',
@@ -588,13 +594,14 @@ export default function JobDetailsPage() {
       const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
-        .select('id, full_name, phone, email, address')
+        .select('id, company, full_name, phone, email, address')
         .single();
       if (insErr) throw insErr;
 
       await mirrorClientIntoJob(created.id, created);
       setClient({
         id: created.id,
+        company: created.company || '',
         full_name: created.full_name || '',
         phone: created.phone || '',
         email: created.email || '',
@@ -1155,6 +1162,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
           <div style={BOX}>
             <div style={H2}>Client</div>
             <div style={{ display: 'grid', gap: 10 }}>
+              <Row label="Company" value={client.company} onChange={(v) => setClientField('company', v)} />
               <Row label="Full name" value={client.full_name} onChange={(v) => setClientField('full_name', v)} />
               <Row label="Phone" value={client.phone} onChange={(v) => setClientField('phone', v)} />
               <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
@@ -1478,7 +1486,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
-
-
