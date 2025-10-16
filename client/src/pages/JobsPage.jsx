@@ -221,7 +221,7 @@ export default function JobsPage() {
                 </td>
 
                 <td><div className="cell-wrap">
-                  {job.client_name}{job.client_phone ? ` — ${job.client_phone}` : ''}
+                 {job.client_company ? ` ( ${job.client_company})` : ''} {job.client_name}{job.client_phone ? ` — ${job.client_phone}` : ''}
                 </div></td>
 
                 <td className="col-system"><div className="cell-wrap">{job.system_type || '—'}</div></td>
@@ -299,3 +299,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
