@@ -89,6 +89,7 @@ export default function JobsPage() {
         ...j,
         status_canon: canon, // всегда Title Case
         client_name: c?.full_name || c?.name || '—',
+        client_company: c?.company || '',
         client_phone: c?.phone || '',
         created_at_fmt: fmtDate(j.created_at),
       };
@@ -220,9 +221,25 @@ export default function JobsPage() {
                   </div>
                 </td>
 
-                <td><div className="cell-wrap">
-                 {job.client_company ? ` ( ${job.client_company})` : ''} {job.client_name}{job.client_phone ? ` — ${job.client_phone}` : ''}
-                </div></td>
+                {/* CLIENT with company */}
+                <td>
+                  <div className="cell-wrap">
+                    {job.client_company ? (
+                      <>
+                        <div style={{ fontWeight: 600 }}>{job.client_company}</div>
+                        <div style={{ color: '#6b7280', fontSize: 12 }}>
+                          {job.client_name}
+                          {job.client_phone ? ` — ${job.client_phone}` : ''}
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        {job.client_name}
+                        {job.client_phone ? ` — ${job.client_phone}` : ''}
+                      </div>
+                    )}
+                  </div>
+                </td>
 
                 <td className="col-system"><div className="cell-wrap">{job.system_type || '—'}</div></td>
 
@@ -299,4 +316,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
