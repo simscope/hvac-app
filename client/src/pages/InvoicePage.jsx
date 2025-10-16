@@ -30,30 +30,30 @@ async function loadLogoDataURL(timeoutMs = 2500) {
 }
 
 /* ---------------- styles (UI) ---------------- */
-const BORDER = '#d1d5db';        // контрастнее границы (раньше #e5e7eb)
-const BORDER_SOFT = '#e2e8f0';   // для нижних границ строк таблицы
+const BORDER = '#d1d5db';
+const BORDER_SOFT = '#e2e8f0';
 const S = {
   page: { maxWidth: 1000, margin: '24px auto 80px', padding: '0 16px' },
-  bar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }, // немного плотнее
+  bar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 },
   primary: { padding: '10px 16px', borderRadius: 10, border: `1px solid #2563eb`, background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 },
   ghost: { padding: '9px 14px', borderRadius: 10, border: `1px solid ${BORDER}`, background: '#f8fafc', cursor: 'pointer' },
   card: { background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 16, padding: 24, boxShadow: '0 2px 24px rgba(0,0,0,0.04)' },
-  header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 12 }, // плотнее
+  header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 12 },
   brandName: { fontWeight: 700, fontSize: 16 },
   invoiceTitle: { fontWeight: 800, fontSize: 30, color: '#444', letterSpacing: 1 },
   invoiceNo: { textAlign: 'right', color: '#6b7280' },
-  sep: { height: 1, background: '#eef2f7', margin: '14px 0' }, // чуть меньше
+  sep: { height: 1, background: '#eef2f7', margin: '14px 0' },
   pill: { borderRadius: 12, overflow: 'hidden', border: `1px solid ${BORDER}` },
   pillRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#f6f7fb' },
   pillCellLeft: { padding: '10px 12px', fontWeight: 700, color: '#333', textAlign: 'right' },
   pillCellRight: { padding: '10px 12px', fontWeight: 700, textAlign: 'right' },
-  tableWrap: { marginTop: 12, border: `1px solid ${BORDER}`, borderRadius: 12, overflow: 'hidden' }, // плотнее
+  tableWrap: { marginTop: 12, border: `1px solid ${BORDER}`, borderRadius: 12, overflow: 'hidden' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { background: '#3c3c3c', color: '#fff', textAlign: 'left', padding: '10px 12px', fontWeight: 700 },
   td: { padding: '10px 12px', borderBottom: `1px solid ${BORDER_SOFT}`, verticalAlign: 'top' },
-  input: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' }, // высоту не трогаем
+  input: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
   select: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
-  totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 14, marginTop: 16 }, // немного плотнее
+  totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 14, marginTop: 16 },
   totalsCard: { border: `1px solid ${BORDER}`, borderRadius: 12, padding: 14 },
   totalsLine: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' },
   totalsStrong: { fontWeight: 800, fontSize: 18 },
@@ -76,6 +76,7 @@ export default function InvoicePage() {
   const [job, setJob] = useState(null);
 
   // Bill To
+  const [billCompany, setBillCompany] = useState(''); // ← NEW
   const [billName, setBillName] = useState('');
   const [billAddress, setBillAddress] = useState('');
   const [billPhone, setBillPhone] = useState('');
@@ -121,6 +122,7 @@ export default function InvoicePage() {
       }
       if (!clientData) {
         clientData = {
+          company: j?.client_company || j?.company || '', // ← fallback, если поле есть у job
           full_name: (j && (j.client_name || j.full_name)) || '',
           phone: (j && (j.client_phone || j.phone)) || '',
           email: (j && (j.client_email || j.email)) || '',
@@ -129,6 +131,7 @@ export default function InvoicePage() {
         };
       }
       if (!alive) return;
+      setBillCompany(clean(clientData.company));        // ← NEW
       setBillName(clean(clientData.full_name));
       setBillPhone(clean(clientData.phone));
       setBillEmail(clean(clientData.email));
@@ -176,7 +179,6 @@ export default function InvoicePage() {
   );
   const total = useMemo(() => Math.max(0, N(subtotal) - N(discount)), [subtotal, discount]);
 
-  // Итог для Balance Due (учитывает переопределение)
   const balanceDue = useMemo(() => {
     const v = String(dueOverride).trim();
     return v === '' ? total : Math.max(0, N(v));
@@ -267,13 +269,14 @@ export default function InvoicePage() {
 
       // Bill To
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', pageW - marginX - pillW, rightY); rightY += 16;
+      doc.setFont(undefined, billCompany ? 'bold' : 'normal'); // компания жирным
+      if (billCompany) { doc.text(String(billCompany), pageW - marginX - pillW, rightY); rightY += 14; }
       doc.setFont(undefined, 'normal');
       [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => { doc.text(String(line), pageW - marginX - pillW, rightY); rightY += 14; });
 
       // Table
       const tableStartY = Math.max(compTop, rightY) + 16;
 
-      // helper: форматирование одной строки с подавлением нулей
       const toPdfRow = (r) => {
         const qtyNum = N(r.qty);
         const priceNum = N(r.price);
@@ -385,12 +388,12 @@ export default function InvoicePage() {
         </select>
       </td>
 
-      {/* ШИРОКАЯ колонка Name/Description с textarea (Enter — перенос строки) */}
+      {/* ШИРОКАЯ колонка Name/Description */}
       <td style={{ ...S.td, width: '52%' }}>
         <textarea
           style={{
             ...S.input,
-            minHeight: 36,     // высоту не трогаем: базовая 36
+            minHeight: 36,
             height: 'auto',
             resize: 'vertical',
             lineHeight: 1.4,
@@ -407,7 +410,7 @@ export default function InvoicePage() {
         />
       </td>
 
-      {/* Компактные Qty/Price/Amount/× (горизонтально плотнее, высоту не меняем) */}
+      {/* Qty/Price/Amount/× */}
       <td style={{ ...S.td, width: 70, ...S.taCenter }}>
         <input
           type="number"
@@ -528,6 +531,7 @@ export default function InvoicePage() {
             <div style={{ marginTop: 12, textAlign: 'left' }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Bill To</div>
               <div style={{ color: '#111' }}>
+                {billCompany && <div style={{ fontWeight: 700 }}>{billCompany}</div>} {/* ← NEW in UI */}
                 <div>{billName}</div>
                 <div>{billAddress}</div>
                 <div>{billPhone}</div>
@@ -602,9 +606,3 @@ export default function InvoicePage() {
     </div>
   );
 }
-
-
-
-
-
-
