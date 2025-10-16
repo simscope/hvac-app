@@ -15,6 +15,31 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
+// нормализуем дату к ключу America/New_York (YYYY-MM-DD)
+const toNYDateKey = (d) => {
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    // en-CA формирует YYYY-MM-DD
+    return fmt.format(d);
+  } catch {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+};
+const isSameNYDay = (isoLike, dayDate) => {
+  if (!isoLike) return false;
+  const d = new Date(isoLike);
+  if (Number.isNaN(d.getTime())) return false;
+  return toNYDateKey(d) === toNYDateKey(dayDate);
+};
+
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
@@ -38,7 +63,6 @@ export default function CalendarPage() {
           .select('id, name, role')
           .in('role', ['technician', 'tech'])
           .order('name', { ascending: true }),
-        // добавили company
         supabase.from('clients').select('id, full_name, address, company'),
       ]);
       setJobs(j || []);
@@ -100,10 +124,7 @@ export default function CalendarPage() {
     'No name';
 
   const getClientCompany = (job) =>
-    clientsById.get(String(job?.client_id))?.company ||
-    job?.client_company ||
-    job?.company ||
-    '';
+    clientsById.get(String(job?.client_id))?.company || '';
 
   const getClientAddress = (job) =>
     clientsById.get(String(job?.client_id))?.address ||
@@ -136,12 +157,10 @@ export default function CalendarPage() {
       if (!j.appointment_time) return false;
       if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
       if (!q) return true;
-      const name = getClientName(j).toLowerCase();
-      const company = getClientCompany(j).toLowerCase();
+      const name = (getClientName(j) + ' ' + getClientCompany(j)).toLowerCase();
       const addr = getClientAddress(j).toLowerCase();
       return (
         name.includes(q) ||
-        company.includes(q) ||
         addr.includes(q) ||
         String(j.job_number || j.id).includes(q)
       );
@@ -153,7 +172,8 @@ export default function CalendarPage() {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
-      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`; // заголовок оставляем коротким
+      const company = getClientCompany(j);
+      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}${company ? ` (${company})` : ''}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
       return {
@@ -166,7 +186,6 @@ export default function CalendarPage() {
         textColor: s.fg,
         extendedProps: {
           address: getClientAddress(j),
-          company: getClientCompany(j),
           unpaid: isUnpaid(j),
           isRecall: statusKey(j.status) === 'recall',
           job: j,
@@ -221,27 +240,15 @@ export default function CalendarPage() {
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
   const renderEventContent = (arg) => {
-    const { address, company } = arg.event.extendedProps;
+    const { address } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
     wrap.style.fontSize = '12px';
-
     const line1 = document.createElement('div');
     line1.style.fontWeight = '700';
     line1.textContent = arg.event.title;
     wrap.appendChild(line1);
-
-    if (company) {
-      const lineC = document.createElement('div');
-      lineC.style.opacity = '0.95';
-      lineC.style.whiteSpace = 'nowrap';
-      lineC.style.overflow = 'hidden';
-      lineC.style.textOverflow = 'ellipsis';
-      lineC.textContent = company;
-      wrap.appendChild(lineC);
-    }
-
     if (address) {
       const line2 = document.createElement('div');
       line2.style.opacity = '0.9';
@@ -264,6 +271,57 @@ export default function CalendarPage() {
       info.el.style.filter = 'saturate(1.2)';
       info.el.style.fontWeight = '700';
     }
+  };
+
+  /* ---------- ROUTE button ---------- */
+  const openDailyRoute = () => {
+    const api = calRef.current?.getApi?.();
+    if (!api) return;
+
+    if (activeTech === 'all') {
+      alert('Выберите конкретного техника (вкладка сверху), затем нажмите «Маршрут».');
+      return;
+    }
+
+    // текущая дата, на которую ориентирован календарь (в таймзоне NY)
+    const focusDate = api.getDate(); // Date
+    const dayKey = toNYDateKey(focusDate);
+
+    // берём только визиты выбранного техника на этот день и сортируем по времени
+    const dayJobs = (jobs || [])
+      .filter((j) => j.technician_id != null && String(j.technician_id) === String(activeTech))
+      .filter((j) => j.appointment_time && isSameNYDay(j.appointment_time, focusDate))
+      .sort((a, b) => new Date(a.appointment_time) - new Date(b.appointment_time));
+
+    const stops = dayJobs
+      .map((j) => ({
+        addr: getClientAddress(j),
+        title: `#${j.job_number || j.id} — ${getClientName(j)}`,
+      }))
+      .filter((s) => s.addr && s.addr.trim().length > 0);
+
+    if (stops.length < 2) {
+      alert('На выбранный день для этого техника недостаточно адресов (нужно минимум 2).');
+      return;
+    }
+
+    // Google Maps ограничивает число путевых точек (обычно до 25). Возьмём первые 25.
+    const limited = stops.slice(0, 25);
+    const origin = encodeURIComponent(limited[0].addr);
+    const destination = encodeURIComponent(limited[limited.length - 1].addr);
+    const waypoints =
+      limited.length > 2
+        ? limited.slice(1, -1).map((s) => encodeURIComponent(s.addr)).join('|')
+        : '';
+
+    const url =
+      `https://www.google.com/maps/dir/?api=1` +
+      `&origin=${origin}` +
+      `&destination=${destination}` +
+      (waypoints ? `&waypoints=${waypoints}` : '') +
+      `&travelmode=driving`;
+
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   /* ---------- UI ---------- */
@@ -331,6 +389,24 @@ export default function CalendarPage() {
             <option value="timeGridWeek">Week</option>
             <option value="timeGridDay">Day</option>
           </select>
+
+          {/* NEW: маршрут текущего дня для выбранного техника */}
+          <button
+            onClick={openDailyRoute}
+            title="Откроет Google Maps с маршрутом на текущий день для выбранного техника"
+            style={{
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: '1px solid #1d4ed8',
+              background: 'linear-gradient(180deg,#2563eb,#1d4ed8)',
+              color: '#fff',
+              fontWeight: 700,
+              cursor: 'pointer',
+              boxShadow: '0 6px 16px rgba(29,78,216,0.25)'
+            }}
+          >
+            Маршрут
+          </button>
         </div>
       </div>
 
@@ -353,9 +429,8 @@ export default function CalendarPage() {
         >
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
           {unassigned.map((j) => {
-            const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
+            const title = `#${j.job_number || j.id} — ${getClientName(j)}${getClientCompany(j) ? ` (${getClientCompany(j)})` : ''}`;
             const addr = getClientAddress(j);
-            const comp = getClientCompany(j);
             return (
               <div
                 key={j.id}
@@ -379,12 +454,9 @@ export default function CalendarPage() {
                 }}
               >
                 <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
-                <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
-                {comp && (
-                  <div style={{ gridColumn: '1 / span 2', color: '#111827', opacity: 0.95, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {comp}
-                  </div>
-                )}
+                <div style={{ color: '#111827', fontWeight: 700 }}>
+                  {getClientName(j)}{getClientCompany(j) ? ` • ${getClientCompany(j)}` : ''}
+                </div>
                 {addr && (
                   <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
                 )}
