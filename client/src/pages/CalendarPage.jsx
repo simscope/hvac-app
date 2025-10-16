@@ -1,4 +1,3 @@
-// client/src/pages/CalendarPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -39,7 +38,8 @@ export default function CalendarPage() {
           .select('id, name, role')
           .in('role', ['technician', 'tech'])
           .order('name', { ascending: true }),
-        supabase.from('clients').select('id, full_name, address'),
+        // добавили company
+        supabase.from('clients').select('id, full_name, address, company'),
       ]);
       setJobs(j || []);
       setTechs(t || []);
@@ -99,6 +99,12 @@ export default function CalendarPage() {
     job?.full_name ||
     'No name';
 
+  const getClientCompany = (job) =>
+    clientsById.get(String(job?.client_id))?.company ||
+    job?.client_company ||
+    job?.company ||
+    '';
+
   const getClientAddress = (job) =>
     clientsById.get(String(job?.client_id))?.address ||
     job?.client_address ||
@@ -131,8 +137,14 @@ export default function CalendarPage() {
       if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
       if (!q) return true;
       const name = getClientName(j).toLowerCase();
+      const company = getClientCompany(j).toLowerCase();
       const addr = getClientAddress(j).toLowerCase();
-      return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
+      return (
+        name.includes(q) ||
+        company.includes(q) ||
+        addr.includes(q) ||
+        String(j.job_number || j.id).includes(q)
+      );
     });
   }, [jobs, activeTech, query, clientsById]);
 
@@ -141,19 +153,20 @@ export default function CalendarPage() {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
-      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
+      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`; // заголовок оставляем коротким
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // UTC (timestamptz) — FullCalendar shows correctly in America/New_York
+        start: j.appointment_time, // UTC (timestamptz)
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
         textColor: s.fg,
         extendedProps: {
           address: getClientAddress(j),
+          company: getClientCompany(j),
           unpaid: isUnpaid(j),
           isRecall: statusKey(j.status) === 'recall',
           job: j,
@@ -208,15 +221,27 @@ export default function CalendarPage() {
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
   const renderEventContent = (arg) => {
-    const { address } = arg.event.extendedProps;
+    const { address, company } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
     wrap.style.fontSize = '12px';
+
     const line1 = document.createElement('div');
     line1.style.fontWeight = '700';
     line1.textContent = arg.event.title;
     wrap.appendChild(line1);
+
+    if (company) {
+      const lineC = document.createElement('div');
+      lineC.style.opacity = '0.95';
+      lineC.style.whiteSpace = 'nowrap';
+      lineC.style.overflow = 'hidden';
+      lineC.style.textOverflow = 'ellipsis';
+      lineC.textContent = company;
+      wrap.appendChild(lineC);
+    }
+
     if (address) {
       const line2 = document.createElement('div');
       line2.style.opacity = '0.9';
@@ -277,7 +302,7 @@ export default function CalendarPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search: client/address/job #"
+            placeholder="Search: client/company/address/job #"
             style={{
               border: '1px solid #e5e7eb',
               borderRadius: 10,
@@ -330,6 +355,7 @@ export default function CalendarPage() {
           {unassigned.map((j) => {
             const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
             const addr = getClientAddress(j);
+            const comp = getClientCompany(j);
             return (
               <div
                 key={j.id}
@@ -354,6 +380,11 @@ export default function CalendarPage() {
               >
                 <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
                 <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
+                {comp && (
+                  <div style={{ gridColumn: '1 / span 2', color: '#111827', opacity: 0.95, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {comp}
+                  </div>
+                )}
                 {addr && (
                   <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
                 )}
@@ -483,4 +514,3 @@ function Legend() {
     </div>
   );
 }
-
