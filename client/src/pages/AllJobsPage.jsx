@@ -31,13 +31,10 @@ const JoAllJobsPage = () => {
   ];
 
   // === Канонизация статуса ===
-  // Приводим к нижнему регистру + убираем пробелы/дефисы/подчёркивания,
-  // дальше маппим к одному из канонических значений.
   const canonStatus = (val) => {
     const raw = String(val ?? '').toLowerCase();
     const v = raw.replace(/[\s\-_]+/g, '');
     if (!v) return '';
-    // широкое распознавание recall (включая опечатки)
     if (v.startsWith('rec') || v.startsWith('recal')) return 'recall';
     if (v === 'diagnosis') return 'diagnosis';
     if (v === 'inprogress') return 'in progress';
@@ -46,11 +43,10 @@ const JoAllJobsPage = () => {
     if (v === 'tofinish') return 'to finish';
     if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
     if (v === 'canceled' || v === 'cancelled') return 'canceled';
-    // если пришёл уже один из канонов — вернём как есть
     if ([
       'recall','diagnosis','in progress','parts ordered','waiting for parts','to finish','completed','canceled'
     ].includes(raw)) return raw;
-    return v; // неизвестное — пусть будет как есть (в нижнем регистре без пробелов)
+    return v;
   };
 
   useEffect(() => {
@@ -66,7 +62,7 @@ const JoAllJobsPage = () => {
         .select('id,name,role,is_active')
         .in('role', ['technician', 'tech'])
         .order('name', { ascending: true }),
-      supabase.from('clients').select('*'),
+      supabase.from('clients').select('*'), // company включена (берём все поля)
     ]);
     setJobs(j || []);
     setOrigJobs(j || []);
@@ -216,6 +212,7 @@ const JoAllJobsPage = () => {
       const tech = technicians.find((t) => String(t.id) === String(job.technician_id));
       return {
         Job: job.job_number || job.id,
+        Company: client?.company || '',
         Client: client?.name || client?.full_name || '',
         Phone: client?.phone || '',
         Address: formatAddress(client),
@@ -270,6 +267,7 @@ const JoAllJobsPage = () => {
         const t = searchText.toLowerCase();
         const addr = formatAddress(c).toLowerCase();
         return (
+          c?.company?.toLowerCase().includes(t) ||   // ← поиск по компании
           c?.name?.toLowerCase().includes(t) ||
           c?.full_name?.toLowerCase().includes(t) ||
           c?.phone?.toLowerCase().includes(t) ||
@@ -375,7 +373,7 @@ const JoAllJobsPage = () => {
         <input
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
-          placeholder="Name, phone or address"
+          placeholder="Company, name, phone or address"
         />
         <button onClick={resetFilters}>🔄 Reset</button>
         <button onClick={handleExport}>📤 Export to Excel</button>
@@ -398,7 +396,7 @@ const JoAllJobsPage = () => {
             <table className="jobs-table">
               <colgroup>
                 <col style={{ width: 70 }} />
-                <col style={{ width: 180 }} />
+                <col style={{ width: 220 }} />
                 <col style={{ width: 120 }} />
                 <col style={{ width: 240 }} />
                 <col style={{ width: 120 }} />
@@ -440,7 +438,7 @@ const JoAllJobsPage = () => {
 
                   // 🔴 highlight in red ONLY if completed AND unpaid
                   const rowClass = job.archived_at
-                    ? '' // manually archived is only visible in "Archive", don't color it red
+                    ? ''
                     : (persistedInWarranty(job)
                         ? 'warranty'
                         : (isDone(job.status) && isUnpaidNow(job))
@@ -485,9 +483,22 @@ const JoAllJobsPage = () => {
                         </div>
                       </td>
 
+                      {/* Client with Company */}
                       <td>
-                        <div className="cell-wrap">{client?.full_name || client?.name || '—'}</div>
+                        <div className="cell-wrap">
+                          {client?.company ? (
+                            <>
+                              <div style={{ fontWeight: 600 }}>{client.company}</div>
+                              <div style={{ color: '#6b7280', fontSize: 12 }}>
+                                {client.full_name || client.name || '—'}
+                              </div>
+                            </>
+                          ) : (
+                            <div>{client?.full_name || client?.name || '—'}</div>
+                          )}
+                        </div>
                       </td>
+
                       <td>
                         <div className="cell-wrap">{client?.phone || '—'}</div>
                       </td>
