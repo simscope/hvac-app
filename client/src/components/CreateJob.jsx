@@ -1,5 +1,5 @@
 // src/pages/CreateJob.jsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
 const input = {
@@ -52,24 +52,23 @@ export default function CreateJob({ onCreated }) {
     system_type: 'HVAC',
     scf: '120',
     technician_id: '',
+    client_company: '',   // NEW
     client_name: '',
     client_phone: '',
     client_email: '',
     client_address: '',
   });
 
-  // выбранный существующий клиент (если выбрали из подсказок)
   const [existingClientId, setExistingClientId] = useState(null);
-
   const [busy, setBusy] = useState(false);
   const [techs, setTechs] = useState([]);
 
   // ---- AUTOCOMPLETE ----
-  const [q, setQ] = useState('');               // текущая строка поиска по имени
+  const [q, setQ] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [open, setOpen] = useState(false);
   const [loadingSug, setLoadingSug] = useState(false);
-  const [activeIdx, setActiveIdx] = useState(-1); // навигация клавишами
+  const [activeIdx, setActiveIdx] = useState(-1);
 
   const nameInputRef = useRef(null);
   const dropRef = useRef(null);
@@ -87,15 +86,15 @@ export default function CreateJob({ onCreated }) {
     })();
   }, []);
 
-  // контроллер ввода
   const set = (k) => (e) => {
     const v = e?.target?.value ?? '';
     setForm((p) => ({ ...p, [k]: v }));
-
-    // если меняем имя — сбрасываем привязку к выбранному клиенту
     if (k === 'client_name') {
       setExistingClientId(null);
       setQ(v);
+    }
+    if (k === 'client_company') {
+      setExistingClientId(null);
     }
   };
 
@@ -107,6 +106,7 @@ export default function CreateJob({ onCreated }) {
       system_type: 'HVAC',
       scf: '120',
       technician_id: '',
+      client_company: '',
       client_name: '',
       client_phone: '',
       client_email: '',
@@ -118,7 +118,7 @@ export default function CreateJob({ onCreated }) {
     setActiveIdx(-1);
   };
 
-  // дебаунс поиска
+  // поиск клиентов (по имени; компания влияет только на создание)
   useEffect(() => {
     if (!q || q.trim().length < 2) {
       setSuggestions([]);
@@ -129,9 +129,10 @@ export default function CreateJob({ onCreated }) {
     setLoadingSug(true);
     const t = setTimeout(async () => {
       try {
+        // Берём все колонки, чтобы безопасно получить company если она есть.
         const { data, error } = await supabase
           .from('clients')
-          .select('id, full_name, phone, email, address')
+          .select('*')
           .ilike('full_name', `%${q.trim()}%`)
           .order('full_name', { ascending: true })
           .limit(10);
@@ -156,7 +157,6 @@ export default function CreateJob({ onCreated }) {
     };
   }, [q]);
 
-  // клик вне дропдауна — закрыть
   useEffect(() => {
     const onClick = (e) => {
       if (
@@ -177,6 +177,7 @@ export default function CreateJob({ onCreated }) {
     setExistingClientId(c.id);
     setForm((p) => ({
       ...p,
+      client_company: (c.company ?? '') || '',
       client_name: c.full_name || '',
       client_phone: c.phone || '',
       client_email: c.email || '',
@@ -188,7 +189,6 @@ export default function CreateJob({ onCreated }) {
 
   const clearChosen = () => {
     setExistingClientId(null);
-    // не стираем введённые поля — просто отцепляемся от конкретного id
   };
 
   const onNameKeyDown = (e) => {
@@ -211,6 +211,31 @@ export default function CreateJob({ onCreated }) {
     }
   };
 
+  async function insertClientSafe(payload) {
+    // Пытаемся вставить с полем company; если таблица его не знает — повторим без него.
+    const { data, error } = await supabase
+      .from('clients')
+      .insert(payload)
+      .select('id')
+      .single();
+
+    if (error && error.code === '42703') {
+      // колонка не существует — пробуем без company
+      const { data: d2, error: e2 } = await supabase
+        .from('clients')
+        .insert({
+          full_name: payload.full_name,
+          phone: payload.phone,
+          email: payload.email,
+          address: payload.address,
+        })
+        .select('id')
+        .single();
+      return { data: d2, error: e2 };
+    }
+    return { data, error };
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (busy) return;
@@ -219,34 +244,29 @@ export default function CreateJob({ onCreated }) {
     try {
       let clientId = existingClientId || null;
 
-      // Нужно ли создавать нового клиента?
       const wantClient =
-        (form.client_name || form.client_phone || form.client_email || form.client_address)
+        (form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address)
           .trim?.() !== '' ||
-        Boolean(form.client_name || form.client_phone || form.client_email || form.client_address);
+        Boolean(form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address);
 
       if (wantClient && !clientId) {
         const clientPayload = {
+          company: (form.client_company || '').trim(),   // возможно отсутствует в БД — обработаем
           full_name: (form.client_name || '').trim(),
           phone: (form.client_phone || '').trim(),
           email: (form.client_email || '').trim(),
           address: (form.client_address || '').trim(),
         };
 
-        // Если всё пусто — не создаём клиента
         const allEmpty =
+          !clientPayload.company &&
           !clientPayload.full_name &&
           !clientPayload.phone &&
           !clientPayload.email &&
           !clientPayload.address;
 
         if (!allEmpty) {
-          const { data, error } = await supabase
-            .from('clients')
-            .insert(clientPayload)
-            .select('id')
-            .single();
-
+          const { data, error } = await insertClientSafe(clientPayload);
           if (!error) clientId = data?.id ?? null;
           else console.warn('create client error:', error);
         }
@@ -352,6 +372,17 @@ export default function CreateJob({ onCreated }) {
         </div>
 
         <div style={{ display: 'grid', gap: 10 }}>
+          {/* NEW: Company above Client name */}
+          <div style={row}>
+            <div>Company</div>
+            <input
+              style={input}
+              value={form.client_company}
+              onChange={set('client_company')}
+              placeholder="Organization / Company"
+            />
+          </div>
+
           <div style={row}>
             <div>Client name</div>
             <div style={dropdownWrap} ref={nameInputRef}>
@@ -364,7 +395,6 @@ export default function CreateJob({ onCreated }) {
                 placeholder="Client name"
                 autoComplete="off"
               />
-              {/* выбран существующий клиент — маленькая плашка */}
               {existingClientId && (
                 <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
                   <span style={{ fontSize: 12, color: '#16a34a' }}>
@@ -373,7 +403,6 @@ export default function CreateJob({ onCreated }) {
                   <button type="button" style={small} onClick={clearChosen}>Unlink</button>
                 </div>
               )}
-
               {open && (
                 <div style={dropdown} ref={dropRef}>
                   {loadingSug && (
@@ -388,9 +417,11 @@ export default function CreateJob({ onCreated }) {
                       onMouseEnter={() => setActiveIdx(idx)}
                       onMouseLeave={() => setActiveIdx(-1)}
                       onClick={() => chooseClient(c)}
-                      title={`Phone: ${c.phone || '-'} • Email: ${c.email || '-'} • Address: ${c.address || '-'}`}
+                      title={`Company: ${c.company ?? '-'} • Phone: ${c.phone || '-'} • Email: ${c.email || '-'} • Address: ${c.address || '-'}`}
                     >
-                      <div style={{ fontWeight: 600 }}>{c.full_name || '—'}</div>
+                      <div style={{ fontWeight: 600 }}>
+                        {c.full_name || '—'} {c.company ? `• ${c.company}` : ''}
+                      </div>
                       <div style={{ fontSize: 12, color: '#6b7280' }}>
                         {(c.phone || '')}
                         {c.email ? ` • ${c.email}` : ''}
