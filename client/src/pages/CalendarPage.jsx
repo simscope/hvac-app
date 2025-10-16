@@ -15,7 +15,7 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// нормализуем дату к ключу America/New_York (YYYY-MM-DD)
+// NY date key (YYYY-MM-DD) independent of local TZ
 const toNYDateKey = (d) => {
   try {
     const fmt = new Intl.DateTimeFormat('en-CA', {
@@ -24,7 +24,6 @@ const toNYDateKey = (d) => {
       month: '2-digit',
       day: '2-digit',
     });
-    // en-CA формирует YYYY-MM-DD
     return fmt.format(d);
   } catch {
     const y = d.getFullYear();
@@ -273,24 +272,16 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE button ---------- */
-  const openDailyRoute = () => {
-    const api = calRef.current?.getApi?.();
-    if (!api) return;
-
+  /* ---------- ROUTE helpers ---------- */
+  const openRouteForDate = (dateObj) => {
+    const date = new Date(dateObj);
     if (activeTech === 'all') {
       alert('Выберите конкретного техника (вкладка сверху), затем нажмите «Маршрут».');
       return;
     }
-
-    // текущая дата, на которую ориентирован календарь (в таймзоне NY)
-    const focusDate = api.getDate(); // Date
-    const dayKey = toNYDateKey(focusDate);
-
-    // берём только визиты выбранного техника на этот день и сортируем по времени
     const dayJobs = (jobs || [])
       .filter((j) => j.technician_id != null && String(j.technician_id) === String(activeTech))
-      .filter((j) => j.appointment_time && isSameNYDay(j.appointment_time, focusDate))
+      .filter((j) => j.appointment_time && isSameNYDay(j.appointment_time, date))
       .sort((a, b) => new Date(a.appointment_time) - new Date(b.appointment_time));
 
     const stops = dayJobs
@@ -301,11 +292,10 @@ export default function CalendarPage() {
       .filter((s) => s.addr && s.addr.trim().length > 0);
 
     if (stops.length < 2) {
-      alert('На выбранный день для этого техника недостаточно адресов (нужно минимум 2).');
+      alert('На этот день для выбранного техника недостаточно адресов (нужно минимум 2).');
       return;
     }
 
-    // Google Maps ограничивает число путевых точек (обычно до 25). Возьмём первые 25.
     const limited = stops.slice(0, 25);
     const origin = encodeURIComponent(limited[0].addr);
     const destination = encodeURIComponent(limited[limited.length - 1].addr);
@@ -322,6 +312,39 @@ export default function CalendarPage() {
       `&travelmode=driving`;
 
     window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  // Встраиваем мини-кнопку «Маршрут» в заголовок каждого дня
+  const dayHeaderDidMount = (arg) => {
+    // arg.date — Date конкретного дня/столбца
+    // Стили — компактные, чтобы всё влезало и было читаемо
+    const btn = document.createElement('button');
+    btn.textContent = 'Маршрут';
+    btn.title = 'Построить маршрут для этого дня (выбранный техник)';
+    btn.style.marginLeft = '6px';
+    btn.style.padding = '2px 6px';
+    btn.style.fontSize = '11px';
+    btn.style.lineHeight = '16px';
+    btn.style.border = '1px solid #d1d5db';
+    btn.style.borderRadius = '999px';
+    btn.style.background = '#fff';
+    btn.style.cursor = 'pointer';
+    btn.style.color = '#111827';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRouteForDate(arg.date);
+    });
+
+    // Контейнер заголовка делаем flex, чтобы кнопка аккуратно встала после даты
+    arg.el.style.display = 'flex';
+    arg.el.style.alignItems = 'center';
+    arg.el.style.gap = '6px';
+
+    // В dayGrid месяц названия дней короткие — кнопка не должна ломать вёрстку
+    // Если места мало, скрываем текст даты через nowrap, а кнопка останется компактной
+    arg.el.style.whiteSpace = 'nowrap';
+
+    arg.el.appendChild(btn);
   };
 
   /* ---------- UI ---------- */
@@ -389,24 +412,6 @@ export default function CalendarPage() {
             <option value="timeGridWeek">Week</option>
             <option value="timeGridDay">Day</option>
           </select>
-
-          {/* NEW: маршрут текущего дня для выбранного техника */}
-          <button
-            onClick={openDailyRoute}
-            title="Откроет Google Maps с маршрутом на текущий день для выбранного техника"
-            style={{
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: '1px solid #1d4ed8',
-              background: 'linear-gradient(180deg,#2563eb,#1d4ed8)',
-              color: '#fff',
-              fontWeight: 700,
-              cursor: 'pointer',
-              boxShadow: '0 6px 16px rgba(29,78,216,0.25)'
-            }}
-          >
-            Маршрут
-          </button>
         </div>
       </div>
 
@@ -523,6 +528,7 @@ export default function CalendarPage() {
           eventClick={handleEventClick}
           eventContent={renderEventContent}
           eventDidMount={eventDidMount}
+          dayHeaderDidMount={dayHeaderDidMount}   {/* ← добавили кнопки над каждым днём */}
         />
       </div>
 
