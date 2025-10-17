@@ -7,36 +7,11 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
-/* ========== helpers ========== */
 // ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
   return /^\d+$/.test(s) ? Number(s) : s;
-};
-
-// NY date key (YYYY-MM-DD) independent of local TZ
-const toNYDateKey = (d) => {
-  try {
-    const fmt = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
-    return fmt.format(d);
-  } catch {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
-};
-const isSameNYDay = (isoLike, dayDate) => {
-  if (!isoLike) return false;
-  const d = new Date(isoLike);
-  if (Number.isNaN(d.getTime())) return false;
-  return toNYDateKey(d) === toNYDateKey(dayDate);
 };
 
 export default function CalendarPage() {
@@ -52,7 +27,6 @@ export default function CalendarPage() {
   const calRef = useRef(null);
   const navigate = useNavigate();
 
-  /* ---------- load data ---------- */
   useEffect(() => {
     (async () => {
       const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
@@ -70,7 +44,7 @@ export default function CalendarPage() {
     })();
   }, []);
 
-  /* ---------- palettes ---------- */
+  // palettes
   const statusKey = (s) => {
     if (!s) return 'default';
     const v = String(s).toLowerCase().trim();
@@ -102,7 +76,7 @@ export default function CalendarPage() {
     return map;
   }, [techs]);
 
-  /* ---------- indexes ---------- */
+  // indexes
   const clientsById = useMemo(() => {
     const m = new Map();
     for (const c of clients) m.set(String(c.id), c);
@@ -115,8 +89,16 @@ export default function CalendarPage() {
     return m;
   }, [techs]);
 
-  /* ---------- utils ---------- */
-  const getClientName = (job) =>
+  // name/address with company (not bold, compact)
+  const withCompany = (name, company) => {
+    const n = String(name || '').trim();
+    const comp = String(company || '').trim();
+    if (!comp) return n || 'No name';
+    const pretty = `${n || '—'} (${comp})`;
+    return pretty.length > 80 ? pretty.slice(0, 77) + '…' : pretty;
+  };
+
+  const getClientNameRaw = (job) =>
     clientsById.get(String(job?.client_id))?.full_name ||
     job?.client_name ||
     job?.full_name ||
@@ -124,6 +106,8 @@ export default function CalendarPage() {
 
   const getClientCompany = (job) =>
     clientsById.get(String(job?.client_id))?.company || '';
+
+  const getClientName = (job) => withCompany(getClientNameRaw(job), getClientCompany(job));
 
   const getClientAddress = (job) =>
     clientsById.get(String(job?.client_id))?.address ||
@@ -135,7 +119,7 @@ export default function CalendarPage() {
   const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
   const isUnpaid = (j) => unpaidSCF(j) || unpaidLabor(j);
 
-  /* ---------- external cards (unassigned) ---------- */
+  // external cards (unassigned)
   useEffect(() => {
     if (!extRef.current) return;
     const d = new Draggable(extRef.current, {
@@ -149,36 +133,32 @@ export default function CalendarPage() {
     return () => d.destroy();
   }, [extRef, jobs]);
 
-  /* ---------- calendar events ---------- */
+  // filter
   const filteredJobs = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (jobs || []).filter((j) => {
       if (!j.appointment_time) return false;
       if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
       if (!q) return true;
-      const name = (getClientName(j) + ' ' + getClientCompany(j)).toLowerCase();
-      const addr = getClientAddress(j).toLowerCase();
-      return (
-        name.includes(q) ||
-        addr.includes(q) ||
-        String(j.job_number || j.id).includes(q)
-      );
+      const name = (getClientName(j) || '').toLowerCase();
+      const addr = (getClientAddress(j) || '').toLowerCase();
+      return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
     });
   }, [jobs, activeTech, query, clientsById]);
 
+  // events
   const events = useMemo(() => {
     return filteredJobs.map((j) => {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
-      const company = getClientCompany(j);
-      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}${company ? ` (${company})` : ''}`;
+      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // UTC (timestamptz)
+        start: j.appointment_time,
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -199,10 +179,10 @@ export default function CalendarPage() {
     [jobs]
   );
 
-  /* ---------- DnD/click handlers ---------- */
+  // DnD/click handlers
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // write UTC for timestamptz
+    const newStart = info.event.start ? info.event.start.toISOString() : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -220,7 +200,7 @@ export default function CalendarPage() {
       alert('Select a specific technician tab first, then drop the job onto the calendar.');
       return;
     }
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC
+    const newStart = info.event.start ? info.event.start.toISOString() : null;
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
@@ -272,82 +252,78 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE helpers ---------- */
-  const openRouteForDate = (dateObj) => {
-    const date = new Date(dateObj);
-    if (activeTech === 'all') {
-      alert('Выберите конкретного техника (вкладка сверху), затем нажмите «Маршрут».');
+  // ====== Route helpers (Маршрут по заявкам дня) ======
+  function jobsForDay(allJobs, dayDate) {
+    const y = dayDate.getFullYear(), m = dayDate.getMonth(), d = dayDate.getDate();
+    const start = new Date(y, m, d, 0, 0, 0);
+    const end   = new Date(y, m, d, 23, 59, 59, 999);
+    return (allJobs || [])
+      .filter(j => j.appointment_time)
+      .filter(j => {
+        const t = new Date(j.appointment_time).getTime();
+        return t >= start.getTime() && t <= end.getTime();
+      })
+      .sort((a,b) => new Date(a.appointment_time) - new Date(b.appointment_time));
+  }
+
+  function buildRouteUrlForDay(dayDate, jobsList, getAddr) {
+    const stops = jobsForDay(jobsList, dayDate)
+      .map(j => getAddr(j))
+      .map(s => (s || '').trim())
+      .filter(Boolean);
+
+    if (stops.length === 0) return null;
+
+    const origin = encodeURIComponent(stops[0]);
+    const destination = encodeURIComponent(stops[stops.length - 1]);
+    const waypoints = stops.slice(1, -1).map(encodeURIComponent).join('|');
+
+    let url = `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}`;
+    if (waypoints) url += `&waypoints=${waypoints}`;
+    return url;
+  }
+
+  function openRouteForDay(dayDate, jobsList, getAddr) {
+    const url = buildRouteUrlForDay(dayDate, jobsList, getAddr);
+    if (!url) {
+      alert('В этот день нет заявок с адресами.');
       return;
     }
-    const dayJobs = (jobs || [])
-      .filter((j) => j.technician_id != null && String(j.technician_id) === String(activeTech))
-      .filter((j) => j.appointment_time && isSameNYDay(j.appointment_time, date))
-      .sort((a, b) => new Date(a.appointment_time) - new Date(b.appointment_time));
-
-    const stops = dayJobs
-      .map((j) => ({
-        addr: getClientAddress(j),
-        title: `#${j.job_number || j.id} — ${getClientName(j)}`,
-      }))
-      .filter((s) => s.addr && s.addr.trim().length > 0);
-
-    if (stops.length < 2) {
-      alert('На этот день для выбранного техника недостаточно адресов (нужно минимум 2).');
-      return;
-    }
-
-    const limited = stops.slice(0, 25);
-    const origin = encodeURIComponent(limited[0].addr);
-    const destination = encodeURIComponent(limited[limited.length - 1].addr);
-    const waypoints =
-      limited.length > 2
-        ? limited.slice(1, -1).map((s) => encodeURIComponent(s.addr)).join('|')
-        : '';
-
-    const url =
-      `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${origin}` +
-      `&destination=${destination}` +
-      (waypoints ? `&waypoints=${waypoints}` : '') +
-      `&travelmode=driving`;
-
     window.open(url, '_blank', 'noopener,noreferrer');
-  };
+  }
 
-  // Встраиваем мини-кнопку «Маршрут» в заголовок каждого дня
   const dayHeaderDidMount = (arg) => {
-    // arg.date — Date конкретного дня/столбца
-    // Стили — компактные, чтобы всё влезало и было читаемо
+    const root = arg.el.querySelector('.fc-col-header-cell-cushion') || arg.el;
+    root.style.position = 'relative';
+
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.textContent = 'Маршрут';
-    btn.title = 'Построить маршрут для этого дня (выбранный техник)';
-    btn.style.marginLeft = '6px';
-    btn.style.padding = '2px 6px';
-    btn.style.fontSize = '11px';
-    btn.style.lineHeight = '16px';
-    btn.style.border = '1px solid #d1d5db';
-    btn.style.borderRadius = '999px';
-    btn.style.background = '#fff';
-    btn.style.cursor = 'pointer';
-    btn.style.color = '#111827';
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openRouteForDate(arg.date);
+    Object.assign(btn.style, {
+      position: 'absolute',
+      right: '4px',
+      top: '2px',
+      fontSize: '11px',
+      lineHeight: '1',
+      padding: '3px 6px',
+      border: '1px solid #e5e7eb',
+      borderRadius: '999px',
+      background: '#fff',
+      cursor: 'pointer',
+      boxShadow: '0 1px 3px rgba(0,0,0,.06)',
+      zIndex: 5,
     });
 
-    // Контейнер заголовка делаем flex, чтобы кнопка аккуратно встала после даты
-    arg.el.style.display = 'flex';
-    arg.el.style.alignItems = 'center';
-    arg.el.style.gap = '6px';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openRouteForDay(new Date(arg.date), jobs, getClientAddress);
+    });
 
-    // В dayGrid месяц названия дней короткие — кнопка не должна ломать вёрстку
-    // Если места мало, скрываем текст даты через nowrap, а кнопка останется компактной
-    arg.el.style.whiteSpace = 'nowrap';
-
-    arg.el.appendChild(btn);
+    root.appendChild(btn);
   };
 
-  /* ---------- UI ---------- */
+  // UI
   return (
     <div style={{
       padding: 16,
@@ -355,7 +331,6 @@ export default function CalendarPage() {
     }}>
       <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12, letterSpacing: 0.3 }}>🗓 Calendar</h1>
 
-      {/* controls */}
       <div
         style={{
           display: 'flex',
@@ -383,7 +358,7 @@ export default function CalendarPage() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search: client/company/address/job #"
+            placeholder="Search: client/address/job #"
             style={{
               border: '1px solid #e5e7eb',
               borderRadius: 10,
@@ -401,7 +376,7 @@ export default function CalendarPage() {
               if (api) api.changeView(e.target.value);
             }}
             style={{
-              border: '1px solid #e5e7eb',
+              border: '1px solid '#e5e7eb',
               borderRadius: 10,
               padding: '8px 12px',
               background: '#fff',
@@ -415,7 +390,6 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {/* unassigned */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ marginBottom: 6, fontWeight: 700, color: '#111827' }}>
           Unassigned <span style={{ color: '#6b7280', fontWeight: 500 }}>(drag onto the calendar of a selected technician tab)</span>:
@@ -434,7 +408,7 @@ export default function CalendarPage() {
         >
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
           {unassigned.map((j) => {
-            const title = `#${j.job_number || j.id} — ${getClientName(j)}${getClientCompany(j) ? ` (${getClientCompany(j)})` : ''}`;
+            const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
             const addr = getClientAddress(j);
             return (
               <div
@@ -459,9 +433,7 @@ export default function CalendarPage() {
                 }}
               >
                 <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
-                <div style={{ color: '#111827', fontWeight: 700 }}>
-                  {getClientName(j)}{getClientCompany(j) ? ` • ${getClientCompany(j)}` : ''}
-                </div>
+                <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
                 {addr && (
                   <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
                 )}
@@ -490,7 +462,6 @@ export default function CalendarPage() {
           headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
           locale="en"
 
-          /* ===== time settings ===== */
           timeZone="America/New_York"
           slotMinTime="08:00:00"
           slotMaxTime="20:00:00"
@@ -504,7 +475,6 @@ export default function CalendarPage() {
           dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
           stickyHeaderDates={true}
 
-          /* ===== visuals ===== */
           height="72vh"
           eventDisplay="block"
           eventTimeFormat={{ hour: '2-digit', minute: '2-digit' }}
@@ -513,16 +483,13 @@ export default function CalendarPage() {
           eventOverlap={true}
           slotEventOverlap={false}
 
-          /* ===== DnD/edit ===== */
           editable
           eventStartEditable
           eventDurationEditable={false}
           droppable
 
-          /* ===== data ===== */
           events={events}
 
-          /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
           eventClick={handleEventClick}
@@ -537,7 +504,6 @@ export default function CalendarPage() {
   );
 }
 
-/* ========== small UI components ========== */
 function Tab({ active, onClick, children }) {
   return (
     <button
@@ -592,4 +558,3 @@ function Legend() {
     </div>
   );
 }
-
