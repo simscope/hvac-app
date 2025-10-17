@@ -15,16 +15,21 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// сравнение: один и тот же календарный день (локально)
-const sameDayLocal = (a, b) => {
-  if (!a || !b) return false;
-  const ad = new Date(a);
-  const bd = new Date(b);
-  return (
-    ad.getFullYear() === bd.getFullYear() &&
-    ad.getMonth() === bd.getMonth() &&
-    ad.getDate() === bd.getDate()
-  );
+// диапазон локальных суток данного дня: [start, end)
+const localDayRange = (d) => {
+  const start = new Date(d);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return [start, end];
+};
+
+// попадание в локальные сутки
+const inLocalDayRange = (date, dayDate) => {
+  if (!date || !dayDate) return false;
+  const [start, end] = localDayRange(dayDate);
+  const t = new Date(date).getTime();
+  return t >= start.getTime() && t < end.getTime();
 };
 
 // компактный alert
@@ -280,17 +285,16 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE BUILDER ---------- */
+  /* ---------- ROUTE BUILDER (fixed day matching) ---------- */
   const openRouteForDate = (dayDate) => {
     const api = calRef.current?.getApi?.();
     if (!api) return;
 
-    // события выбранного дня с учётом вкладки техника и поиска
+    // События, попадающие в локальные сутки выбранного дня
     const dayEvents = api.getEvents()
-      .filter((e) => e.start && sameDayLocal(e.start, dayDate))
+      .filter((e) => e.start && inLocalDayRange(e.start, dayDate))
       .sort((a, b) => (a.start?.getTime() || 0) - (b.start?.getTime() || 0));
 
-    // адреса по порядку времени; дубликаты НЕ убираем
     const addresses = dayEvents
       .map((e) => String(e.extendedProps?.address || '').trim())
       .filter(Boolean);
@@ -301,14 +305,12 @@ export default function CalendarPage() {
     }
 
     if (addresses.length === 1) {
-      // один адрес — просто открываем место
       const place = encodeURIComponent(addresses[0]);
       const url = `https://www.google.com/maps/search/?api=1&query=${place}`;
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
 
-    // два и более адресов — строим авто-маршрут
     const origin = encodeURIComponent(addresses[0]);
     const destination = encodeURIComponent(addresses[addresses.length - 1]);
     const waypoints = addresses.slice(1, -1).map(encodeURIComponent).join('|');
