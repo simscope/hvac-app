@@ -1,4 +1,3 @@
-// client/src/pages/CalendarPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -8,81 +7,43 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
-/* ================= helpers ================= */
-const TZ = 'America/New_York';
-
-// ''|null=>null; '123'=>123; otherwise keep string (UUID)
+/* ========== helpers ========== */
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
   return /^\d+$/.test(s) ? Number(s) : s;
 };
-
-const clean = (v) => (String(v ?? '').trim() || '');
-const looksLikeAddress = (s) => {
-  const v = clean(s);
-  return v.length >= 5 && (/[a-zA-Zа-яА-Я]/.test(v) || /\d/.test(v));
+const clean = (v) => {
+  const s = String(v ?? '').trim();
+  return s && s.toLowerCase() !== 'empty' ? s : '';
 };
-
-const composeAddress = (o = {}) => {
+function composeAddress(o = {}) {
   const parts = [
-    // client fields
-    o.client_address, o.client_street, o.client_street1, o.client_street2,
-    o.client_city, o.client_state, o.client_region, o.client_zip, o.client_postal_code,
-    // generic fields
-    o.address, o.address_line1, o.address_line2, o.street, o.street1, o.street2,
-    o.city, o.state, o.region, o.zip, o.postal_code,
-  ].map(clean).filter(Boolean);
-  const uniq = [];
-  for (const p of parts) if (!uniq.length || uniq[uniq.length - 1] !== p) uniq.push(p);
-  return uniq.join(', ');
-};
-
-// NY date-only string from JS Date
-const nyDateStr = (d) =>
-  new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' })
-    .format(d);
-
-/** Открыть Google Maps (api=1), driving only, в порядке времени */
-function openRouteLinks(points) {
-  if (!points || points.length === 0) return;
-  const enc = (s) => encodeURIComponent(String(s).replace(/\n/g, ' ').trim());
-  const MAX_POINTS_PER_MAP = 11; // origin + 9 waypoints + destination
-
-  const openChunk = (chunk) => {
-    if (chunk.length === 1) {
-      const url = `https://www.google.com/maps/dir/?api=1&destination=${enc(chunk[0])}&travelmode=driving`;
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
-    }
-    const origin = enc(chunk[0]);
-    const destination = enc(chunk[chunk.length - 1]);
-    const ways = chunk.slice(1, -1).map(enc).join('|');
-    const url =
-      `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${origin}` +
-      `&destination=${destination}` +
-      (ways ? `&waypoints=${ways}` : '') +
-      `&travelmode=driving`;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
-
-  if (points.length <= MAX_POINTS_PER_MAP) {
-    openChunk(points);
-  } else {
-    // разбиваем, стыкуя начало чанка с концом предыдущего
-    let start = 0;
-    while (start < points.length) {
-      const end = Math.min(start + MAX_POINTS_PER_MAP - 1, points.length - 1);
-      let chunk = points.slice(start, end + 1);
-      if (start > 0) chunk = [points[start - 1], ...chunk];
-      openChunk(chunk);
-      start = end;
-    }
-  }
+    o.address,
+    o.address_line1,
+    o.address_line2,
+    o.street,
+    o.street1,
+    o.street2,
+    o.city,
+    o.state,
+    o.region,
+    o.zip,
+    o.postal_code,
+  ]
+    .map(clean)
+    .filter(Boolean);
+  return [...new Set(parts)].join(', ');
+}
+function sameDay(a, b) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
-/* ================= component ================= */
+/* ========== Component ========== */
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
@@ -106,7 +67,8 @@ export default function CalendarPage() {
           .select('id, name, role')
           .in('role', ['technician', 'tech'])
           .order('name', { ascending: true }),
-        supabase.from('clients').select('id, full_name, address, city, state, zip, client_address'),
+        // важное: берём full_name, name, company и address
+        supabase.from('clients').select('id, full_name, name, company, address, city, state, zip, region, postal_code'),
       ]);
       setJobs(j || []);
       setTechs(t || []);
@@ -159,18 +121,21 @@ export default function CalendarPage() {
     return m;
   }, [techs]);
 
-  /* ---------- utils ---------- */
-  const getClientName = (job) =>
-    clientsById.get(String(job?.client_id))?.full_name ||
-    job?.client_name ||
-    job?.full_name ||
-    'No name';
+  /* ---------- utils: name & address ---------- */
+  const getClientName = (job) => {
+    const c = clientsById.get(String(job?.client_id));
+    const nameFromClient = clean(c?.full_name) || clean(c?.name);
+    const nameFromJob = clean(job?.client_name) || clean(job?.full_name) || clean(job?.name);
+    const base = nameFromClient || nameFromJob;
+    if (!base) return '—';
+    return c?.company ? `${base} (${c.company})` : base;
+  };
 
   const getClientAddress = (job) => {
-    const client = clientsById.get(String(job?.client_id));
-    const addrFromClient = client ? composeAddress(client) || client.address : '';
-    const addrFromJob = composeAddress(job);
-    return clean(addrFromClient) || clean(addrFromJob);
+    const c = clientsById.get(String(job?.client_id));
+    const addrFromClient = c ? (composeAddress(c) || clean(c.address)) : '';
+    const addrFromJob = composeAddress(job) || clean(job?.client_address) || clean(job?.address);
+    return clean(addrFromClient) || clean(addrFromJob) || '';
   };
 
   const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
@@ -191,7 +156,7 @@ export default function CalendarPage() {
     return () => d.destroy();
   }, [extRef, jobs]);
 
-  /* ---------- filter & events ---------- */
+  /* ---------- filtering ---------- */
   const filteredJobs = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (jobs || []).filter((j) => {
@@ -204,6 +169,7 @@ export default function CalendarPage() {
     });
   }, [jobs, activeTech, query, clientsById]);
 
+  /* ---------- events ---------- */
   const events = useMemo(() => {
     return filteredJobs.map((j) => {
       const k = statusKey(j.status);
@@ -211,18 +177,17 @@ export default function CalendarPage() {
       const tName = techById.get(String(j.technician_id))?.name || '';
       const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
-      const address = getClientAddress(j);
 
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // timestamptz; FC сам отрисует по TZ
+        start: j.appointment_time, // timestamptz (UTC) — FullCalendar сам локализует
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
         textColor: s.fg,
         extendedProps: {
-          address,
+          address: getClientAddress(j),
           unpaid: isUnpaid(j),
           isRecall: statusKey(j.status) === 'recall',
           job: j,
@@ -240,7 +205,7 @@ export default function CalendarPage() {
   /* ---------- DnD/click handlers ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // write UTC for timestamptz
+    const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC для timestamptz
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -310,75 +275,64 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE: per-day button ---------- */
-  const buildDayRoute = (dateLike) => {
-    const api = calRef.current?.getApi?.();
-    if (!api) return;
+  /* ---------- Маршрут на конкретный день ---------- */
+  function openDayRoute(date) {
+    // собираем все события этого дня
+    const dayEvents = events
+      .filter((e) => e.start)
+      .filter((e) => sameDay(new Date(e.start), date))
+      // сортировка по времени
+      .sort((a, b) => new Date(a.start) - new Date(b.start));
 
-    // NY-дата для сравнения дней
-    const targetDay = nyDateStr(new Date(dateLike));
+    const addresses = dayEvents
+      .map((e) => clean(e.extendedProps?.address))
+      .filter(Boolean);
 
-    // Берём уже ОТРисованные события у календаря и фильтруем по дню (в NY TZ)
-    const dayEvents = api.getEvents().filter((ev) => {
-      const d = ev.start;
-      if (!d) return false;
-      return nyDateStr(d) === targetDay;
-    });
-
-    // Адреса + сортировка по времени начала
-    const rows = dayEvents
-      .map((ev) => ({
-        start: ev.start ? ev.start.getTime() : 0,
-        address: clean(ev.extendedProps?.address),
-        title: ev.title,
-      }))
-      .filter((r) => looksLikeAddress(r.address))
-      .sort((a, b) => a.start - b.start);
-
-    if (rows.length === 0) {
+    if (addresses.length < 2) {
       alert('На этот день нет заявок с валидными адресами.');
       return;
     }
 
-    const points = rows.map((r) => r.address);
+    // origin – первый адрес; остальные — waypoints; destination — последний
+    const origin = encodeURIComponent(addresses[0]);
+    const destination = encodeURIComponent(addresses[addresses.length - 1]);
+    const waypoints = addresses.slice(1, -1).map(encodeURIComponent).join('|');
 
-    // debug-подсказка, чтобы видеть, какие адреса ушли в маршрут
-    console.log('Route for', targetDay, points);
+    const url =
+      `https://www.google.com/maps/dir/?api=1` +
+      `&origin=${origin}` +
+      `&destination=${destination}` +
+      (waypoints ? `&waypoints=${waypoints}` : '') +
+      `&travelmode=driving`; // только автомобиль
 
-    openRouteLinks(points);
-  };
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
 
-  // Вставляем кнопку в заголовок каждого дня
+  // Кнопка «Маршрут» над каждым днём
   const dayHeaderContent = (arg) => {
-    const root = document.createElement('div');
-    root.style.display = 'flex';
-    root.style.alignItems = 'center';
-    root.style.justifyContent = 'space-between';
-    root.style.gap = '6px';
-    root.style.width = '100%';
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.style.gap = '6px';
 
-    const left = document.createElement('div');
-    left.textContent = new Intl.DateTimeFormat('en-US', {
-      timeZone: TZ,
-      weekday: 'short', month: 'numeric', day: 'numeric',
-    }).format(arg.date);
+    const label = document.createElement('div');
+    label.textContent = arg.text; // стандартный заголовок (напр. Mon, 10/13)
+    label.style.fontWeight = '700';
 
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.textContent = 'Маршрут';
-    btn.style.fontSize = '11px';
-    btn.style.padding = '2px 6px';
-    btn.style.borderRadius = '999px';
     btn.style.border = '1px solid #e5e7eb';
     btn.style.background = '#fff';
+    btn.style.borderRadius = '999px';
+    btn.style.padding = '2px 8px';
+    btn.style.fontSize = '12px';
     btn.style.cursor = 'pointer';
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      buildDayRoute(arg.date);
-    };
+    btn.onclick = () => openDayRoute(arg.date);
 
-    root.appendChild(left);
-    root.appendChild(btn);
-    return { domNodes: [root] };
+    container.appendChild(label);
+    container.appendChild(btn);
+    return { domNodes: [container] };
   };
 
   /* ---------- UI ---------- */
@@ -523,7 +477,7 @@ export default function CalendarPage() {
           locale="en"
 
           /* ===== time settings ===== */
-          timeZone={TZ}
+          timeZone="America/New_York"
           slotMinTime="08:00:00"
           slotMaxTime="20:00:00"
           businessHours={{ daysOfWeek: [0,1,2,3,4,5,6], startTime: '08:00', endTime: '20:00' }}
@@ -533,7 +487,7 @@ export default function CalendarPage() {
           slotDuration="01:00:00"
           slotLabelInterval="01:00"
           slotLabelFormat={{ hour: '2-digit', minute: '2-digit' }}
-          dayHeaderContent={dayHeaderContent}
+          dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
           stickyHeaderDates={true}
 
           /* ===== visuals ===== */
@@ -553,6 +507,9 @@ export default function CalendarPage() {
 
           /* ===== data ===== */
           events={events}
+
+          /* ===== per-day header button ===== */
+          dayHeaderContent={dayHeaderContent}
 
           /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
