@@ -15,20 +15,29 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// диапазон локальных суток данного дня: [start, end)
-const localDayRange = (d) => {
-  const start = new Date(d);
-  start.setHours(0, 0, 0, 0);
+// ==== day cell date fix ====
+// FullCalendar в dayHeaderContent отдаёт arg.date как UTC-полночь.
+// Чтобы не уехать на предыдущий день в America/New_York, интерпретируем
+// Y-M-D из UTC-компонент и строим ЛОКАЛЬНУЮ дату этого дня.
+const localStartOfCellDay = (utcDateObj) => {
+  return new Date(
+    utcDateObj.getUTCFullYear(),
+    utcDateObj.getUTCMonth(),
+    utcDateObj.getUTCDate(), // это локальная 00:00 нужного дня
+    0, 0, 0, 0
+  );
+};
+const localRangeOfCellDay = (utcDateObj) => {
+  const start = localStartOfCellDay(utcDateObj);
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
-  return [start, end];
+  return [start, end]; // [00:00; 24:00) локально
 };
-
-// попадание в локальные сутки
-const inLocalDayRange = (date, dayDate) => {
-  if (!date || !dayDate) return false;
-  const [start, end] = localDayRange(dayDate);
-  const t = new Date(date).getTime();
+// попадает ли дата события в сутки выбранной ячейки (локально)
+const inLocalCellDay = (eventDate, cellUtcDate) => {
+  if (!eventDate || !cellUtcDate) return false;
+  const [start, end] = localRangeOfCellDay(cellUtcDate);
+  const t = new Date(eventDate).getTime();
   return t >= start.getTime() && t < end.getTime();
 };
 
@@ -285,14 +294,14 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE BUILDER (fixed day matching) ---------- */
-  const openRouteForDate = (dayDate) => {
+  /* ---------- ROUTE BUILDER (no day shift) ---------- */
+  const openRouteForDate = (cellUtcDate) => {
     const api = calRef.current?.getApi?.();
     if (!api) return;
 
-    // События, попадающие в локальные сутки выбранного дня
+    // События, попадающие в ЛОКАЛЬНЫЕ сутки выбранной ячейки (исправляет "вчера")
     const dayEvents = api.getEvents()
-      .filter((e) => e.start && inLocalDayRange(e.start, dayDate))
+      .filter((e) => e.start && inLocalCellDay(e.start, cellUtcDate))
       .sort((a, b) => (a.start?.getTime() || 0) - (b.start?.getTime() || 0));
 
     const addresses = dayEvents
@@ -347,7 +356,7 @@ export default function CalendarPage() {
     btn.style.cursor = 'pointer';
     btn.style.fontSize = '12px';
     btn.style.boxShadow = '0 6px 16px rgba(29,78,216,0.25)';
-    btn.addEventListener('click', () => openRouteForDate(arg.date));
+    btn.addEventListener('click', () => openRouteForDate(arg.date)); // arg.date = UTC-полночь, мы это учли
     wrap.appendChild(btn);
 
     return { domNodes: [wrap] };
