@@ -1,4 +1,3 @@
-// client/src/pages/CalendarPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -8,7 +7,8 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
-/* ========== helpers ========== */
+/* ================= helpers ================= */
+
 // ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
@@ -16,29 +16,39 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// дата-ключ в TZ NY из appointment_time (ISO)
-const dateKeyNY = (isoLike) => {
-  if (!isoLike) return '';
-  const d = new Date(isoLike);
-  if (Number.isNaN(d.getTime())) return '';
-  const f = new Intl.DateTimeFormat('en-CA', { // YYYY-MM-DD
+// NY-only date key for an ISO string ("YYYY-MM-DD")
+const dateKeyNY = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  });
-  return f.format(d); // "2025-10-12"
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === 'year')?.value || '0000';
+  const m = parts.find((p) => p.type === 'month')?.value || '00';
+  const da = parts.find((p) => p.type === 'day')?.value || '00';
+  return `${y}-${m}-${da}`;
 };
-// дата-ключ из Date (уже day в календаре)
+
 const dateKeyFromDateNY = (dateObj) => {
-  const f = new Intl.DateTimeFormat('en-CA', {
+  const d = new Date(dateObj);
+  const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  });
-  return f.format(dateObj);
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === 'year')?.value || '0000';
+  const m = parts.find((p) => p.type === 'month')?.value || '00';
+  const da = parts.find((p) => p.type === 'day')?.value || '00';
+  return `${y}-${m}-${da}`;
 };
+
+const clean = (v) => (String(v ?? '').trim() || '');
+
+/* ================= component ================= */
 
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
@@ -171,7 +181,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // UTC (timestamptz)
+        start: j.appointment_time, // UTC (timestamptz) — FullCalendar сам отрисует в America/New_York
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -231,83 +241,97 @@ export default function CalendarPage() {
 
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
-  /* ---------- ROUTE per day ---------- */
+  /* ---------- ROUTE PER DAY (driving) ---------- */
   const buildDayRoute = (dateObj) => {
-    const key = dateKeyFromDateNY(dateObj); // "YYYY-MM-DD" in NY
-    // Берём ВСЕ джобы (не только отфильтрованные поиском), но уважаем выбранного техника.
-    const list = (jobs || [])
+    const key = dateKeyFromDateNY(dateObj); // "YYYY-MM-DD" (NY)
+
+    // Берём заявки этого дня (в рамках выбранного техника), сортируем по времени
+    const sorted = (jobs || [])
       .filter((j) => j.appointment_time)
       .filter((j) => (activeTech === 'all' ? true : String(j.technician_id) === String(activeTech)))
       .filter((j) => dateKeyNY(j.appointment_time) === key)
       .map((j) => ({
-        id: j.id,
         when: new Date(j.appointment_time),
-        addr: getClientAddress(j),
-        title: `#${j.job_number || j.id} — ${getClientName(j)}`,
+        addr: clean(getClientAddress(j)),
       }))
-      .filter((x) => x.addr && x.addr.trim().length > 0)
-      .sort((a, b) => a.when - b.when);
+      .filter((x) => x.addr)
+      .sort((a, b) => a.when - b.when)
+      .map((x) => x.addr);
 
-    if (list.length === 0) {
+    if (sorted.length === 0) {
       window.alert('В этот день нет заявок с адресами.');
       return;
     }
 
-    // Google Maps Directions API via URL
-    const encode = (s) => encodeURIComponent(s.replace(/\n/g, ' ').trim());
-    const pts = list.map((x) => encode(x.addr));
-    const origin = pts[0];
-    const destination = pts[pts.length - 1];
-    const waypoints = pts.slice(1, -1).join('|'); // 'a|b|c'
-    const base = 'https://www.google.com/maps/dir/?api=1';
-    const url =
-      pts.length === 1
-        ? `${base}&destination=${destination}`
-        : `${base}&origin=${origin}&destination=${destination}${waypoints ? `&waypoints=${waypoints}` : ''}`;
+    // Убираем подряд идущие дубликаты (часто одна и та же точка встречается несколько раз)
+    const addresses = [];
+    for (const a of sorted) {
+      if (addresses.length === 0 || addresses[addresses.length - 1] !== a) addresses.push(a);
+    }
 
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
+    // Web Google Maps надёжно ведёт до ~10 точек (origin + waypoints + destination)
+    const MAX_POINTS_PER_ROUTE = 10;
 
-  // кастомный заголовок дня с кнопкой
-  const renderDayHeader = (arg) => {
-    const wrap = document.createElement('div');
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.gap = '6px';
+    const openRoute = (points) => {
+      const enc = (s) => encodeURIComponent(s.replace(/\n/g, ' ').trim());
 
-    const title = document.createElement('div');
-    title.textContent = arg.text; // стандартный текст заголовка
-    title.style.fontWeight = '700';
-    wrap.appendChild(title);
+      if (points.length === 1) {
+        const url = `https://www.google.com/maps/dir/?api=1&destination=${enc(points[0])}&travelmode=driving`;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return;
+      }
 
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = 'Маршрут';
-    btn.style.border = '1px solid #e5e7eb';
-    btn.style.background = '#fff';
-    btn.style.borderRadius = '999px';
-    btn.style.padding = '2px 8px';
-    btn.style.fontSize = '11px';
-    btn.style.cursor = 'pointer';
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      buildDayRoute(arg.date);
+      const origin = enc(points[0]);
+      const destination = enc(points[points.length - 1]);
+      const ways = points.slice(1, -1).map(enc).join('|');
+
+      // optimize:true — быстрый порядок внутри сегмента.
+      // Уберите "optimize:true|" если хотите строго по времени.
+      const waypoints = ways ? `optimize:true|${ways}` : '';
+
+      const url =
+        `https://www.google.com/maps/dir/?api=1` +
+        `&origin=${origin}` +
+        `&destination=${destination}` +
+        (waypoints ? `&waypoints=${waypoints}` : '') +
+        `&travelmode=driving`;
+
+      window.open(url, '_blank', 'noopener,noreferrer');
     };
-    wrap.appendChild(btn);
 
-    return { domNodes: [wrap] };
+    if (addresses.length <= MAX_POINTS_PER_ROUTE) {
+      openRoute(addresses);
+    } else {
+      // Разбиваем на стыкующиеся сегменты
+      let start = 0;
+      while (start < addresses.length - 1) {
+        const end = Math.min(start + MAX_POINTS_PER_ROUTE - 1, addresses.length - 1);
+        const segment = addresses.slice(start, end + 1); // >=2 точки
+        if (segment.length >= 2) openRoute(segment);
+        // следующий сегмент начинается с последней точки предыдущего
+        start = end;
+      }
+      setTimeout(() => {
+        window.alert('Маршрут разбит на несколько карт (лимит точек в Google Maps). Откройте вкладки по очереди.');
+      }, 300);
+    }
   };
 
+  /* ---------- custom renders ---------- */
+
+  // Контент ячейки события (2 строки: заголовок + адрес)
   const renderEventContent = (arg) => {
     const { address } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
     wrap.style.fontSize = '12px';
+
     const line1 = document.createElement('div');
     line1.style.fontWeight = '700';
     line1.textContent = arg.event.title;
     wrap.appendChild(line1);
+
     if (address) {
       const line2 = document.createElement('div');
       line2.style.opacity = '0.9';
@@ -317,6 +341,7 @@ export default function CalendarPage() {
     return { domNodes: [wrap] };
   };
 
+  // Стили карточки события
   const eventDidMount = (info) => {
     const { unpaid, isRecall } = info.event.extendedProps || {};
     info.el.style.borderRadius = '10px';
@@ -330,6 +355,37 @@ export default function CalendarPage() {
       info.el.style.filter = 'saturate(1.2)';
       info.el.style.fontWeight = '700';
     }
+  };
+
+  // Кнопка "Маршрут" в заголовке КАЖДОГО дня
+  const dayHeaderContent = (arg) => {
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '6px';
+    wrap.style.justifyContent = 'space-between';
+
+    const label = document.createElement('div');
+    label.style.fontWeight = '700';
+    label.textContent = arg.text;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Маршрут';
+    btn.style.padding = '2px 8px';
+    btn.style.borderRadius = '999px';
+    btn.style.border = '1px solid #d1d5db';
+    btn.style.background = '#fff';
+    btn.style.fontSize = '11px';
+    btn.style.cursor = 'pointer';
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      buildDayRoute(arg.date);
+    };
+
+    wrap.appendChild(label);
+    wrap.appendChild(btn);
+    return { domNodes: [wrap] };
   };
 
   /* ---------- UI ---------- */
@@ -496,9 +552,6 @@ export default function CalendarPage() {
           eventOverlap={true}
           slotEventOverlap={false}
 
-          /* ===== header with ROUTE button ===== */
-          dayHeaderContent={renderDayHeader}
-
           /* ===== DnD/edit ===== */
           editable
           eventStartEditable
@@ -508,7 +561,8 @@ export default function CalendarPage() {
           /* ===== data ===== */
           events={events}
 
-          /* ===== callbacks ===== */
+          /* ===== custom headers & renders ===== */
+          dayHeaderContent={dayHeaderContent}
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
           eventClick={handleEventClick}
