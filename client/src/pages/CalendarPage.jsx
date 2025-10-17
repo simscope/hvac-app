@@ -15,6 +15,21 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
+// локальная проверка "тот же день" (без TZ-магии)
+const sameDayLocal = (a, b) => {
+  if (!a || !b) return false;
+  const ad = new Date(a);
+  const bd = new Date(b);
+  return (
+    ad.getFullYear() === bd.getFullYear() &&
+    ad.getMonth() === bd.getMonth() &&
+    ad.getDate() === bd.getDate()
+  );
+};
+
+// компактный alert
+const toast = (msg) => window.alert(msg);
+
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
@@ -153,7 +168,7 @@ export default function CalendarPage() {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
-      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`; // заголовок оставляем коротким
+      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`; // короткий заголовок
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
       return {
@@ -188,8 +203,8 @@ export default function CalendarPage() {
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
-      alert('Failed to save date/time');
       console.error(error);
+      toast('Failed to save date/time');
       return;
     }
     setJobs((prev) => prev.map((j) => (String(j.id) === id ? { ...j, appointment_time: newStart } : j)));
@@ -199,7 +214,7 @@ export default function CalendarPage() {
     const id = info.event.id;
     if (activeTech === 'all') {
       info.event.remove();
-      alert('Select a specific technician tab first, then drop the job onto the calendar.');
+      toast('Select a specific technician tab first, then drop the job onto the calendar.');
       return;
     }
     const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC
@@ -207,8 +222,8 @@ export default function CalendarPage() {
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
       info.event.remove();
-      alert('Failed to assign technician/date');
       console.error(error);
+      toast('Failed to assign technician/date');
       return;
     }
     setJobs((prev) =>
@@ -264,6 +279,77 @@ export default function CalendarPage() {
       info.el.style.filter = 'saturate(1.2)';
       info.el.style.fontWeight = '700';
     }
+  };
+
+  /* ---------- ROUTE BUILDER ---------- */
+  const openRouteForDate = (dayDate) => {
+    const api = calRef.current?.getApi?.();
+    if (!api) return;
+
+    // Берём только события, которые реально показаны (учитывая активные фильтры),
+    // и относятся к выбранному дню:
+    const dayEvents = api.getEvents()
+      .filter((e) => e.start && sameDayLocal(e.start, dayDate))
+      .sort((a, b) => (a.start?.getTime() || 0) - (b.start?.getTime() || 0));
+
+    // Собираем адреса
+    const addresses = [];
+    for (const ev of dayEvents) {
+      const addr = (ev.extendedProps && ev.extendedProps.address ? String(ev.extendedProps.address).trim() : '');
+      if (addr) addresses.push(addr);
+    }
+
+    // Убираем дубликаты адресов (если подряд несколько заявок по одному адресу)
+    const uniq = [];
+    const seen = new Set();
+    for (const a of addresses) {
+      const key = a.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); uniq.push(a); }
+    }
+
+    if (uniq.length < 2) {
+      toast('Нужно как минимум два адреса в этом дне, чтобы построить маршрут.');
+      return;
+    }
+
+    // Формируем ссылку Google Maps Directions (авто, без текущего местоположения)
+    const origin = encodeURIComponent(uniq[0]);
+    const destination = encodeURIComponent(uniq[uniq.length - 1]);
+    const waypoints = uniq.slice(1, -1).map(encodeURIComponent).join('|'); // до 23 точек допустимо
+    const url = `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}` + (waypoints ? `&waypoints=${waypoints}` : '');
+
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  // Рендер шапок дней с кнопкой "Маршрут"
+  const dayHeaderContent = (arg) => {
+    // arg.text — уже отформатированная дата (например, "Tue 10/14")
+    // arg.date — объект Date для этого дня
+    const wrap = document.createElement('div');
+    wrap.style.display = 'grid';
+    wrap.style.gridTemplateRows = 'auto auto';
+    wrap.style.placeItems = 'center';
+    wrap.style.gap = '6px';
+
+    const title = document.createElement('div');
+    title.textContent = arg.text;
+    title.style.fontWeight = '800';
+    wrap.appendChild(title);
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Маршрут';
+    btn.style.padding = '4px 8px';
+    btn.style.borderRadius = '999px';
+    btn.style.border = '1px solid #1d4ed8';
+    btn.style.background = 'linear-gradient(180deg,#2563eb,#1d4ed8)';
+    btn.style.color = '#fff';
+    btn.style.cursor = 'pointer';
+    btn.style.fontSize = '12px';
+    btn.style.boxShadow = '0 6px 16px rgba(29,78,216,0.25)';
+    btn.addEventListener('click', () => openRouteForDate(arg.date));
+    wrap.appendChild(btn);
+
+    return { domNodes: [wrap] };
   };
 
   /* ---------- UI ---------- */
@@ -451,6 +537,9 @@ export default function CalendarPage() {
           eventClick={handleEventClick}
           eventContent={renderEventContent}
           eventDidMount={eventDidMount}
+
+          /* ===== day header with route button ===== */
+          dayHeaderContent={dayHeaderContent}
         />
       </div>
 
