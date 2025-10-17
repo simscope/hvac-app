@@ -1,3 +1,4 @@
+// client/src/pages/CalendarPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -7,8 +8,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
-/* ================= helpers ================= */
-
+/* ========== helpers ========== */
 // ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
@@ -16,39 +16,92 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// NY-only date key for an ISO string ("YYYY-MM-DD")
-const dateKeyNY = (iso) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-  const y = parts.find((p) => p.type === 'year')?.value || '0000';
-  const m = parts.find((p) => p.type === 'month')?.value || '00';
-  const da = parts.find((p) => p.type === 'day')?.value || '00';
-  return `${y}-${m}-${da}`;
-};
-
-const dateKeyFromDateNY = (dateObj) => {
-  const d = new Date(dateObj);
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(d);
-  const y = parts.find((p) => p.type === 'year')?.value || '0000';
-  const m = parts.find((p) => p.type === 'month')?.value || '00';
-  const da = parts.find((p) => p.type === 'day')?.value || '00';
-  return `${y}-${m}-${da}`;
-};
-
 const clean = (v) => (String(v ?? '').trim() || '');
+const composeAddress = (o = {}) => {
+  const parts = [
+    o.address,
+    o.address_line1,
+    o.address_line2,
+    o.street,
+    o.street1,
+    o.street2,
+    o.city,
+    o.state,
+    o.region,
+    o.zip,
+    o.postal_code,
+    o.client_address,
+  ]
+    .map(clean)
+    .filter(Boolean);
 
-/* ================= component ================= */
+  // убираем подряд идущие дубликаты
+  const uniq = [];
+  for (const p of parts) if (!uniq.length || uniq[uniq.length - 1] !== p) uniq.push(p);
+  return uniq.join(', ');
+};
+
+// начало и конец дня (локально для America/New_York — но FullCalendar и так даёт правильные ISO границы)
+const startOfDayISO = (d) => {
+  const dt = new Date(d);
+  dt.setHours(0, 0, 0, 0);
+  return dt.toISOString();
+};
+const endOfDayISO = (d) => {
+  const dt = new Date(d);
+  dt.setHours(23, 59, 59, 999);
+  return dt.toISOString();
+};
+
+// построение ссылок Google Maps (api=1), ТОЛЬКО driving, порядок как в расписании
+function openRouteLinks(points) {
+  // points — массив строк адресов в порядке посещения
+  if (!points || points.length === 0) return;
+  const enc = (s) => encodeURIComponent(s.replace(/\n/g, ' ').trim());
+
+  // Ограничение на кол-во точек в одном окне. Для стабильности сделаем ~11 точек на карту:
+  // origin + 9 waypoints + destination = 11 адресов.
+  const MAX_POINTS_PER_MAP = 11;
+
+  const openChunk = (chunk) => {
+    if (chunk.length === 1) {
+      // только destination → Google возьмёт текущее местоположение как origin
+      const url = `https://www.google.com/maps/dir/?api=1&destination=${enc(chunk[0])}&travelmode=driving`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const origin = enc(chunk[0]);
+    const destination = enc(chunk[chunk.length - 1]);
+    const ways = chunk.slice(1, -1).map(enc).join('|');
+    const url =
+      `https://www.google.com/maps/dir/?api=1` +
+      `&origin=${origin}` +
+      `&destination=${destination}` +
+      (ways ? `&waypoints=${ways}` : '') +
+      `&travelmode=driving`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  if (points.length <= MAX_POINTS_PER_MAP) {
+    openChunk(points);
+  } else {
+    // разбиваем на последовательные отрезки, чтобы маршрут «цеплялся» конец-почало
+    let start = 0;
+    while (start < points.length) {
+      const end = Math.min(start + MAX_POINTS_PER_MAP - 1, points.length - 1);
+      let chunk = points.slice(start, end + 1);
+
+      // если это «средний» кусок — добавим стык: первая точка = последняя точка предыдущего куска
+      if (start > 0) {
+        chunk = [points[start - 1], ...chunk];
+      }
+
+      openChunk(chunk);
+
+      start = end;
+    }
+  }
+}
 
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
@@ -73,7 +126,7 @@ export default function CalendarPage() {
           .select('id, name, role')
           .in('role', ['technician', 'tech'])
           .order('name', { ascending: true }),
-        supabase.from('clients').select('id, full_name, address'),
+        supabase.from('clients').select('id, full_name, address, address_line1, address_line2, street, city, state, region, zip, postal_code'),
       ]);
       setJobs(j || []);
       setTechs(t || []);
@@ -127,17 +180,28 @@ export default function CalendarPage() {
   }, [techs]);
 
   /* ---------- utils ---------- */
-  const getClientName = (job) =>
-    clientsById.get(String(job?.client_id))?.full_name ||
-    job?.client_name ||
-    job?.full_name ||
-    'No name';
+  const getClientName = (job) => {
+    const c = clientsById.get(String(job?.client_id));
+    return clean(c?.full_name) || clean(job?.client_name) || clean(job?.full_name) || 'No name';
+  };
 
-  const getClientAddress = (job) =>
-    clientsById.get(String(job?.client_id))?.address ||
-    job?.client_address ||
-    job?.address ||
-    '';
+  const getClientAddress = (job) => {
+    const c = clientsById.get(String(job?.client_id));
+    const fromClient = c ? composeAddress(c) : '';
+    const fromJob = composeAddress({
+      client_address: job?.client_address,
+      address: job?.address,
+      address_line1: job?.address_line1,
+      address_line2: job?.address_line2,
+      street: job?.street,
+      city: job?.city,
+      state: job?.state,
+      region: job?.region,
+      zip: job?.zip,
+      postal_code: job?.postal_code,
+    });
+    return clean(fromClient) || clean(fromJob);
+  };
 
   const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
   const unpaidLabor = (j) => Number(j.labor_price || 0) > 0 && !j.labor_payment_method;
@@ -181,7 +245,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // UTC (timestamptz) — FullCalendar сам отрисует в America/New_York
+        start: j.appointment_time, // UTC (timestamptz)
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -241,97 +305,16 @@ export default function CalendarPage() {
 
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
-  /* ---------- ROUTE PER DAY (driving) ---------- */
-  const buildDayRoute = (dateObj) => {
-    const key = dateKeyFromDateNY(dateObj); // "YYYY-MM-DD" (NY)
-
-    // Берём заявки этого дня (в рамках выбранного техника), сортируем по времени
-    const sorted = (jobs || [])
-      .filter((j) => j.appointment_time)
-      .filter((j) => (activeTech === 'all' ? true : String(j.technician_id) === String(activeTech)))
-      .filter((j) => dateKeyNY(j.appointment_time) === key)
-      .map((j) => ({
-        when: new Date(j.appointment_time),
-        addr: clean(getClientAddress(j)),
-      }))
-      .filter((x) => x.addr)
-      .sort((a, b) => a.when - b.when)
-      .map((x) => x.addr);
-
-    if (sorted.length === 0) {
-      window.alert('В этот день нет заявок с адресами.');
-      return;
-    }
-
-    // Убираем подряд идущие дубликаты (часто одна и та же точка встречается несколько раз)
-    const addresses = [];
-    for (const a of sorted) {
-      if (addresses.length === 0 || addresses[addresses.length - 1] !== a) addresses.push(a);
-    }
-
-    // Web Google Maps надёжно ведёт до ~10 точек (origin + waypoints + destination)
-    const MAX_POINTS_PER_ROUTE = 10;
-
-    const openRoute = (points) => {
-      const enc = (s) => encodeURIComponent(s.replace(/\n/g, ' ').trim());
-
-      if (points.length === 1) {
-        const url = `https://www.google.com/maps/dir/?api=1&destination=${enc(points[0])}&travelmode=driving`;
-        window.open(url, '_blank', 'noopener,noreferrer');
-        return;
-      }
-
-      const origin = enc(points[0]);
-      const destination = enc(points[points.length - 1]);
-      const ways = points.slice(1, -1).map(enc).join('|');
-
-      // optimize:true — быстрый порядок внутри сегмента.
-      // Уберите "optimize:true|" если хотите строго по времени.
-      const waypoints = ways ? `optimize:true|${ways}` : '';
-
-      const url =
-        `https://www.google.com/maps/dir/?api=1` +
-        `&origin=${origin}` +
-        `&destination=${destination}` +
-        (waypoints ? `&waypoints=${waypoints}` : '') +
-        `&travelmode=driving`;
-
-      window.open(url, '_blank', 'noopener,noreferrer');
-    };
-
-    if (addresses.length <= MAX_POINTS_PER_ROUTE) {
-      openRoute(addresses);
-    } else {
-      // Разбиваем на стыкующиеся сегменты
-      let start = 0;
-      while (start < addresses.length - 1) {
-        const end = Math.min(start + MAX_POINTS_PER_ROUTE - 1, addresses.length - 1);
-        const segment = addresses.slice(start, end + 1); // >=2 точки
-        if (segment.length >= 2) openRoute(segment);
-        // следующий сегмент начинается с последней точки предыдущего
-        start = end;
-      }
-      setTimeout(() => {
-        window.alert('Маршрут разбит на несколько карт (лимит точек в Google Maps). Откройте вкладки по очереди.');
-      }, 300);
-    }
-  };
-
-  /* ---------- custom renders ---------- */
-
-  // Контент ячейки события (2 строки: заголовок + адрес)
   const renderEventContent = (arg) => {
     const { address } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
     wrap.style.fontSize = '12px';
-
     const line1 = document.createElement('div');
     line1.style.fontWeight = '700';
     line1.textContent = arg.event.title;
     wrap.appendChild(line1);
-
     if (address) {
       const line2 = document.createElement('div');
       line2.style.opacity = '0.9';
@@ -341,7 +324,6 @@ export default function CalendarPage() {
     return { domNodes: [wrap] };
   };
 
-  // Стили карточки события
   const eventDidMount = (info) => {
     const { unpaid, isRecall } = info.event.extendedProps || {};
     info.el.style.borderRadius = '10px';
@@ -357,35 +339,66 @@ export default function CalendarPage() {
     }
   };
 
-  // Кнопка "Маршрут" в заголовке КАЖДОГО дня
-  const dayHeaderContent = (arg) => {
-    const wrap = document.createElement('div');
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.gap = '6px';
-    wrap.style.justifyContent = 'space-between';
+  /* ---------- ROUTE per day ---------- */
+  // Собираем адреса всех записей текущей выборки за день (в порядке времени).
+  const buildDayAddresses = (dayDate) => {
+    const startISO = startOfDayISO(dayDate);
+    const endISO = endOfDayISO(dayDate);
 
-    const label = document.createElement('div');
-    label.style.fontWeight = '700';
-    label.textContent = arg.text;
+    // из всех jobs, а не только events (но применяем те же фильтры activeTech/query)
+    const q = query.trim().toLowerCase();
 
+    const dayJobs = (jobs || [])
+      .filter((j) => j.appointment_time && j.appointment_time >= startISO && j.appointment_time <= endISO)
+      .filter((j) => (activeTech === 'all' ? true : String(j.technician_id) === String(activeTech)))
+      .filter((j) => {
+        if (!q) return true;
+        const name = getClientName(j).toLowerCase();
+        const addr = getClientAddress(j).toLowerCase();
+        return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
+      })
+      .sort((a, b) => new Date(a.appointment_time) - new Date(b.appointment_time));
+
+    const addresses = dayJobs
+      .map((j) => getClientAddress(j))
+      .map((s) => clean(s))
+      .filter(Boolean);
+
+    // убираем точные повторы подряд
+    const dedup = [];
+    for (const a of addresses) if (!dedup.length || dedup[dedup.length - 1] !== a) dedup.push(a);
+    return dedup;
+  };
+
+  // Вставляем кнопку над заголовком дня
+  const dayHeaderDidMount = (arg) => {
+    // arg.date — Date в локали календаря (America/New_York, т.к. timeZone="America/New_York")
     const btn = document.createElement('button');
-    btn.type = 'button';
     btn.textContent = 'Маршрут';
-    btn.style.padding = '2px 8px';
-    btn.style.borderRadius = '999px';
-    btn.style.border = '1px solid #d1d5db';
-    btn.style.background = '#fff';
-    btn.style.fontSize = '11px';
-    btn.style.cursor = 'pointer';
-    btn.onclick = (e) => {
+    btn.title = 'Построить авто-маршрут между заявками этого дня';
+    Object.assign(btn.style, {
+      marginLeft: '8px',
+      padding: '2px 8px',
+      borderRadius: '999px',
+      border: '1px solid #1d4ed8',
+      background: 'linear-gradient(180deg,#2563eb,#1d4ed8)',
+      color: '#fff',
+      fontSize: '12px',
+      fontWeight: '700',
+      cursor: 'pointer',
+      boxShadow: '0 4px 12px rgba(29,78,216,0.25)',
+    });
+    btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      buildDayRoute(arg.date);
-    };
-
-    wrap.appendChild(label);
-    wrap.appendChild(btn);
-    return { domNodes: [wrap] };
+      const points = buildDayAddresses(arg.date);
+      if (!points.length) {
+        alert('На этот день нет заявок с валидными адресами.');
+        return;
+      }
+      openRouteLinks(points);
+    });
+    // вставляем рядом с датой
+    arg.el.appendChild(btn);
   };
 
   /* ---------- UI ---------- */
@@ -561,8 +574,10 @@ export default function CalendarPage() {
           /* ===== data ===== */
           events={events}
 
-          /* ===== custom headers & renders ===== */
-          dayHeaderContent={dayHeaderContent}
+          /* ===== per-day button ===== */
+          dayHeaderDidMount={dayHeaderDidMount}
+
+          /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
           eventClick={handleEventClick}
