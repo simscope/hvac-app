@@ -17,33 +17,7 @@ const clean = (v) => {
   const s = String(v ?? '').trim();
   return s && s.toLowerCase() !== 'empty' ? s : '';
 };
-function composeAddress(o = {}) {
-  const parts = [
-    o.address,
-    o.address_line1,
-    o.address_line2,
-    o.street,
-    o.street1,
-    o.street2,
-    o.city,
-    o.state,
-    o.region,
-    o.zip,
-    o.postal_code,
-  ]
-    .map(clean)
-    .filter(Boolean);
-  return [...new Set(parts)].join(', ');
-}
-function sameDay(a, b) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
 
-/* ========== Component ========== */
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
@@ -67,8 +41,7 @@ export default function CalendarPage() {
           .select('id, name, role')
           .in('role', ['technician', 'tech'])
           .order('name', { ascending: true }),
-        // важное: берём full_name, name, company и address
-        supabase.from('clients').select('id, full_name, name, company, address, city, state, zip, region, postal_code'),
+        supabase.from('clients').select('*'),
       ]);
       setJobs(j || []);
       setTechs(t || []);
@@ -121,21 +94,35 @@ export default function CalendarPage() {
     return m;
   }, [techs]);
 
-  /* ---------- utils: name & address ---------- */
-  const getClientName = (job) => {
-    const c = clientsById.get(String(job?.client_id));
-    const nameFromClient = clean(c?.full_name) || clean(c?.name);
-    const nameFromJob = clean(job?.client_name) || clean(job?.full_name) || clean(job?.name);
-    const base = nameFromClient || nameFromJob;
-    if (!base) return '—';
-    return c?.company ? `${base} (${c.company})` : base;
-  };
-
+  /* ---------- utils: address & display name ---------- */
   const getClientAddress = (job) => {
     const c = clientsById.get(String(job?.client_id));
-    const addrFromClient = c ? (composeAddress(c) || clean(c.address)) : '';
-    const addrFromJob = composeAddress(job) || clean(job?.client_address) || clean(job?.address);
-    return clean(addrFromClient) || clean(addrFromJob) || '';
+    const parts = [
+      c?.address, c?.address_line1, c?.address_line2,
+      c?.street, c?.street1, c?.street2,
+      c?.city, c?.state, c?.region, c?.zip, c?.postal_code,
+      job?.client_address, job?.address,
+    ].map(clean).filter(Boolean);
+    const addr = [...new Set(parts)].join(', ');
+    return addr;
+  };
+
+  const getDisplayName = (job) => {
+    const c = clientsById.get(String(job?.client_id));
+    const name =
+      clean(c?.full_name) ||
+      clean(c?.name) ||
+      clean(job?.client_name) ||
+      clean(job?.full_name) ||
+      clean(job?.name);
+    const company = clean(c?.company) || clean(job?.company);
+
+    if (name && company) return `${name} (${company})`;
+    if (name) return name;
+    if (company) return company;
+
+    const addr = getClientAddress(job);
+    return addr ? addr.split(',')[0] : 'No name';
   };
 
   const unpaidSCF = (j) => Number(j.scf || 0) > 0 && !j.scf_payment_method;
@@ -156,32 +143,32 @@ export default function CalendarPage() {
     return () => d.destroy();
   }, [extRef, jobs]);
 
-  /* ---------- filtering ---------- */
+  /* ---------- search/filter ---------- */
   const filteredJobs = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (jobs || []).filter((j) => {
       if (!j.appointment_time) return false;
       if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
       if (!q) return true;
-      const name = getClientName(j).toLowerCase();
+      const name = getDisplayName(j).toLowerCase();
       const addr = getClientAddress(j).toLowerCase();
       return name.includes(q) || addr.includes(q) || String(j.job_number || j.id).includes(q);
     });
   }, [jobs, activeTech, query, clientsById]);
 
-  /* ---------- events ---------- */
+  /* ---------- events for FullCalendar ---------- */
   const events = useMemo(() => {
     return filteredJobs.map((j) => {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
-      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
+      const baseTitle = `#${j.job_number || j.id} — ${getDisplayName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // timestamptz (UTC) — FullCalendar сам локализует
+        start: j.appointment_time, // UTC (timestamptz) — FC показывает в America/New_York
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -205,7 +192,7 @@ export default function CalendarPage() {
   /* ---------- DnD/click handlers ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC для timestamptz
+    const newStart = info.event.start ? info.event.start.toISOString() : null; // write UTC for timestamptz
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -241,6 +228,74 @@ export default function CalendarPage() {
 
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
+  /* ---------- route per day ---------- */
+  const sameYMD = (a, b) => {
+    const ya = a.getFullYear(), ma = a.getMonth(), da = a.getDate();
+    const yb = b.getFullYear(), mb = b.getMonth(), db = b.getDate();
+    return ya === yb && ma === mb && da === db;
+  };
+
+  const openRouteForDay = (dayDate) => {
+    // соберём заявки этого дня (текущего выбранного техника / всех)
+    const jobsOfDay = (jobs || [])
+      .filter((j) => j.appointment_time)
+      .filter((j) => activeTech === 'all' || String(j.technician_id) === String(activeTech))
+      .filter((j) => sameYMD(new Date(j.appointment_time), dayDate))
+      .sort((a, b) => new Date(a.appointment_time) - new Date(b.appointment_time));
+
+    const addresses = jobsOfDay
+      .map((j) => clean(getClientAddress(j)))
+      .filter((a) => a && a.length > 5);
+
+    if (addresses.length < 2) {
+      window.alert('На этот день нет заявок с валидными адресами.');
+      return;
+    }
+
+    // Google Maps Directions — driving
+    const enc = (s) => encodeURIComponent(s);
+    const origin = enc(addresses[0]);
+    const destination = enc(addresses[addresses.length - 1]);
+    const waypoints = addresses.slice(1, -1).map(enc).join('|');
+
+    const url =
+      `https://www.google.com/maps/dir/?api=1` +
+      `&origin=${origin}` +
+      `&destination=${destination}` +
+      (waypoints ? `&waypoints=${waypoints}` : '') +
+      `&travelmode=driving`;
+
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const renderDayHeader = (arg) => {
+    // arg.date — Date объекта столбца
+    const wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '6px';
+
+    const title = document.createElement('strong');
+    title.textContent = arg.text;
+    wrap.appendChild(title);
+
+    const btn = document.createElement('button');
+    btn.textContent = 'Маршрут';
+    btn.style.border = '1px solid #e5e7eb';
+    btn.style.background = '#fff';
+    btn.style.borderRadius = '999px';
+    btn.style.padding = '2px 8px';
+    btn.style.cursor = 'pointer';
+    btn.style.fontSize = '11px';
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      openRouteForDay(arg.date);
+    };
+    wrap.appendChild(btn);
+
+    return { domNodes: [wrap] };
+  };
+
   const renderEventContent = (arg) => {
     const { address } = arg.event.extendedProps;
     const wrap = document.createElement('div');
@@ -273,66 +328,6 @@ export default function CalendarPage() {
       info.el.style.filter = 'saturate(1.2)';
       info.el.style.fontWeight = '700';
     }
-  };
-
-  /* ---------- Маршрут на конкретный день ---------- */
-  function openDayRoute(date) {
-    // собираем все события этого дня
-    const dayEvents = events
-      .filter((e) => e.start)
-      .filter((e) => sameDay(new Date(e.start), date))
-      // сортировка по времени
-      .sort((a, b) => new Date(a.start) - new Date(b.start));
-
-    const addresses = dayEvents
-      .map((e) => clean(e.extendedProps?.address))
-      .filter(Boolean);
-
-    if (addresses.length < 2) {
-      alert('На этот день нет заявок с валидными адресами.');
-      return;
-    }
-
-    // origin – первый адрес; остальные — waypoints; destination — последний
-    const origin = encodeURIComponent(addresses[0]);
-    const destination = encodeURIComponent(addresses[addresses.length - 1]);
-    const waypoints = addresses.slice(1, -1).map(encodeURIComponent).join('|');
-
-    const url =
-      `https://www.google.com/maps/dir/?api=1` +
-      `&origin=${origin}` +
-      `&destination=${destination}` +
-      (waypoints ? `&waypoints=${waypoints}` : '') +
-      `&travelmode=driving`; // только автомобиль
-
-    window.open(url, '_blank', 'noopener,noreferrer');
-  }
-
-  // Кнопка «Маршрут» над каждым днём
-  const dayHeaderContent = (arg) => {
-    const container = document.createElement('div');
-    container.style.display = 'flex';
-    container.style.alignItems = 'center';
-    container.style.gap = '6px';
-
-    const label = document.createElement('div');
-    label.textContent = arg.text; // стандартный заголовок (напр. Mon, 10/13)
-    label.style.fontWeight = '700';
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = 'Маршрут';
-    btn.style.border = '1px solid #e5e7eb';
-    btn.style.background = '#fff';
-    btn.style.borderRadius = '999px';
-    btn.style.padding = '2px 8px';
-    btn.style.fontSize = '12px';
-    btn.style.cursor = 'pointer';
-    btn.onclick = () => openDayRoute(arg.date);
-
-    container.appendChild(label);
-    container.appendChild(btn);
-    return { domNodes: [container] };
   };
 
   /* ---------- UI ---------- */
@@ -422,7 +417,7 @@ export default function CalendarPage() {
         >
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
           {unassigned.map((j) => {
-            const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
+            const title = `#${j.job_number || j.id} — ${getDisplayName(j)}`;
             const addr = getClientAddress(j);
             return (
               <div
@@ -447,7 +442,7 @@ export default function CalendarPage() {
                 }}
               >
                 <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
-                <div style={{ color: '#111827', fontWeight: 700 }}>{getClientName(j)}</div>
+                <div style={{ color: '#111827', fontWeight: 700 }}>{getDisplayName(j)}</div>
                 {addr && (
                   <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
                 )}
@@ -480,103 +475,4 @@ export default function CalendarPage() {
           timeZone="America/New_York"
           slotMinTime="08:00:00"
           slotMaxTime="20:00:00"
-          businessHours={{ daysOfWeek: [0,1,2,3,4,5,6], startTime: '08:00', endTime: '20:00' }}
-          allDaySlot={false}
-          nowIndicator={true}
-          expandRows={true}
-          slotDuration="01:00:00"
-          slotLabelInterval="01:00"
-          slotLabelFormat={{ hour: '2-digit', minute: '2-digit' }}
-          dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
-          stickyHeaderDates={true}
-
-          /* ===== visuals ===== */
-          height="72vh"
-          eventDisplay="block"
-          eventTimeFormat={{ hour: '2-digit', minute: '2-digit' }}
-          dragScroll
-          longPressDelay={150}
-          eventOverlap={true}
-          slotEventOverlap={false}
-
-          /* ===== DnD/edit ===== */
-          editable
-          eventStartEditable
-          eventDurationEditable={false}
-          droppable
-
-          /* ===== data ===== */
-          events={events}
-
-          /* ===== per-day header button ===== */
-          dayHeaderContent={dayHeaderContent}
-
-          /* ===== callbacks ===== */
-          eventDrop={handleEventDrop}
-          eventReceive={handleEventReceive}
-          eventClick={handleEventClick}
-          eventContent={renderEventContent}
-          eventDidMount={eventDidMount}
-        />
-      </div>
-
-      <Legend />
-    </div>
-  );
-}
-
-/* ========== small UI components ========== */
-function Tab({ active, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '8px 12px',
-        borderRadius: 999,
-        border: active ? '1px solid #1d4ed8' : '1px solid #e5e7eb',
-        background: active ? 'linear-gradient(180deg,#2563eb,#1d4ed8)' : '#fff',
-        color: active ? '#fff' : '#111827',
-        fontWeight: 700,
-        cursor: 'pointer',
-        boxShadow: active ? '0 6px 16px rgba(29,78,216,0.25)' : '0 1px 0 rgba(0,0,0,0.02)',
-        transition: 'all .15s ease',
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Legend() {
-  const item = (bg, text, label) => (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '4px 10px',
-        borderRadius: 999,
-        background: bg,
-        color: text,
-        fontSize: 12,
-        marginRight: 8,
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6)',
-        border: '1px solid rgba(0,0,0,0.04)'
-      }}
-    >
-      ● {label}
-    </span>
-  );
-  return (
-    <div style={{ marginTop: 10, color: '#6b7280', fontSize: 13 }}>
-      {item('#fee2e2', '#7f1d1d', 'ReCall')}
-      {item('#fef9c3', '#854d0e', 'Diagnosis')}
-      {item('#e0f2fe', '#075985', 'In progress')}
-      {item('#e0e7ff', '#3730a3', 'Parts ordered')}
-      {item('#ede9fe', '#5b21b6', 'Waiting for parts')}
-      {item('#fffbeb', '#92400e', 'To finish')}
-      {item('#d1fae5', '#065f46', 'Completed')}
-      <span style={{ marginLeft: 12 }}>Unpaid jobs are marked with a dashed border.</span>
-    </div>
-  );
-}
+          businessHours={{ daysOfWeek: [0,1,2,3,4,5,6], startTime: '08:00
