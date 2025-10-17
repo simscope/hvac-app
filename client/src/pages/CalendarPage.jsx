@@ -376,7 +376,7 @@ export default function CalendarPage() {
               if (api) api.changeView(e.target.value);
             }}
             style={{
-              border: '1px solid '#e5e7eb',
+              border: '1px solid #e5e7eb',
               borderRadius: 10,
               padding: '8px 12px',
               background: '#fff',
@@ -558,3 +558,4 @@ function Legend() {
     </div>
   );
 }
+
