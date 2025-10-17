@@ -15,7 +15,7 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// локальная проверка "тот же день" (без TZ-магии)
+// сравнение: один и тот же календарный день (локально)
 const sameDayLocal = (a, b) => {
   if (!a || !b) return false;
   const ad = new Date(a);
@@ -53,7 +53,6 @@ export default function CalendarPage() {
           .select('id, name, role')
           .in('role', ['technician', 'tech'])
           .order('name', { ascending: true }),
-        // добавили company
         supabase.from('clients').select('id, full_name, address, company'),
       ]);
       setJobs(j || []);
@@ -168,7 +167,7 @@ export default function CalendarPage() {
       const k = statusKey(j.status);
       const s = statusPalette[k] || statusPalette.default;
       const tName = techById.get(String(j.technician_id))?.name || '';
-      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`; // короткий заголовок
+      const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
       return {
@@ -286,45 +285,45 @@ export default function CalendarPage() {
     const api = calRef.current?.getApi?.();
     if (!api) return;
 
-    // Берём только события, которые реально показаны (учитывая активные фильтры),
-    // и относятся к выбранному дню:
+    // события выбранного дня с учётом вкладки техника и поиска
     const dayEvents = api.getEvents()
       .filter((e) => e.start && sameDayLocal(e.start, dayDate))
       .sort((a, b) => (a.start?.getTime() || 0) - (b.start?.getTime() || 0));
 
-    // Собираем адреса
-    const addresses = [];
-    for (const ev of dayEvents) {
-      const addr = (ev.extendedProps && ev.extendedProps.address ? String(ev.extendedProps.address).trim() : '');
-      if (addr) addresses.push(addr);
-    }
+    // адреса по порядку времени; дубликаты НЕ убираем
+    const addresses = dayEvents
+      .map((e) => String(e.extendedProps?.address || '').trim())
+      .filter(Boolean);
 
-    // Убираем дубликаты адресов (если подряд несколько заявок по одному адресу)
-    const uniq = [];
-    const seen = new Set();
-    for (const a of addresses) {
-      const key = a.toLowerCase();
-      if (!seen.has(key)) { seen.add(key); uniq.push(a); }
-    }
-
-    if (uniq.length < 2) {
-      toast('Нужно как минимум два адреса в этом дне, чтобы построить маршрут.');
+    if (addresses.length === 0) {
+      window.alert('В этом дне нет заявок с адресами.');
       return;
     }
 
-    // Формируем ссылку Google Maps Directions (авто, без текущего местоположения)
-    const origin = encodeURIComponent(uniq[0]);
-    const destination = encodeURIComponent(uniq[uniq.length - 1]);
-    const waypoints = uniq.slice(1, -1).map(encodeURIComponent).join('|'); // до 23 точек допустимо
-    const url = `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${origin}&destination=${destination}` + (waypoints ? `&waypoints=${waypoints}` : '');
+    if (addresses.length === 1) {
+      // один адрес — просто открываем место
+      const place = encodeURIComponent(addresses[0]);
+      const url = `https://www.google.com/maps/search/?api=1&query=${place}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    // два и более адресов — строим авто-маршрут
+    const origin = encodeURIComponent(addresses[0]);
+    const destination = encodeURIComponent(addresses[addresses.length - 1]);
+    const waypoints = addresses.slice(1, -1).map(encodeURIComponent).join('|');
+
+    const url =
+      `https://www.google.com/maps/dir/?api=1&travelmode=driving` +
+      `&origin=${origin}` +
+      `&destination=${destination}` +
+      (waypoints ? `&waypoints=${waypoints}` : '');
 
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // Рендер шапок дней с кнопкой "Маршрут"
+  // кнопка «Маршрут» над каждым днём
   const dayHeaderContent = (arg) => {
-    // arg.text — уже отформатированная дата (например, "Tue 10/14")
-    // arg.date — объект Date для этого дня
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gridTemplateRows = 'auto auto';
