@@ -528,7 +528,7 @@ export default function CalendarPage() {
           eventClick={handleEventClick}
           eventContent={renderEventContent}
           eventDidMount={eventDidMount}
-          dayHeaderDidMount={dayHeaderDidMount}   {/* ← добавили кнопки над каждым днём */}
+          dayHeaderDidMount={dayHeaderDidMount}
         />
       </div>
 
@@ -592,3 +592,4 @@ function Legend() {
     </div>
   );
 }
+
