@@ -1,15 +1,13 @@
 // client/src/pages/TechniciansMap.jsx
-// Карта техников: первичная загрузка из VIEW public.tech_locations_latest,
-// затем realtime подписка на INSERT/UPDATE в public.tech_locations (сырьё).
-// Параллельно подгружаем technicians (имя/статус), мержим по technician_id.
-
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
+
+// Leaflet
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 
-// Иконки Leaflet по умолчанию починить (в бандлере иногда пустые)
+// Починка дефолтных иконок в бандле
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl:
@@ -20,7 +18,19 @@ L.Icon.Default.mergeOptions({
     'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-const badgeStyle = (state) => {
+// Вспомогалки
+const ONLINE_MS = 5 * 60 * 1000; // 5 минут
+const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
+const relTime = (iso) => {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60 * 1000) return 'только что';
+  const m = Math.round(diff / 60000);
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.round(m / 60);
+  return `${h} ч назад`;
+};
+const statusBadge = (state) => {
   const c = String(state || '').toLowerCase();
   if (c === 'on_site' || c === 'working') return { bg: '#dcfce7', fg: '#166534', text: c };
   if (c === 'en_route') return { bg: '#e0f2fe', fg: '#075985', text: c };
@@ -28,70 +38,56 @@ const badgeStyle = (state) => {
   return { bg: '#e5e7eb', fg: '#374151', text: c || 'unknown' };
 };
 
-function FitBounds({ points }) {
-  const map = useMap();
-  useEffect(() => {
-    if (!points?.length) return;
-    const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng]));
-    if (bounds.isValid()) {
-      map.fitBounds(bounds.pad(0.2), { animate: false });
-    }
-  }, [points, map]);
-  return null;
-}
-
 export default function TechniciansMap() {
   const [loading, setLoading] = useState(true);
-  const [latest, setLatest] = useState([]);       // [{technician_id, lat, lng, captured_at, ...}]
-  const [techMeta, setTechMeta] = useState({});   // { [technician_id]: { name, phone, live_state } }
-  const channelRef = useRef(null);
+  const [errorText, setErrorText] = useState('');
 
-  // 1) первичная загрузка: последняя точка + тех.мета
+  // Последняя точка на техника
+  const [latestPoints, setLatestPoints] = useState(
+    /** @type {Array<{technician_id:string,lat:number,lng:number,captured_at?:string,accuracy?:number,speed?:number,heading?:number}>} */ ([]),
+  );
+
+  // Справочник техников
+  const [techs, setTechs] = useState(
+    /** @type {Array<{id:string, full_name?:string, phone?:string, live_state?:string}>} */ ([]),
+  );
+
+  // refs для карты и маркеров (чтобы фокусить и открывать попапы)
+  const mapRef = useRef(/** @type {L.Map|null} */(null));
+  const markersRef = useRef(/** @type {Record<string, L.Marker>} */({}));
+
+  // 1) первичная загрузка
   useEffect(() => {
-    let mounted = true;
-
-    async function loadInitial() {
+    let alive = true;
+    (async () => {
       setLoading(true);
       try {
-        // Последние точки из VIEW
-        const { data: points, error: e1 } = await supabase
-          .from('tech_locations_latest')
-          .select('technician_id, lat, lng, accuracy, speed, heading, captured_at');
+        const [{ data: points, error: e1 }, { data: trows, error: e2 }] = await Promise.all([
+          supabase
+            .from('tech_locations_latest')
+            .select('technician_id, lat, lng, accuracy, speed, heading, captured_at'),
+          supabase
+            .from('technicians')
+            .select('id, full_name, phone, live_state'),
+        ]);
         if (e1) throw e1;
-
-        // Мета по техникам (имя/статус) — адаптируй поля под себя
-        const { data: techs, error: e2 } = await supabase
-          .from('technicians')
-          .select('id, full_name, phone, live_state');
         if (e2) throw e2;
-
-        if (!mounted) return;
-
-        const meta = {};
-        (techs || []).forEach(t => {
-          meta[t.id] = {
-            name: t.full_name || `Tech ${t.id.slice(0, 4)}`,
-            phone: t.phone || '',
-            live_state: t.live_state || 'idle',
-          };
-        });
-
-        setTechMeta(meta);
-        setLatest(points || []);
+        if (!alive) return;
+        setLatestPoints(points || []);
+        setTechs(trows || []);
+        setErrorText('');
       } catch (e) {
-        console.error(e);
-        setLatest([]);
+        setErrorText(e?.message || String(e));
+        setLatestPoints([]);
+        setTechs([]);
       } finally {
         setLoading(false);
       }
-    }
-
-    loadInitial();
-
-    return () => { mounted = false; };
+    })();
+    return () => { alive = false; };
   }, []);
 
-  // 2) realtime по сырой таблице tech_locations — обновляем "последние"
+  // 2) realtime по таблице tech_locations → обновляем последнюю точку
   useEffect(() => {
     const ch = supabase
       .channel('tech-locations-rt')
@@ -100,66 +96,125 @@ export default function TechniciansMap() {
         (payload) => {
           const row = payload.new || payload.old;
           if (!row?.technician_id || typeof row.lat !== 'number' || typeof row.lng !== 'number') return;
-
-          setLatest(prev => {
-            // upsert по technician_id
-            const idx = prev.findIndex(p => p.technician_id === row.technician_id);
-            const nextPoint = {
-              technician_id: row.technician_id,
-              lat: row.lat, lng: row.lng,
-              captured_at: row.captured_at || new Date().toISOString(),
-              accuracy: row.accuracy ?? null,
-              speed: row.speed ?? null,
-              heading: row.heading ?? null,
-            };
-            if (idx === -1) return [...prev, nextPoint];
+          const pt = {
+            technician_id: row.technician_id,
+            lat: row.lat,
+            lng: row.lng,
+            captured_at: row.captured_at || new Date().toISOString(),
+            accuracy: row.accuracy ?? null,
+            speed: row.speed ?? null,
+            heading: row.heading ?? null,
+          };
+          setLatestPoints((prev) => {
+            const i = prev.findIndex(p => p.technician_id === pt.technician_id);
+            if (i === -1) return [...prev, pt];
             const copy = [...prev];
-            copy[idx] = nextPoint;
+            copy[i] = pt;
             return copy;
           });
         }
       )
       .subscribe();
-
-    channelRef.current = ch;
-    return () => {
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    };
+    return () => { supabase.removeChannel(ch); };
   }, []);
 
-  const points = useMemo(() => latest.filter(p => typeof p.lat === 'number' && typeof p.lng === 'number'), [latest]);
-  const center = points.length ? [points[0].lat, points[0].lng] : [37.0902, -95.7129]; // USA центр на старте, замени при желании
+  // 3) сводная модель для сайдбара
+  const combined = useMemo(() => {
+    const byId = Object.fromEntries(latestPoints.map(p => [p.technician_id, p]));
+    const ids = new Set([
+      ...techs.map(t => t.id),
+      ...latestPoints.map(p => p.technician_id),
+    ]);
+    return Array.from(ids).map((id) => {
+      const t = techs.find(x => x.id === id) || {};
+      const p = byId[id];
+      const updatedAt = p?.captured_at || null;
+      const isOnline = updatedAt ? (Date.now() - new Date(updatedAt).getTime() < ONLINE_MS) : false;
+      return {
+        id,
+        name: t.full_name || `Tech ${String(id).slice(0, 4)}`,
+        phone: t.phone || '',
+        live_state: t.live_state || 'idle',
+        point: p || null,
+        updatedAt,
+        isOnline,
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [techs, latestPoints]);
+
+  // 4) центрирование по клику в сайдбаре
+  const focusTech = (techId) => {
+    const p = latestPoints.find(x => x.technician_id === techId);
+    const map = mapRef.current;
+    if (p && map) {
+      const ll = L.latLng(p.lat, p.lng);
+      map.flyTo(ll, Math.max(map.getZoom(), 13), { duration: 0.6 });
+      const m = markersRef.current[techId];
+      if (m) setTimeout(() => m.openPopup(), 650);
+    }
+  };
+
+  // стартовый центр (США центр, затем подгон по bounds если есть точки)
+  const firstCenter = useMemo(() => {
+    if (!latestPoints.length) return [37.0902, -95.7129]; // USA
+    const p = latestPoints[0];
+    return [p.lat, p.lng];
+  }, [latestPoints]);
+
+  // fitBounds после первой загрузки точек
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !latestPoints.length) return;
+    const b = L.latLngBounds(latestPoints.map(p => [p.lat, p.lng]));
+    if (b.isValid()) map.fitBounds(b.pad(0.2), { animate: false });
+  }, [latestPoints]);
+
+  if (errorText) {
+    return (
+      <div style={{ padding: 16 }}>
+        <h3>Ошибка загрузки карты</h3>
+        <pre style={{ whiteSpace: 'pre-wrap' }}>{errorText}</pre>
+        <p>Проверь зависимости <code>leaflet</code> и <code>react-leaflet</code> и импорт CSS.</p>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100vh' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', height: 'calc(100vh - 60px)' }}>
       {/* MAP */}
       <div style={{ position: 'relative' }}>
-        <MapContainer center={center} zoom={4} style={{ height: '100%', width: '100%' }}>
+        <MapContainer
+          center={firstCenter}
+          zoom={4}
+          style={{ height: '100%', width: '100%' }}
+          whenCreated={(m) => { mapRef.current = m; }}
+        >
           <TileLayer
-            attribution='&copy; OpenStreetMap'
+            attribution="&copy; OpenStreetMap contributors"
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          <FitBounds points={points} />
-
-          {points.map(p => {
-            const meta = techMeta[p.technician_id] || {};
-            const badge = badgeStyle(meta.live_state);
+          {latestPoints.map((p) => {
+            const t = techs.find(x => x.id === p.technician_id) || {};
+            const badge = statusBadge(t.live_state);
             return (
-              <Marker key={p.technician_id} position={[p.lat, p.lng]}>
+              <Marker
+                key={p.technician_id}
+                position={[p.lat, p.lng]}
+                ref={(mk) => { if (mk) markersRef.current[p.technician_id] = mk; }}
+              >
                 <Popup>
                   <div style={{ minWidth: 220 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <strong>{meta.name || p.technician_id}</strong>
+                      <strong>{t.full_name || `Tech ${String(p.technician_id).slice(0, 4)}`}</strong>
                       <span style={{ padding: '2px 6px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: badge.bg, color: badge.fg }}>
                         {badge.text}
                       </span>
                     </div>
                     <div style={{ fontSize: 13, color: '#374151' }}>
                       <div>Lat/Lng: {p.lat.toFixed(5)}, {p.lng.toFixed(5)}</div>
-                      {p.captured_at ? <div>At: {new Date(p.captured_at).toLocaleString()}</div> : null}
-                      {typeof p.speed === 'number' ? <div>Speed: {Math.round((p.speed || 0) * 3.6)} km/h</div> : null}
-                      {meta.phone ? <div>Phone: {meta.phone}</div> : null}
+                      {p.captured_at && <div>Время: {fmtTime(p.captured_at)} ({relTime(p.captured_at)})</div>}
+                      {typeof p.speed === 'number' && <div>Скорость: {Math.round((p.speed || 0) * 3.6)} км/ч</div>}
+                      {t.phone && <div>Тел.: {t.phone}</div>}
                     </div>
                   </div>
                 </Popup>
@@ -170,40 +225,85 @@ export default function TechniciansMap() {
 
         {loading && (
           <div style={{
-            position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.9)',
+            position: 'absolute', top: 12, left: 12, background: 'rgba(255,255,255,.92)',
             padding: '8px 10px', borderRadius: 8, fontWeight: 700
           }}>
-            Loading…
+            Загрузка…
           </div>
         )}
       </div>
 
       {/* SIDEBAR */}
-      <aside style={{ borderLeft: '1px solid #e5e7eb', padding: 12, overflow: 'auto' }}>
-        <h3 style={{ margin: '8px 0 12px', fontSize: 18 }}>Technicians</h3>
-        {points
-          .sort((a, b) => (techMeta[a.technician_id]?.name || '').localeCompare(techMeta[b.technician_id]?.name || ''))
-          .map(p => {
-            const meta = techMeta[p.technician_id] || {};
-            const badge = badgeStyle(meta.live_state);
-            return (
-              <div key={p.technician_id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 10, marginBottom: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ fontWeight: 800 }}>{meta.name || p.technician_id}</div>
-                  <span style={{ padding: '2px 6px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: badge.bg, color: badge.fg }}>
-                    {badge.text}
-                  </span>
+      <aside style={{
+        borderLeft: '1px solid #e5e7eb',
+        background: '#0f172a',
+        color: '#e5e7eb',
+        padding: 12,
+        overflow: 'auto'
+      }}>
+        <h3 style={{ margin: '8px 0 12px', fontSize: 18 }}>Техники</h3>
+
+        {combined.map((t) => {
+          const badge = statusBadge(t.live_state);
+          const isOnlineColor = t.isOnline ? '#22c55e' : '#ef4444';
+          return (
+            <div
+              key={t.id}
+              style={{
+                border: '1px solid rgba(255,255,255,.12)',
+                borderRadius: 10,
+                padding: 10,
+                marginBottom: 8,
+                background: 'rgba(255,255,255,.04)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {t.name}
                 </div>
-                <div style={{ fontSize: 13, color: '#374151', marginTop: 4 }}>
-                  <div>Lat/Lng: {p.lat.toFixed(5)}, {p.lng.toFixed(5)}</div>
-                  {p.captured_at ? <div>At: {new Date(p.captured_at).toLocaleTimeString()}</div> : null}
-                  {typeof p.speed === 'number' ? <div>Speed: {Math.round((p.speed || 0) * 3.6)} km/h</div> : null}
-                  {meta.phone ? <div>Phone: {meta.phone}</div> : null}
-                </div>
+                <span style={{
+                  padding: '2px 6px', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                  background: badge.bg, color: badge.fg, textTransform: 'lowercase'
+                }}>
+                  {badge.text}
+                </span>
               </div>
-            );
-          })}
-        {!points.length && !loading && <div style={{ color: '#6b7280' }}>Нет активных точек.</div>}
+
+              <div style={{ fontSize: 13, opacity: .9, marginTop: 6 }}>
+                <div>
+                  Статус GPS:&nbsp;
+                  <span style={{ color: isOnlineColor }}>{t.isOnline ? 'онлайн' : 'офлайн'}</span>
+                </div>
+                <div>Обновлено: {t.updatedAt ? `${relTime(t.updatedAt)} (${fmtTime(t.updatedAt)})` : '—'}</div>
+                {t.point && (
+                  <div>Коорд.: {t.point.lat.toFixed(5)}, {t.point.lng.toFixed(5)}</div>
+                )}
+                {t.phone && <div>Тел.: {t.phone}</div>}
+              </div>
+
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <button
+                  onClick={() => focusTech(t.id)}
+                  disabled={!t.point}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,.18)',
+                    background: t.point ? '#1d4ed8' : 'rgba(255,255,255,.06)',
+                    color: '#fff',
+                    cursor: t.point ? 'pointer' : 'not-allowed'
+                  }}
+                >
+                  Показать на карте
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {!combined.length && !loading && (
+          <div style={{ color: '#9ca3af' }}>Нет данных по техникам.</div>
+        )}
       </aside>
     </div>
   );
