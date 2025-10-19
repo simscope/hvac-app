@@ -2,57 +2,50 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-// Leaflet
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 
-// Починка дефолтных иконок в бандле
+// фиксим дефолтные иконки в бандле
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl:
-    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl:
-    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl:
-    'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-// Вспомогалки
+// ───── утилиты ─────
 const ONLINE_MS = 5 * 60 * 1000; // 5 минут
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
 const relTime = (iso) => {
   if (!iso) return '—';
-  const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60 * 1000) return 'только что';
-  const m = Math.round(diff / 60000);
+  const d = Date.now() - new Date(iso).getTime();
+  if (d < 60_000) return 'только что';
+  const m = Math.round(d / 60_000);
   if (m < 60) return `${m} мин назад`;
-  const h = Math.round(m / 60);
-  return `${h} ч назад`;
+  return `${Math.round(m / 60)} ч назад`;
 };
-const statusBadge = (state) => {
-  const c = String(state || '').toLowerCase();
-  if (c === 'on_site' || c === 'working') return { bg: '#dcfce7', fg: '#166534', text: c };
-  if (c === 'en_route') return { bg: '#e0f2fe', fg: '#075985', text: c };
-  if (c === 'idle') return { bg: '#fef9c3', fg: '#854d0e', text: c };
-  return { bg: '#e5e7eb', fg: '#374151', text: c || 'unknown' };
+const roleBadge = (role) => {
+  const r = String(role || '').toLowerCase();
+  if (r === 'admin')     return { bg: 'rgba(239,68,68,.18)', fg: '#b91c1c', text: 'admin' };
+  if (r === 'manager')   return { bg: 'rgba(234,179,8,.2)', fg: '#92400e', text: 'manager' };
+  return { bg: 'rgba(34,197,94,.2)', fg: '#166534', text: r || 'technician' };
 };
 
 export default function TechniciansMap() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState('');
 
-  // Последняя точка на техника
+  // последние GPS-точки
   const [latestPoints, setLatestPoints] = useState(
-    /** @type {Array<{technician_id:string,lat:number,lng:number,captured_at?:string,accuracy?:number,speed?:number,heading?:number}>} */ ([]),
+    /** @type {Array<{technician_id:string,lat:number,lng:number,captured_at?:string,accuracy?:number,speed?:number,heading?:number}>} */([])
   );
 
-  // Справочник техников
+  // активные техники (из вашей схемы)
   const [techs, setTechs] = useState(
-    /** @type {Array<{id:string, full_name?:string, phone?:string, live_state?:string}>} */ ([]),
+    /** @type {Array<{id:string, name:string|null, phone:string|null, role:string|null, email:string|null}>} */([])
   );
 
-  // refs для карты и маркеров (чтобы фокусить и открывать попапы)
   const mapRef = useRef(/** @type {L.Map|null} */(null));
   const markersRef = useRef(/** @type {Record<string, L.Marker>} */({}));
 
@@ -66,15 +59,24 @@ export default function TechniciansMap() {
           supabase
             .from('tech_locations_latest')
             .select('technician_id, lat, lng, accuracy, speed, heading, captured_at'),
+          // берём только активных
           supabase
             .from('technicians')
-            .select('id, full_name, phone, live_state'),
+            .select('id, name, phone, role, email, is_active')
+            .eq('is_active', true),
         ]);
         if (e1) throw e1;
         if (e2) throw e2;
         if (!alive) return;
+
         setLatestPoints(points || []);
-        setTechs(trows || []);
+        setTechs((trows || []).map(t => ({
+          id: t.id,
+          name: t.name || `Tech ${String(t.id).slice(0,4)}`,
+          phone: t.phone || '',
+          role: t.role || 'technician',
+          email: t.email || '',
+        })));
         setErrorText('');
       } catch (e) {
         setErrorText(e?.message || String(e));
@@ -87,7 +89,7 @@ export default function TechniciansMap() {
     return () => { alive = false; };
   }, []);
 
-  // 2) realtime по таблице tech_locations → обновляем последнюю точку
+  // 2) realtime по сырой таблице локаций
   useEffect(() => {
     const ch = supabase
       .channel('tech-locations-rt')
@@ -98,8 +100,7 @@ export default function TechniciansMap() {
           if (!row?.technician_id || typeof row.lat !== 'number' || typeof row.lng !== 'number') return;
           const pt = {
             technician_id: row.technician_id,
-            lat: row.lat,
-            lng: row.lng,
+            lat: row.lat, lng: row.lng,
             captured_at: row.captured_at || new Date().toISOString(),
             accuracy: row.accuracy ?? null,
             speed: row.speed ?? null,
@@ -118,31 +119,19 @@ export default function TechniciansMap() {
     return () => { supabase.removeChannel(ch); };
   }, []);
 
-  // 3) сводная модель для сайдбара
+  // 3) объединённая модель для сайдбара
   const combined = useMemo(() => {
     const byId = Object.fromEntries(latestPoints.map(p => [p.technician_id, p]));
-    const ids = new Set([
-      ...techs.map(t => t.id),
-      ...latestPoints.map(p => p.technician_id),
-    ]);
-    return Array.from(ids).map((id) => {
-      const t = techs.find(x => x.id === id) || {};
-      const p = byId[id];
-      const updatedAt = p?.captured_at || null;
-      const isOnline = updatedAt ? (Date.now() - new Date(updatedAt).getTime() < ONLINE_MS) : false;
-      return {
-        id,
-        name: t.full_name || `Tech ${String(id).slice(0, 4)}`,
-        phone: t.phone || '',
-        live_state: t.live_state || 'idle',
-        point: p || null,
-        updatedAt,
-        isOnline,
-      };
-    }).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    return techs
+      .map((t) => {
+        const p = byId[t.id];
+        const updatedAt = p?.captured_at || null;
+        const isOnline = updatedAt ? (Date.now() - new Date(updatedAt).getTime() < ONLINE_MS) : false;
+        return { ...t, point: p || null, updatedAt, isOnline };
+      })
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
   }, [techs, latestPoints]);
 
-  // 4) центрирование по клику в сайдбаре
   const focusTech = (techId) => {
     const p = latestPoints.find(x => x.technician_id === techId);
     const map = mapRef.current;
@@ -154,14 +143,14 @@ export default function TechniciansMap() {
     }
   };
 
-  // стартовый центр (США центр, затем подгон по bounds если есть точки)
+  // стартовый центр
   const firstCenter = useMemo(() => {
-    if (!latestPoints.length) return [37.0902, -95.7129]; // USA
+    if (!latestPoints.length) return [37.0902, -95.7129]; // центр США
     const p = latestPoints[0];
     return [p.lat, p.lng];
   }, [latestPoints]);
 
-  // fitBounds после первой загрузки точек
+  // fitBounds по точкам
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !latestPoints.length) return;
@@ -194,8 +183,10 @@ export default function TechniciansMap() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           {latestPoints.map((p) => {
-            const t = techs.find(x => x.id === p.technician_id) || {};
-            const badge = statusBadge(t.live_state);
+            const t = techs.find(x => x.id === p.technician_id);
+            const name = t?.name || `Tech ${String(p.technician_id).slice(0, 4)}`;
+            const badge = roleBadge(t?.role);
+
             return (
               <Marker
                 key={p.technician_id}
@@ -205,7 +196,7 @@ export default function TechniciansMap() {
                 <Popup>
                   <div style={{ minWidth: 220 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                      <strong>{t.full_name || `Tech ${String(p.technician_id).slice(0, 4)}`}</strong>
+                      <strong>{name}</strong>
                       <span style={{ padding: '2px 6px', borderRadius: 6, fontSize: 12, fontWeight: 700, background: badge.bg, color: badge.fg }}>
                         {badge.text}
                       </span>
@@ -214,7 +205,8 @@ export default function TechniciansMap() {
                       <div>Lat/Lng: {p.lat.toFixed(5)}, {p.lng.toFixed(5)}</div>
                       {p.captured_at && <div>Время: {fmtTime(p.captured_at)} ({relTime(p.captured_at)})</div>}
                       {typeof p.speed === 'number' && <div>Скорость: {Math.round((p.speed || 0) * 3.6)} км/ч</div>}
-                      {t.phone && <div>Тел.: {t.phone}</div>}
+                      {t?.phone && <div>Тел.: {t.phone}</div>}
+                      {t?.email && <div>Email: {t.email}</div>}
                     </div>
                   </div>
                 </Popup>
@@ -244,7 +236,7 @@ export default function TechniciansMap() {
         <h3 style={{ margin: '8px 0 12px', fontSize: 18 }}>Техники</h3>
 
         {combined.map((t) => {
-          const badge = statusBadge(t.live_state);
+          const badge = roleBadge(t.role);
           const isOnlineColor = t.isOnline ? '#22c55e' : '#ef4444';
           return (
             <div
@@ -270,15 +262,11 @@ export default function TechniciansMap() {
               </div>
 
               <div style={{ fontSize: 13, opacity: .9, marginTop: 6 }}>
-                <div>
-                  Статус GPS:&nbsp;
-                  <span style={{ color: isOnlineColor }}>{t.isOnline ? 'онлайн' : 'офлайн'}</span>
-                </div>
+                <div>GPS: <span style={{ color: isOnlineColor }}>{t.isOnline ? 'онлайн' : 'офлайн'}</span></div>
                 <div>Обновлено: {t.updatedAt ? `${relTime(t.updatedAt)} (${fmtTime(t.updatedAt)})` : '—'}</div>
-                {t.point && (
-                  <div>Коорд.: {t.point.lat.toFixed(5)}, {t.point.lng.toFixed(5)}</div>
-                )}
+                {t.point && <div>Коорд.: {t.point.lat.toFixed(5)}, {t.point.lng.toFixed(5)}</div>}
                 {t.phone && <div>Тел.: {t.phone}</div>}
+                {t.email && <div>Email: {t.email}</div>}
               </div>
 
               <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
@@ -302,7 +290,7 @@ export default function TechniciansMap() {
         })}
 
         {!combined.length && !loading && (
-          <div style={{ color: '#9ca3af' }}>Нет данных по техникам.</div>
+          <div style={{ color: '#9ca3af' }}>Нет активных техников.</div>
         )}
       </aside>
     </div>
