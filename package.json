@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "leaflet": "^...",
-    "react-leaflet": "^..."
+    "leaflet": "...",
+    "react-leaflet": "..."
   }
 }
