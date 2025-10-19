@@ -30,6 +30,9 @@ import ChatAdminPage from './pages/ChatAdminPage.jsx';
 // Задачи
 import TasksTodayPage from './pages/TasksTodayPage.jsx';
 
+// 🔥 Новая страница: карта техников (живой GPS)
+import TechniciansMap from './pages/TechniciansMap.jsx';
+
 /* ───────────── Гард доступа к конкретной заявке (для техника) ───────────── */
 function JobAccess({ children }) {
   const { role, profile, user, loading } = useAuth();
@@ -206,6 +209,21 @@ function Shell() {
                 <ChatAdminPage />
               </ProtectedRoute>
             }
+          />
+
+          {/* 🔥 Новые маршруты: живая карта техников */}
+          <Route
+            path="/map"
+            element={
+              <ProtectedRoute allow="admin">
+                <TechniciansMap />
+              </ProtectedRoute>
+            }
+          />
+          {/* Алиас, если удобно */}
+          <Route
+            path="/live"
+            element={<Navigate to="/map" replace />}
           />
 
           {/* Детали заявки: admin/manager — всегда; tech — только свою */}
