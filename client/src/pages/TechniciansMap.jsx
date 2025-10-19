@@ -6,7 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 
-// фиксим дефолтные иконки в бандле
+// фикс иконок Leaflet в бандле
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
@@ -25,12 +25,7 @@ const relTime = (iso) => {
   if (m < 60) return `${m} мин назад`;
   return `${Math.round(m / 60)} ч назад`;
 };
-const roleBadge = (role) => {
-  const r = String(role || '').toLowerCase();
-  if (r === 'admin')     return { bg: 'rgba(239,68,68,.18)', fg: '#b91c1c', text: 'admin' };
-  if (r === 'manager')   return { bg: 'rgba(234,179,8,.2)', fg: '#92400e', text: 'manager' };
-  return { bg: 'rgba(34,197,94,.2)', fg: '#166534', text: r || 'technician' };
-};
+const roleBadge = () => ({ bg: 'rgba(34,197,94,.2)', fg: '#166534', text: 'technician' });
 
 export default function TechniciansMap() {
   const [loading, setLoading] = useState(true);
@@ -41,9 +36,9 @@ export default function TechniciansMap() {
     /** @type {Array<{technician_id:string,lat:number,lng:number,captured_at?:string,accuracy?:number,speed?:number,heading?:number}>} */([])
   );
 
-  // активные техники (из вашей схемы)
+  // только активные техники с ролью technician
   const [techs, setTechs] = useState(
-    /** @type {Array<{id:string, name:string|null, phone:string|null, role:string|null, email:string|null}>} */([])
+    /** @type {Array<{id:string, name:string|null, phone:string|null, email:string|null}>} */([])
   );
 
   const mapRef = useRef(/** @type {L.Map|null} */(null));
@@ -59,11 +54,12 @@ export default function TechniciansMap() {
           supabase
             .from('tech_locations_latest')
             .select('technician_id, lat, lng, accuracy, speed, heading, captured_at'),
-          // берём только активных
+          // ВАЖНО: только активные техники с ролью 'technician'
           supabase
             .from('technicians')
-            .select('id, name, phone, role, email, is_active')
-            .eq('is_active', true),
+            .select('id, name, phone, email, is_active, role')
+            .eq('is_active', true)
+            .eq('role', 'technician'),
         ]);
         if (e1) throw e1;
         if (e2) throw e2;
@@ -74,7 +70,6 @@ export default function TechniciansMap() {
           id: t.id,
           name: t.name || `Tech ${String(t.id).slice(0,4)}`,
           phone: t.phone || '',
-          role: t.role || 'technician',
           email: t.email || '',
         })));
         setErrorText('');
@@ -89,7 +84,7 @@ export default function TechniciansMap() {
     return () => { alive = false; };
   }, []);
 
-  // 2) realtime по сырой таблице локаций
+  // 2) realtime: обновляем последние точки
   useEffect(() => {
     const ch = supabase
       .channel('tech-locations-rt')
@@ -119,9 +114,18 @@ export default function TechniciansMap() {
     return () => { supabase.removeChannel(ch); };
   }, []);
 
-  // 3) объединённая модель для сайдбара
+  // Множество id техников (для фильтрации точек)
+  const techIdSet = useMemo(() => new Set(techs.map(t => t.id)), [techs]);
+
+  // Только точки принадлежащие техникам (не менеджерам/админам)
+  const filteredPoints = useMemo(
+    () => latestPoints.filter(p => techIdSet.has(p.technician_id)),
+    [latestPoints, techIdSet]
+  );
+
+  // объединённая модель для сайдбара
   const combined = useMemo(() => {
-    const byId = Object.fromEntries(latestPoints.map(p => [p.technician_id, p]));
+    const byId = Object.fromEntries(filteredPoints.map(p => [p.technician_id, p]));
     return techs
       .map((t) => {
         const p = byId[t.id];
@@ -130,10 +134,10 @@ export default function TechniciansMap() {
         return { ...t, point: p || null, updatedAt, isOnline };
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
-  }, [techs, latestPoints]);
+  }, [techs, filteredPoints]);
 
   const focusTech = (techId) => {
-    const p = latestPoints.find(x => x.technician_id === techId);
+    const p = filteredPoints.find(x => x.technician_id === techId);
     const map = mapRef.current;
     if (p && map) {
       const ll = L.latLng(p.lat, p.lng);
@@ -145,18 +149,18 @@ export default function TechniciansMap() {
 
   // стартовый центр
   const firstCenter = useMemo(() => {
-    if (!latestPoints.length) return [37.0902, -95.7129]; // центр США
-    const p = latestPoints[0];
+    if (!filteredPoints.length) return [37.0902, -95.7129]; // центр США
+    const p = filteredPoints[0];
     return [p.lat, p.lng];
-  }, [latestPoints]);
+  }, [filteredPoints]);
 
-  // fitBounds по точкам
+  // fitBounds
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !latestPoints.length) return;
-    const b = L.latLngBounds(latestPoints.map(p => [p.lat, p.lng]));
+    if (!map || !filteredPoints.length) return;
+    const b = L.latLngBounds(filteredPoints.map(p => [p.lat, p.lng]));
     if (b.isValid()) map.fitBounds(b.pad(0.2), { animate: false });
-  }, [latestPoints]);
+  }, [filteredPoints]);
 
   if (errorText) {
     return (
@@ -182,10 +186,10 @@ export default function TechniciansMap() {
             attribution="&copy; OpenStreetMap contributors"
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          {latestPoints.map((p) => {
+          {filteredPoints.map((p) => {
             const t = techs.find(x => x.id === p.technician_id);
             const name = t?.name || `Tech ${String(p.technician_id).slice(0, 4)}`;
-            const badge = roleBadge(t?.role);
+            const badge = roleBadge();
 
             return (
               <Marker
@@ -236,7 +240,7 @@ export default function TechniciansMap() {
         <h3 style={{ margin: '8px 0 12px', fontSize: 18 }}>Техники</h3>
 
         {combined.map((t) => {
-          const badge = roleBadge(t.role);
+          const badge = roleBadge();
           const isOnlineColor = t.isOnline ? '#22c55e' : '#ef4444';
           return (
             <div
