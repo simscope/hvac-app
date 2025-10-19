@@ -62,6 +62,12 @@ const Icon = {
       <path fill="currentColor" d="M3 5h18a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm1.2 2 7.8 5.2L19.8 7H4.2Zm16.6 10a.2.2 0 0 0 .2-.2V8.6l-8.2 5.5a1 1 0 0 1-1.1 0L3.6 8.6v8.2a.2.2 0 0 0 .2.2h17z"/>
     </svg>
   ),
+  // 🗺️ Новая иконка: Карта
+  Map: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path fill="currentColor" d="M9.5 3 3 5.5v15l6.5-2.5L15 21l6-2.5v-15L15 6 9.5 3Zm0 2.2L14 7v11l-4.5-1.8V5.2Zm-2 13.1L5 19.2V7.8l2.5-1v11.5Zm11 0-2.5 1v-11.5l2.5-1v11.5Z"/>
+    </svg>
+  ),
 };
 
 export default function TopNav() {
@@ -157,7 +163,7 @@ export default function TopNav() {
     else { setLogoSrc(null); }
   };
 
-  // Порядок ссылок: Заявки → Все заявки → Календарь → Материалы → Задачи → Email → Чат
+  // Порядок ссылок: Заявки → Все заявки → Календарь → Материалы → Задачи → Карта → Email → Чат
   const links = useMemo(() => {
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs /> }];
 
@@ -167,11 +173,13 @@ export default function TopNav() {
         { to: '/calendar', label: 'Календарь', icon: <Icon.Calendar /> },
         { to: '/materials', label: 'Материалы', icon: <Icon.Materials /> },
         { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },
-        { to: '/email', label: 'Email', icon: <Icon.Email /> },          // ← ДОБАВЛЕНО
+        // 🗺️ Новый пункт меню — Карта
+        { to: '/map', label: 'Карта', icon: <Icon.Map /> },
+        { to: '/email', label: 'Email', icon: <Icon.Email /> },
         { to: '/chat', label: 'Чат', icon: <Icon.Chat /> },
       );
     } else {
-      // Для техников при желании тоже можно показать email:
+      // Для техников при желании можно показать некоторые пункты
       // arr.push({ to: '/email', label: 'Email', icon: <Icon.Email /> });
     }
 
