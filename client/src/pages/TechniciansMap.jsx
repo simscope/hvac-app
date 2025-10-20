@@ -6,7 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 
-// фикс иконок Leaflet в бандле
+// фиксим дефолтные иконки в бандле
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
@@ -14,8 +14,13 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-// ───── утилиты ─────
+// ───── константы ─────
 const ONLINE_MS = 5 * 60 * 1000; // 5 минут
+// центр Манхэттена (примерно Центральный парк)
+const MANHATTAN_CENTER = [40.7831, -73.9712]; // [lat, lng]
+// радиус по умолчанию ~50 миль ≈ 80 467 м
+const DEFAULT_RADIUS_M = 80467;
+
 const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
 const relTime = (iso) => {
   if (!iso) return '—';
@@ -54,7 +59,6 @@ export default function TechniciansMap() {
           supabase
             .from('tech_locations_latest')
             .select('technician_id, lat, lng, accuracy, speed, heading, captured_at'),
-          // ВАЖНО: только активные техники с ролью 'technician'
           supabase
             .from('technicians')
             .select('id, name, phone, email, is_active, role')
@@ -117,7 +121,7 @@ export default function TechniciansMap() {
   // Множество id техников (для фильтрации точек)
   const techIdSet = useMemo(() => new Set(techs.map(t => t.id)), [techs]);
 
-  // Только точки принадлежащие техникам (не менеджерам/админам)
+  // Только точки принадлежащие техникам
   const filteredPoints = useMemo(
     () => latestPoints.filter(p => techIdSet.has(p.technician_id)),
     [latestPoints, techIdSet]
@@ -147,14 +151,20 @@ export default function TechniciansMap() {
     }
   };
 
-  // стартовый центр
-  const firstCenter = useMemo(() => {
-    if (!filteredPoints.length) return [37.0902, -95.7129]; // центр США
-    const p = filteredPoints[0];
-    return [p.lat, p.lng];
-  }, [filteredPoints]);
+  // ───── стартовый viewport ─────
+  // Всегда центрируем на Манхэттен с охватом ~50 миль,
+  // но если есть точки — потом fitBounds по ним (см. ниже).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // если нет точек, выставляем область Манхэттена на 50 миль
+    if (!filteredPoints.length) {
+      const bounds = L.latLng(MANHATTAN_CENTER[0], MANHATTAN_CENTER[1]).toBounds(DEFAULT_RADIUS_M);
+      map.fitBounds(bounds, { animate: false });
+    }
+  }, [filteredPoints.length]);
 
-  // fitBounds
+  // fitBounds по точкам, когда они появились
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !filteredPoints.length) return;
@@ -177,8 +187,10 @@ export default function TechniciansMap() {
       {/* MAP */}
       <div style={{ position: 'relative' }}>
         <MapContainer
-          center={firstCenter}
-          zoom={4}
+          // центр не критичен — мы всё равно делаем fitBounds выше;
+          // ставим Манхэттен для корректного первого кадра
+          center={MANHATTAN_CENTER}
+          zoom={11}
           style={{ height: '100%', width: '100%' }}
           whenCreated={(m) => { mapRef.current = m; }}
         >
