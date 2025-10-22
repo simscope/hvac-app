@@ -36,11 +36,7 @@ const toDbStatus = (raw) => {
   if (low === 'tofinish') return 'To finish';
   if (low === 'completed' || low === 'complete' || low === 'done' || s === 'Выполнено') return 'Completed';
   if (low === 'canceled' || low === 'cancelled' || low === 'declined') return 'Canceled';
-
-  // если это уже одно из канонических значений — вернём как есть
   if (STATUS_VALUES.includes(s)) return s;
-
-  // fallback: капнем первую букву (чтобы не терять)
   return s[0].toUpperCase() + s.slice(1);
 };
 
@@ -49,13 +45,20 @@ export default function JobsPage() {
   const [clients, setClients] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [savingId, setSavingId] = useState(null);
+
+  // === состояние модалки "чёрный список"
+  const [blOpen, setBlOpen] = useState(false);
+  const [blClient, setBlClient] = useState(null);     // полная строка клиента
+  const [blText, setBlText] = useState('');
+  const [blSaving, setBlSaving] = useState(false);
+
   const navigate = useNavigate();
 
   useEffect(() => { fetchAll(); }, []);
 
   async function fetchAll() {
     const jobsReq    = supabase.from('jobs').select('*');
-    const clientsReq = supabase.from('clients').select('*');
+    const clientsReq = supabase.from('clients').select('*'); // берём blacklist тоже
     const techsReq   = supabase
       .from('technicians')
       .select('id,name,role,is_active')
@@ -87,10 +90,12 @@ export default function JobsPage() {
       const canon = toDbStatus(j.status);
       return {
         ...j,
-        status_canon: canon, // всегда Title Case
+        status_canon: canon,
+        client_id: c?.id || null,
         client_name: c?.full_name || c?.name || '—',
         client_company: c?.company || '',
         client_phone: c?.phone || '',
+        client_blacklist: (c?.blacklist || '').trim(),
         created_at_fmt: fmtDate(j.created_at),
       };
     });
@@ -122,7 +127,6 @@ export default function JobsPage() {
     try {
       const payload = {
         technician_id: job.technician_id ? job.technician_id : null,
-        // Сохраняем в БД сразу в Title Case
         status: job.status ? toDbStatus(job.status) : (job.status_canon ?? null),
         scf:
           job.scf === '' || job.scf == null
@@ -144,11 +148,39 @@ export default function JobsPage() {
 
   const openJob = (id) => navigate(`/job/${id}`);
 
-  // Опции статусов для селекта (Title Case)
-  const STATUS_OPTIONS = useMemo(
-    () => STATUS_VALUES.map((value) => ({ value, label: value })),
-    []
-  );
+  // Открыть редактор blacklist по клиенту этой строки
+  function openBlacklistEditor(job) {
+    const client = clients.find((c) => c.id === job.client_id);
+    if (!client) {
+      alert('Client not found for this job');
+      return;
+    }
+    setBlClient(client);
+    setBlText((client.blacklist || '').trim());
+    setBlOpen(true);
+  }
+
+  async function saveBlacklist() {
+    if (!blClient) return;
+    setBlSaving(true);
+    try {
+      const value = (blText || '').trim();
+      const { error } = await supabase
+        .from('clients')
+        .update({ blacklist: value === '' ? null : value })
+        .eq('id', blClient.id);
+      if (error) throw error;
+      setBlOpen(false);
+      setBlClient(null);
+      setBlText('');
+      await fetchAll();
+    } catch (e) {
+      console.error(e);
+      alert('Save blacklist error');
+    } finally {
+      setBlSaving(false);
+    }
+  }
 
   return (
     <div className="p-4">
@@ -161,6 +193,19 @@ export default function JobsPage() {
         .row-click { cursor:pointer; }
         .row-click:hover { background:#f9fafb; }
         .jobs-table input, .jobs-table select { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
+        .icon-btn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border:1px solid #e5e7eb; border-radius:6px; background:#fff; cursor:pointer; }
+        .icon-btn:hover { background:#f3f4f6; }
+        .icon-red { color:#b91c1c; border-color:#fecaca; }
+        .tag-bl { display:inline-block; margin-left:6px; font-size:11px; color:#b91c1c; font-weight:700; }
+        /* Modal */
+        .modal-back { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:50; }
+        .modal-card { width:520px; max-width:calc(100% - 24px); background:#fff; border-radius:12px; border:1px solid #e5e7eb; box-shadow:0 10px 30px rgba(0,0,0,.15); }
+        .modal-head { padding:12px 14px; border-bottom:1px solid #e5e7eb; font-weight:700; }
+        .modal-body { padding:12px 14px; }
+        .modal-foot { padding:12px 14px; border-top:1px solid #e5e7eb; display:flex; gap:8px; justify-content:flex-end; }
+        .btn { padding:8px 12px; border-radius:8px; border:1px solid #e5e7eb; background:#f8fafc; cursor:pointer; }
+        .btn-primary { background:#2563eb; color:#fff; border-color:#2563eb; }
+        .btn-danger { background:#fee2e2; color:#b91c1c; border-color:#fecaca; }
         @media (max-width: 1024px) { .col-system, .col-date { display:none; } }
       `}</style>
 
@@ -177,7 +222,7 @@ export default function JobsPage() {
             <col style={{ width: 170 }} />
             <col style={{ width: 160 }} className="col-date" />
             <col style={{ width: 180 }} />
-            <col style={{ width: 140 }} />
+            <col style={{ width: 180 }} />
           </colgroup>
 
           <thead>
@@ -221,12 +266,15 @@ export default function JobsPage() {
                   </div>
                 </td>
 
-                {/* CLIENT with company */}
+                {/* CLIENT with company + метка, если в ч/с */}
                 <td>
                   <div className="cell-wrap">
                     {job.client_company ? (
                       <>
-                        <div style={{ fontWeight: 600 }}>{job.client_company}</div>
+                        <div style={{ fontWeight: 600 }}>
+                          {job.client_company}
+                          {job.client_blacklist ? <span className="tag-bl">BLACKLIST</span> : null}
+                        </div>
                         <div style={{ color: '#6b7280', fontSize: 12 }}>
                           {job.client_name}
                           {job.client_phone ? ` — ${job.client_phone}` : ''}
@@ -236,6 +284,7 @@ export default function JobsPage() {
                       <div>
                         {job.client_name}
                         {job.client_phone ? ` — ${job.client_phone}` : ''}
+                        {job.client_blacklist ? <span className="tag-bl">BLACKLIST</span> : null}
                       </div>
                     )}
                   </div>
@@ -292,16 +341,37 @@ export default function JobsPage() {
                   </select>
                 </td>
 
+                {/* ACTIONS: Save / Edit / Blacklist */}
                 <td onClick={(e) => e.stopPropagation()}>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <button
                       title="Save"
+                      className="icon-btn"
                       onClick={() => handleSave(job)}
                       disabled={savingId === job.id}
                     >
                       {savingId === job.id ? '…' : '💾'}
                     </button>
-                    <button title="Edit" onClick={() => openJob(job.id)}>✏️</button>
+
+                    <button
+                      title="Edit"
+                      className="icon-btn"
+                      onClick={() => openJob(job.id)}
+                    >
+                      ✏️
+                    </button>
+
+                    <button
+                      title={
+                        job.client_blacklist
+                          ? `Blacklist: ${job.client_blacklist}`
+                          : 'Add to blacklist'
+                      }
+                      className={`icon-btn ${job.client_blacklist ? 'icon-red' : ''}`}
+                      onClick={() => openBlacklistEditor(job)}
+                    >
+                      🚫
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -313,6 +383,58 @@ export default function JobsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* ===== Modal: Blacklist editor ===== */}
+      {blOpen && (
+        <div className="modal-back" onClick={() => setBlOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">Чёрный список клиента</div>
+            <div className="modal-body">
+              <div style={{ marginBottom: 6, color: '#6b7280', fontSize: 13 }}>
+                {blClient?.full_name || '—'}
+                {blClient?.company ? ` • ${blClient.company}` : ''}
+                {blClient?.phone ? ` • ${blClient.phone}` : ''}
+              </div>
+              <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+                Причина / заметка (будет сохранена в clients.blacklist):
+              </label>
+              <textarea
+                value={blText}
+                onChange={(e) => setBlText(e.target.value)}
+                rows={5}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  resize: 'vertical',
+                }}
+                placeholder="Например: не оплачивает счета, не подпускает к оборудованию и т.п."
+              />
+              <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 6 }}>
+                Пустое поле — удалит отметку из чёрного списка.
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button className="btn" onClick={() => setBlOpen(false)} disabled={blSaving}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => { setBlText(''); }}
+                disabled={blSaving}
+                title="Очистить blacklist"
+              >
+                Clear
+              </button>
+              <button className="btn btn-primary" onClick={saveBlacklist} disabled={blSaving}>
+                {blSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
