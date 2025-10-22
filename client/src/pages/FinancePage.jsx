@@ -14,6 +14,7 @@ const FinancePage = () => {
   const [filterPeriod, setFilterPeriod] = useState('month');
   const [filterPaid, setFilterPaid] = useState('all'); // all | unpaid | paid
   const [filterStatus, setFilterStatus] = useState('all'); // all | <status>
+  const [filterClientPaid, setFilterClientPaid] = useState('all'); // all | has | none  ← НОВЫЙ
 
   // Массовая отметка
   const [selected, setSelected] = useState(new Set());
@@ -61,6 +62,12 @@ const FinancePage = () => {
     { label: 'Только невыплаченные', value: 'unpaid' },
     { label: 'Только выплаченные', value: 'paid' },
   ];
+  // НОВОЕ: фильтр по оплате клиента (есть ли оплата SCF/Labor с указанным методом)
+  const clientPaidOptions = [
+    { label: 'Все', value: 'all' },
+    { label: 'Оплаченные', value: 'has' },
+    { label: 'Неоплаченные', value: 'none' },
+  ];
 
   // ===== helpers =====
   // способ оплаты выбран?
@@ -91,6 +98,15 @@ const FinancePage = () => {
 
   // показать статус для информации (один столбец)
   const showStatus = (j) => getJobStatus(j) || '—';
+
+  // НОВОЕ: была ли какая-то клиентская оплата по заявке (SCF или Labor с выбранным методом)
+  const hasClientPayment = (j) => {
+    const scf = Number(j.scf || 0);
+    const labor = Number(j.labor_price || 0);
+    const scfPaid = methodChosen(j.scf_payment_method) && scf > 0;
+    const laborPaid = methodChosen(j.labor_payment_method) && labor > 0;
+    return scfPaid || laborPaid;
+  };
 
   // ===== load =====
   useEffect(() => { fetchAll(); }, []);
@@ -156,9 +172,17 @@ const FinancePage = () => {
         (filterPaid === 'paid' && job.salary_paid) ||
         (filterPaid === 'unpaid' && !job.salary_paid);
       const byStatus = filterStatus === 'all' || getJobStatus(job) === filterStatus;
-      return byTech && byPeriod && byPaid && byStatus;
+
+      // НОВОЕ условие:
+      const clientPaid = hasClientPayment(job);
+      const byClientPaid =
+        filterClientPaid === 'all' ||
+        (filterClientPaid === 'has'  && clientPaid) ||
+        (filterClientPaid === 'none' && !clientPaid);
+
+      return byTech && byPeriod && byPaid && byStatus && byClientPaid;
     });
-  }, [jobs, filterTech, filterPeriod, filterPaid, filterStatus]);
+  }, [jobs, filterTech, filterPeriod, filterPaid, filterStatus, filterClientPaid]);
 
   // ===== row math =====
   // Зарплата:
@@ -256,11 +280,11 @@ const FinancePage = () => {
         .from('jobs')
         .update(patch)
         .eq('id', job.id)
-        .select('id') // просим вернуть строку, чтобы видеть возможную ошибку/политику
+        .select('id')
         .single();
 
       if (error) throw error;
-      await fetchJobs(); // подтягиваем фактическое состояние из БД
+      await fetchJobs();
     } catch (e) {
       console.error('Не удалось пометить как выплаченное:', e);
       alert('Не удалось пометить как выплаченное: ' + (e?.message || e));
@@ -275,7 +299,7 @@ const FinancePage = () => {
         salary_paid_by: null,
         salary_paid_amount: null,
       };
-      const { error } = await supabase
+    const { error } = await supabase
         .from('jobs')
         .update(patch)
         .eq('id', job.id)
@@ -403,7 +427,7 @@ const FinancePage = () => {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, minmax(220px, 1fr))',
+          gridTemplateColumns: 'repeat(5, minmax(220px, 1fr))', // ← стало 5 колонок
           gap: 12,
           marginBottom: 12,
           maxWidth: TABLE_WIDTH,
@@ -431,13 +455,21 @@ const FinancePage = () => {
           </select>
         </div>
 
-        {/* Новый фильтр по статусу заявки */}
+        {/* Фильтр по статусу заявки */}
         <div>
           <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Статус заявки</label>
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={selectStyle}>
             {statusOptions.map((s) =>
               s === 'all' ? <option key="all" value="all">Все</option> : <option key={s} value={s}>{s}</option>
             )}
+          </select>
+        </div>
+
+        {/* НОВЫЙ фильтр: Оплата клиента */}
+        <div>
+          <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Оплата клиента</label>
+          <select value={filterClientPaid} onChange={(e) => setFilterClientPaid(e.target.value)} style={selectStyle}>
+            {clientPaidOptions.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
         </div>
       </div>
