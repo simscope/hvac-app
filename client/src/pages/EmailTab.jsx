@@ -63,7 +63,10 @@ const styles = {
   },
   searchInput: { flex: 1, outline: 'none', border: 'none', background: 'transparent' },
   listHead: { padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, color: colors.subtext },
+
   table: { flex: 1, overflow: 'auto' },
+  sectionTitle: { padding: '10px 12px', fontWeight: 700, color: '#0f172a', background: '#f9fbff', borderBottom: `1px solid ${colors.border}` },
+
   row: {
     display: 'grid', gridTemplateColumns: '1fr 180px',
     padding: '12px', borderBottom: `1px solid ${colors.border}`,
@@ -133,6 +136,43 @@ export default function EmailTab() {
     };
     return fetch(url, { ...options, headers });
   }
+
+  // формат даты: для сегодняшних показываем только время, для остальных — локальную дату
+  const fmtDate = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    if (d >= startOfToday && d <= endOfToday) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString();
+  };
+
+  // группировка: сегодня / ранее (только для inbox)
+  const { todayList, olderList } = useMemo(() => {
+    if (folder !== 'inbox') return { todayList: [], olderList: [] };
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    const safeList = Array.isArray(list) ? list : [];
+
+    const t = [];
+    const o = [];
+    for (const m of safeList) {
+      const d = m?.date ? new Date(m.date) : null;
+      if (d && d >= startOfToday && d <= endOfToday) t.push(m);
+      else o.push(m);
+    }
+
+    // сортировка по убыванию даты
+    const byDesc = (a, b) => new Date(b.date || 0) - new Date(a.date || 0);
+
+    return { todayList: t.sort(byDesc), olderList: o.sort(byDesc) };
+  }, [list, folder]);
 
   /* ======= DATA LOAD ======= */
   async function loadList() {
@@ -229,6 +269,26 @@ export default function EmailTab() {
     }, 800);
   }
 
+  /* ======= РЕНДЕР ПОЧТОВОЙ СТРОКИ ======= */
+  const MailRow = ({ m }) => (
+    <div
+      key={m.id}
+      style={styles.row}
+      onClick={() => openMail(m.id)}
+      role="button"
+      title="Открыть"
+    >
+      <div style={{ minWidth: 0 }}>
+        <span style={styles.from}>{m.from || '(без отправителя)'}</span>
+        <span style={styles.subject}>{m.subject || '(без темы)'}</span>
+        <span style={styles.snippet}> — {m.snippet || ''}</span>
+      </div>
+      <div style={styles.date}>
+        {fmtDate(m.date)}
+      </div>
+    </div>
+  );
+
   /* ======= RENDER ======= */
   return (
     <div style={styles.app}>
@@ -290,28 +350,39 @@ export default function EmailTab() {
         <div style={styles.table}>
           {listLoading ? (
             <div style={{ padding: 16, color: colors.subtext }}>Загрузка…</div>
-          ) : list.length === 0 ? (
+          ) : (list.length === 0 ? (
             <div style={{ padding: 16, color: colors.subtext }}>Писем нет</div>
           ) : (
-            list.map((m) => (
-              <div
-                key={m.id}
-                style={styles.row}
-                onClick={() => openMail(m.id)}
-                role="button"
-                title="Открыть"
-              >
-                <div style={{ minWidth: 0 }}>
-                  <span style={styles.from}>{m.from || '(без отправителя)'}</span>
-                  <span style={styles.subject}>{m.subject || '(без темы)'}</span>
-                  <span style={styles.snippet}> — {m.snippet || ''}</span>
-                </div>
-                <div style={styles.date}>
-                  {m.date ? new Date(m.date).toLocaleString() : ''}
-                </div>
-              </div>
-            ))
-          )}
+            folder === 'inbox' && !q
+              ? (
+                <>
+                  <div style={styles.sectionTitle}>
+                    Сегодня {todayList.length ? `(${todayList.length})` : ''}
+                  </div>
+                  {todayList.length === 0 ? (
+                    <div style={{ padding: 12, color: colors.muted }}>Нет писем за сегодня</div>
+                  ) : (
+                    todayList.map(m => <MailRow key={m.id} m={m} />)
+                  )}
+
+                  <div style={styles.sectionTitle} >
+                    Ранее {olderList.length ? `(${olderList.length})` : ''}
+                  </div>
+                  {olderList.length === 0 ? (
+                    <div style={{ padding: 12, color: colors.muted }}>Старых писем нет</div>
+                  ) : (
+                    olderList.map(m => <MailRow key={m.id} m={m} />)
+                  )}
+                </>
+              )
+              : (
+                // Для остальных папок или когда идёт поиск — обычный плоский список
+                list
+                  .slice() // копия
+                  .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+                  .map(m => <MailRow key={m.id} m={m} />)
+              )
+          ))}
         </div>
       </section>
 
