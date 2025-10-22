@@ -23,7 +23,6 @@ const btn = {
   border: 'none',
 };
 const primary = { ...btn, background: '#2563eb', color: '#fff' };
-const small = { ...btn, background: '#f3f4f6', border: '1px solid #e5e7eb', padding: '6px 10px' };
 
 const dropdownWrap = { position: 'relative' };
 const dropdown = {
@@ -46,13 +45,17 @@ const li = {
 };
 const liHover = { background: '#f8fafc' };
 
+/** ===== Blacklist helpers (используем колонку `blacklist` text) ===== */
+const getBlacklistNote = (c) => (c?.blacklist ?? '').toString().trim();
+const isBlacklisted = (c) => getBlacklistNote(c).length > 0;
+
 export default function CreateJob({ onCreated }) {
   const [form, setForm] = useState({
     issue: '',
     system_type: 'HVAC',
     scf: '120',
     technician_id: '',
-    client_company: '',   // NEW
+    client_company: '',
     client_name: '',
     client_phone: '',
     client_email: '',
@@ -60,6 +63,7 @@ export default function CreateJob({ onCreated }) {
   });
 
   const [existingClientId, setExistingClientId] = useState(null);
+  const [chosenClient, setChosenClient] = useState(null); // полная строка клиента (для blacklist)
   const [busy, setBusy] = useState(false);
   const [techs, setTechs] = useState([]);
 
@@ -91,14 +95,17 @@ export default function CreateJob({ onCreated }) {
     setForm((p) => ({ ...p, [k]: v }));
     if (k === 'client_name') {
       setExistingClientId(null);
+      setChosenClient(null);
       setQ(v);
     }
     if (k === 'client_company') {
       setExistingClientId(null);
+      setChosenClient(null);
     }
   };
 
-  const toNum = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
+  const toNum = (v) =>
+    v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v);
 
   const resetForm = () => {
     setForm({
@@ -113,12 +120,13 @@ export default function CreateJob({ onCreated }) {
       client_address: '',
     });
     setExistingClientId(null);
+    setChosenClient(null);
     setSuggestions([]);
     setOpen(false);
     setActiveIdx(-1);
   };
 
-  // поиск клиентов (по имени; компания влияет только на создание)
+  // поиск клиентов по имени (берём * чтобы получить blacklist)
   useEffect(() => {
     if (!q || q.trim().length < 2) {
       setSuggestions([]);
@@ -129,7 +137,6 @@ export default function CreateJob({ onCreated }) {
     setLoadingSug(true);
     const t = setTimeout(async () => {
       try {
-        // Берём все колонки, чтобы безопасно получить company если она есть.
         const { data, error } = await supabase
           .from('clients')
           .select('*')
@@ -175,6 +182,7 @@ export default function CreateJob({ onCreated }) {
 
   const chooseClient = (c) => {
     setExistingClientId(c.id);
+    setChosenClient(c);
     setForm((p) => ({
       ...p,
       client_company: (c.company ?? '') || '',
@@ -187,32 +195,7 @@ export default function CreateJob({ onCreated }) {
     setActiveIdx(-1);
   };
 
-  const clearChosen = () => {
-    setExistingClientId(null);
-  };
-
-  const onNameKeyDown = (e) => {
-    if (!open || suggestions.length === 0) return;
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setActiveIdx((i) => (i + 1) % suggestions.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActiveIdx((i) => (i - 1 + suggestions.length) % suggestions.length);
-    } else if (e.key === 'Enter') {
-      if (activeIdx >= 0 && activeIdx < suggestions.length) {
-        e.preventDefault();
-        chooseClient(suggestions[activeIdx]);
-      }
-    } else if (e.key === 'Escape') {
-      setOpen(false);
-      setActiveIdx(-1);
-    }
-  };
-
   async function insertClientSafe(payload) {
-    // Пытаемся вставить с полем company; если таблица его не знает — повторим без него.
     const { data, error } = await supabase
       .from('clients')
       .insert(payload)
@@ -220,7 +203,7 @@ export default function CreateJob({ onCreated }) {
       .single();
 
     if (error && error.code === '42703') {
-      // колонка не существует — пробуем без company
+      // запасной вариант, если колонки company нет
       const { data: d2, error: e2 } = await supabase
         .from('clients')
         .insert({
@@ -245,13 +228,24 @@ export default function CreateJob({ onCreated }) {
       let clientId = existingClientId || null;
 
       const wantClient =
-        (form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address)
-          .trim?.() !== '' ||
-        Boolean(form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address);
+        (form.client_company ||
+          form.client_name ||
+          form.client_phone ||
+          form.client_email ||
+          form.client_address)
+          ?.toString?.()
+          ?.trim?.() !== '' ||
+        Boolean(
+          form.client_company ||
+            form.client_name ||
+            form.client_phone ||
+            form.client_email ||
+            form.client_address
+        );
 
       if (wantClient && !clientId) {
         const clientPayload = {
-          company: (form.client_company || '').trim(),   // возможно отсутствует в БД — обработаем
+          company: (form.client_company || '').trim(),
           full_name: (form.client_name || '').trim(),
           phone: (form.client_phone || '').trim(),
           email: (form.client_email || '').trim(),
@@ -283,204 +277,4 @@ export default function CreateJob({ onCreated }) {
 
       const { error: jobErr } = await supabase.from('jobs').insert(jobPayload);
       if (jobErr) {
-        console.error('create job error:', jobErr, jobPayload);
-        return;
-      }
-
-      resetForm();
-      if (typeof onCreated === 'function') onCreated();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form
-      onSubmit={handleSubmit}
-      style={{
-        maxWidth: 960,
-        margin: '0 auto 16px',
-        border: '1px solid #e5e7eb',
-        borderRadius: 12,
-        padding: 16,
-        background: '#fff',
-      }}
-    >
-      <h2
-        style={{
-          marginTop: 0,
-          marginBottom: 10,
-          fontSize: 20,
-          fontWeight: 800,
-          textAlign: 'center',
-        }}
-      >
-        Create Job
-      </h2>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <div style={{ display: 'grid', gap: 10 }}>
-          <div style={row}>
-            <div>Job number</div>
-            <input style={input} value="Automatic" disabled />
-          </div>
-
-          <div style={row}>
-            <div>Issue description</div>
-            <input
-              style={input}
-              value={form.issue}
-              onChange={set('issue')}
-              placeholder="Describe the issue"
-            />
-          </div>
-
-          <div style={row}>
-            <div>System</div>
-            <select style={input} value={form.system_type} onChange={set('system_type')}>
-              <option value="Appliance">Appliance</option>
-              <option value="HVAC">HVAC</option>
-            </select>
-          </div>
-
-          <div style={row}>
-            <div>SCF ($)</div>
-            <input
-              style={input}
-              type="number"
-              value={form.scf}
-              onChange={set('scf')}
-              placeholder="SCF"
-            />
-          </div>
-
-          <div style={row}>
-            <div>— Select technician —</div>
-            <select
-              style={input}
-              value={form.technician_id}
-              onChange={set('technician_id')}
-            >
-              <option value="">—</option>
-              {techs.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gap: 10 }}>
-          {/* NEW: Company above Client name */}
-          <div style={row}>
-            <div>Company</div>
-            <input
-              style={input}
-              value={form.client_company}
-              onChange={set('client_company')}
-              placeholder="Organization / Company"
-            />
-          </div>
-
-          <div style={row}>
-            <div>Client name</div>
-            <div style={dropdownWrap} ref={nameInputRef}>
-              <input
-                style={input}
-                value={form.client_name}
-                onChange={set('client_name')}
-                onFocus={() => setOpen(suggestions.length > 0)}
-                onKeyDown={onNameKeyDown}
-                placeholder="Client name"
-                autoComplete="off"
-              />
-              {existingClientId && (
-                <div style={{ marginTop: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: '#16a34a' }}>
-                    Linked to existing client (ID: {existingClientId})
-                  </span>
-                  <button type="button" style={small} onClick={clearChosen}>Unlink</button>
-                </div>
-              )}
-              {open && (
-                <div style={dropdown} ref={dropRef}>
-                  {loadingSug && (
-                    <div style={{ padding: 10, fontSize: 13, color: '#64748b' }}>
-                      Searching…
-                    </div>
-                  )}
-                  {(suggestions || []).map((c, idx) => (
-                    <div
-                      key={c.id}
-                      style={{ ...li, ...(idx === activeIdx ? liHover : null) }}
-                      onMouseEnter={() => setActiveIdx(idx)}
-                      onMouseLeave={() => setActiveIdx(-1)}
-                      onClick={() => chooseClient(c)}
-                      title={`Company: ${c.company ?? '-'} • Phone: ${c.phone || '-'} • Email: ${c.email || '-'} • Address: ${c.address || '-'}`}
-                    >
-                      <div style={{ fontWeight: 600 }}>
-                        {c.full_name || '—'} {c.company ? `• ${c.company}` : ''}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>
-                        {(c.phone || '')}
-                        {c.email ? ` • ${c.email}` : ''}
-                        {c.address ? ` • ${c.address}` : ''}
-                      </div>
-                    </div>
-                  ))}
-                  {!loadingSug && suggestions.length === 0 && (
-                    <div style={{ padding: 10, fontSize: 13, color: '#64748b' }}>
-                      No matches
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={row}>
-            <div>Phone</div>
-            <input
-              style={input}
-              value={form.client_phone}
-              onChange={set('client_phone')}
-              placeholder="Phone"
-            />
-          </div>
-
-          <div style={row}>
-            <div>Email</div>
-            <input
-              style={input}
-              value={form.client_email}
-              onChange={set('client_email')}
-              placeholder="Email"
-            />
-          </div>
-
-          <div style={row}>
-            <div>Address</div>
-            <input
-              style={input}
-              value={form.client_address}
-              onChange={set('client_address')}
-              placeholder="Address"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14, gap: 8 }}>
-        <button type="submit" style={primary} disabled={busy}>
-          {busy ? 'Creating…' : 'Create job'}
-        </button>
-        {open && (
-          <button type="button" style={small} onClick={() => setOpen(false)}>
-            Hide suggestions
-          </button>
-        )}
-      </div>
-    </form>
-  );
-}
+        console.error('create job error:', jobErr
