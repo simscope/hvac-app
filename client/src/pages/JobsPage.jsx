@@ -13,8 +13,7 @@ const STATUS_VALUES = [
   'Waiting for parts',
   'To finish',
   'Completed',
-  'Canceled',
-];
+  ];
 
 /* ===== Для сортировки — заданный порядок ===== */
 const ALL_STATUS_ORDER = [...STATUS_VALUES];
@@ -35,7 +34,6 @@ const toDbStatus = (raw) => {
   if (low === 'waitingforparts') return 'Waiting for parts';
   if (low === 'tofinish') return 'To finish';
   if (low === 'completed' || low === 'complete' || low === 'done' || s === 'Выполнено') return 'Completed';
-  if (low === 'canceled' || low === 'cancelled' || low === 'declined') return 'Canceled';
   if (STATUS_VALUES.includes(s)) return s;
   return s[0].toUpperCase() + s.slice(1);
 };
@@ -438,3 +436,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
