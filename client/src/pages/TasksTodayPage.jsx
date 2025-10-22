@@ -29,9 +29,18 @@ function toNYTzISO(dateStr, timeStr) {
   return d.isValid() ? d.toISOString() : null;
 }
 
+/* «Это неоплатный таск?» — определяем по type и тегам */
+function isPaymentTask(t) {
+  const tp = String(t?.type || '').toLowerCase();
+  const tags = Array.isArray(t?.tags) ? t.tags.map((s) => String(s).toLowerCase()) : [];
+  const typeHit = ['payment', 'payment_due', 'unpaid', 'scf', 'invoice'].some(k => tp.includes(k));
+  const tagHit = tags.some(s => /payment|invoice|scf|оплат/i.test(s));
+  return typeHit || tagHit;
+}
+
 export default function TasksTodayPage() {
   const mounted = useRef(true);
-  const lastTick = useRef(0); // защита от слишком частых вызовов
+  const lastTick = useRef(0);
   useEffect(() => () => { mounted.current = false; }, []);
 
   const [me, setMe] = useState(null);
@@ -91,7 +100,8 @@ export default function TasksTodayPage() {
       if (tErr) throw tErr;
       if (mounted.current) setTasks(t || []);
 
-      // комментарии (имя автора если есть FK на profiles.id)
+      // комментарии
+      let commentsMap = {};
       if ((t || []).length) {
         const ids = t.map(x => x.id);
         const { data: cs, error: cErr } = await supabase
@@ -101,9 +111,8 @@ export default function TasksTodayPage() {
           .order('created_at', { ascending: false });
 
         if (!cErr) {
-          const map = {};
           (cs || []).forEach(c => {
-            (map[c.task_id] ||= []).push({
+            (commentsMap[c.task_id] ||= []).push({
               id: c.id,
               task_id: c.task_id,
               body: c.body,
@@ -112,12 +121,31 @@ export default function TasksTodayPage() {
               created_at: c.created_at
             });
           });
-          if (mounted.current) setComments(map);
+          if (mounted.current) setComments(commentsMap);
         } else if (mounted.current) {
           setComments({});
         }
       } else if (mounted.current) {
         setComments({});
+      }
+
+      // 🛠 Самоисправление: если "неоплатный" таск активен, но у него уже есть комменты — закрываем.
+      const toClose = (t || []).filter(x =>
+        x.status === 'active' && isPaymentTask(x) && (commentsMap[x.id]?.length > 0)
+      );
+      if (toClose.length) {
+        await supabase
+          .from('tasks')
+          .update({ status: 'done', updated_at: new Date().toISOString() })
+          .in('id', toClose.map(x => x.id));
+        // перезагрузим, чтобы увидеть изменения
+        const { data: t2 } = await supabase
+          .from('tasks')
+          .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
+          .eq('due_date', today)
+          .order('status', { ascending: true })
+          .order('updated_at', { ascending: false });
+        if (mounted.current && t2) setTasks(t2);
       }
     } catch (e) {
       console.error('[TasksToday] load error:', e);
@@ -129,7 +157,7 @@ export default function TasksTodayPage() {
 
   useEffect(() => { if (me) load(); }, [me]);
 
-  /* ---------- background reminders tick (каждую минуту, когда вкладка видима) ---------- */
+  /* ---------- background reminders tick ---------- */
   useEffect(() => {
     if (!me) return;
     let timer = null;
@@ -137,7 +165,7 @@ export default function TasksTodayPage() {
 
     const tick = async () => {
       if (!mounted.current) return;
-      if (document.visibilityState !== 'visible') return; // экономим, когда вкладка неактивна
+      if (document.visibilityState !== 'visible') return;
       const now = Date.now();
       if (now - lastTick.current < TICK_MS - 250) return;
       lastTick.current = now;
@@ -148,19 +176,17 @@ export default function TasksTodayPage() {
       }
     };
 
-    // первый вызов быстро, затем по интервалу
-     const alignAndStart = () => {
-     const now = Date.now();
-     const halfHour = 30 * 60 * 1000;
-     const offset = halfHour - (now % halfHour);
-     setTimeout(() => {
-     tick(); // первый вызов ровно на границе получаса
-     timer = setInterval(tick, halfHour);
+    const alignAndStart = () => {
+      const now = Date.now();
+      const halfHour = 30 * 60 * 1000;
+      const offset = halfHour - (now % halfHour);
+      setTimeout(() => {
+        tick();
+        timer = setInterval(tick, halfHour);
       }, offset);
     };
 
     alignAndStart();
-
 
     const onVis = () => { if (document.visibilityState === 'visible') tick(); };
     document.addEventListener('visibilitychange', onVis);
@@ -197,8 +223,11 @@ export default function TasksTodayPage() {
     await load();
   };
 
-  const addComment = async (taskId, text) => {
+  // ⚙️ Добавление комментария: если таск «неоплата» — сразу делаем его done
+  const addComment = async (task, text) => {
     if (!text?.trim() || !me) return;
+    const taskId = task.id;
+
     const tmp = {
       id: `tmp_${Math.random().toString(36).slice(2)}`,
       task_id: taskId,
@@ -211,8 +240,22 @@ export default function TasksTodayPage() {
       const arr = prev[taskId] ? [tmp, ...prev[taskId]] : [tmp];
       return { ...prev, [taskId]: arr };
     });
+
     const { error } = await supabase.from('task_comments').insert({ task_id: taskId, body: text.trim(), author_id: me.id });
-    if (error) console.error('addComment error:', error);
+    if (error) {
+      console.error('addComment error:', error);
+      return;
+    }
+
+    // Если это «неоплата» — перевести в done
+    if (isPaymentTask(task) && task.status === 'active') {
+      const { error: uErr } = await supabase
+        .from('tasks')
+        .update({ status: 'done', updated_at: new Date().toISOString() })
+        .eq('id', taskId);
+      if (uErr) console.error('auto close payment-task error:', uErr);
+    }
+
     await load();
   };
 
@@ -262,7 +305,13 @@ export default function TasksTodayPage() {
         <div style={{ display: 'grid', gap: 8 }}>
           {active.length === 0 ? <div style={{ color: '#6b7280' }}>Нет активных задач</div> :
             active.map(t => (
-              <TaskRow key={t.id} task={t} comments={comments[t.id] || []} onToggle={() => toggleStatus(t)} onAddComment={addComment} />
+              <TaskRow
+                key={t.id}
+                task={t}
+                comments={comments[t.id] || []}
+                onToggle={() => toggleStatus(t)}
+                onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
+              />
             ))
           }
         </div>
@@ -274,7 +323,13 @@ export default function TasksTodayPage() {
         <div style={{ display: 'grid', gap: 8 }}>
           {done.length === 0 ? <div style={{ color: '#6b7280' }}>Нет</div> :
             done.map(t => (
-              <TaskRow key={t.id} task={t} comments={comments[t.id] || []} onToggle={() => toggleStatus(t)} onAddComment={addComment} />
+              <TaskRow
+                key={t.id}
+                task={t}
+                comments={comments[t.id] || []}
+                onToggle={() => toggleStatus(t)}
+                onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
+              />
             ))
           }
         </div>
@@ -339,6 +394,9 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
             </div>
           )}
           <TagList tags={task.tags} />
+          {isPaymentTask(task) && task.status === 'active' && (
+            <div style={{ fontSize: 12, color: '#b45309' }}>⏳ Таск по неоплате — закроется автоматически после комментария</div>
+          )}
         </div>
         <button style={BTN_L} onClick={onToggle}>
           {task.status === 'active' ? 'Завершить' : 'В активные'}
@@ -365,12 +423,12 @@ function TaskRow({ task, comments, onToggle, onAddComment }) {
             onChange={e => setTxt(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter' && txt.trim()) {
-                onAddComment(task.id, txt);
+                onAddComment(task, txt);
                 setTxt('');
               }
             }}
           />
-          <button style={BTN} onClick={() => { onAddComment(task.id, txt); setTxt(''); }}>Добавить</button>
+          <button style={BTN} onClick={() => { onAddComment(task, txt); setTxt(''); }}>Добавить</button>
         </div>
       </div>
     </div>
