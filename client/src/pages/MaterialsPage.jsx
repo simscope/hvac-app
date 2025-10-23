@@ -13,7 +13,7 @@ const STATUS_VALUES = [
   'Completed',
 ];
 
-// Human-readable labels (здесь просто возвращаем как есть)
+// Human-readable labels
 const STATUS_LABEL = (v) => v;
 
 /* Normalize any incoming value → DB format with Capitalized form */
@@ -28,8 +28,6 @@ const normalizeStatusForDb = (s) => {
   if (low === 'in progress') return 'In progress';
   if (low === 'to finish') return 'To finish';
   if (low === 'completed' || low === 'done' || raw === 'выполнено') return 'Completed';
-
-  // fallback — вернём исходное, но в UI оно останется видимым
   return raw;
 };
 
@@ -142,7 +140,11 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
-        supabase.from('comments').select('*'),
+        // 🔧 берём только нужные поля + сортируем по дате (последние сверху)
+        supabase
+          .from('comments')
+          .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
+          .order('created_at', { ascending: false }),
       ]);
       setJobs(j || []);
       setMaterials(m || []);
@@ -179,9 +181,24 @@ export default function MaterialsPage() {
   const removeModalRow = (index) =>
     setModalRows((prev) => prev.filter((_, i) => i !== index));
 
-  const getCommentByJob = (id) => {
-    const c = comments.find((x) => x.job_id === id);
-    return c ? { text: c.text ?? c.content ?? '', technician_photos: c.technician_photos } : null;
+  /* ---------- комментарии по job (быстрый доступ) ---------- */
+  const commentsByJob = useMemo(() => {
+    const map = new Map();
+    // список уже отсортирован DESC — первый элемент в массиве будет последним комментом
+    (comments || []).forEach((c) => {
+      const key = c.job_id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(c);
+    });
+    return map;
+  }, [comments]);
+
+  const getLatestComment = (jobId) => {
+    const arr = commentsByJob.get(jobId) || [];
+    if (!arr.length) return null;
+    const c = arr[0]; // уже последний по времени
+    const imgUrl = c.image_url || c.technician_photos || null; // поддержка старого поля
+    return { text: c.text ?? '', image_url: imgUrl };
   };
 
   const handleModalSave = async () => {
@@ -376,7 +393,7 @@ export default function MaterialsPage() {
             onChange={(e) => setFilterStatus(e.target.value)}
             style={{ ...input, width: 220 }}
           >
-            <option value="all">All (showing only: Recall / Parts ordered / Waiting for parts)</option>
+            <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
             {STATUS_VALUES.map((s) => (
               <option key={s} value={s}>
                 {STATUS_LABEL(s)}
@@ -512,7 +529,6 @@ export default function MaterialsPage() {
                       onChange={(e) => handleInlineStatusChange(job, e.target.value)}
                       style={input}
                     >
-                      {/* Keep unknown status visible */}
                       {!STATUS_VALUES.includes(normalizeStatusForDb(job.status) || '') && (
                         <option value={normalizeStatusForDb(job.status) || ''}>
                           {STATUS_LABEL(normalizeStatusForDb(job.status) || '')}
@@ -555,23 +571,30 @@ export default function MaterialsPage() {
             Job №{modalJob.job_number || modalJob.id}
           </h3>
 
-          <div style={{ marginBottom: 8, fontSize: 14 }}>
-            <strong>Comment:</strong> {getCommentByJob(modalJob.id)?.text || '—'}
-          </div>
+          {(() => {
+            const lc = getLatestComment(modalJob.id);
+            return (
+              <>
+                <div style={{ marginBottom: 8, fontSize: 14 }}>
+                  <strong>Comment:</strong> {lc?.text?.trim() ? lc.text : '—'}
+                </div>
 
-          <div style={{ marginBottom: 10, fontSize: 14 }}>
-            <strong>Photo:</strong>{' '}
-            {getCommentByJob(modalJob.id)?.technician_photos ? (
-              <img
-                src={`data:image/jpeg;base64,${getCommentByJob(modalJob.id).technician_photos}`}
-                width="150"
-                alt="technician photo"
-                style={{ borderRadius: 4, border: '1px solid #ddd' }}
-              />
-            ) : (
-              '—'
-            )}
-          </div>
+                <div style={{ marginBottom: 10, fontSize: 14 }}>
+                  <strong>Photo:</strong>{' '}
+                  {lc?.image_url ? (
+                    <img
+                      src={lc.image_url}
+                      width="150"
+                      alt="technician photo"
+                      style={{ borderRadius: 4, border: '1px solid #ddd' }}
+                    />
+                  ) : (
+                    '—'
+                  )}
+                </div>
+              </>
+            );
+          })()}
 
           <div style={{ marginBottom: 10, display: 'flex', gap: 16 }}>
             <div>
