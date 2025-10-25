@@ -78,44 +78,53 @@ const styles = {
   date: { textAlign: 'right', color: colors.subtext },
 
   /* MODALS */
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
-
-  // ✨ Изменено: модалка чтения стала колонкой с ограничением по высоте
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,.25)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 50,
+    padding: 24,          // чтобы не прилипало к краям
+    overflow: 'auto',     // если модалка длинная — можно прокрутить фон
+  },
+  composeModal: {
+    width: 720, maxWidth: '90vw',
+    background: colors.white, borderRadius: 12,
+    border: `1px solid ${colors.border}`, padding: 16
+  },
   readModal: {
-    width: 860,
-    maxWidth: '95vw',
-    background: colors.white,
-    borderRadius: 12,
+    width: 860, maxWidth: '95vw',
+    background: colors.white, borderRadius: 12,
     border: `1px solid ${colors.border}`,
     padding: 16,
     display: 'flex',
     flexDirection: 'column',
-    maxHeight: '85vh', // чтобы помещалась на экран
+    maxHeight: '90vh',    // КЛЮЧ: ограничили высоту модалки
   },
-
-  // ✨ Новое: прокручиваемая область тела письма
+  readHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+    borderBottom: `1px solid ${colors.border}`,
+    paddingBottom: 8,
+  },
+  readMeta: { color: colors.subtext, margin: '6px 0 8px' },
   readBody: {
     flex: 1,
-    overflow: 'auto',
-    marginTop: 8,
-    paddingRight: 4,
-    borderTop: `1px solid ${colors.border}`,
+    minHeight: 0,       // разрешает overflow работать внутри flex
+    overflow: 'auto',   // КЛЮЧ: прокручиваем тело письма
   },
 
-  composeModal: { width: 720, maxWidth: '90vw', background: colors.white, borderRadius: 12, border: `1px solid ${colors.border}`, padding: 16 },
   formRow: { marginBottom: 10 },
   input: { width: '100%', padding: 10, borderRadius: 8, border: `1px solid ${colors.border}` },
   btnLine: { display: 'flex', gap: 8, marginTop: 8 },
   btnPrimary: { padding: '8px 14px', borderRadius: 10, background: colors.blue, color: '#fff', border: 'none', cursor: 'pointer' },
   btn: { padding: '8px 14px', borderRadius: 10, background: colors.bg, border: `1px solid ${colors.border}`, cursor: 'pointer' },
   signatureHint: { fontSize: 12, color: colors.subtext, marginTop: 6, whiteSpace: 'pre-wrap' },
-
-  // ✨ Новое: обёртка для HTML письма (ломаем длинные слова, сжимаем контент)
-  htmlContainer: {
-    overflowWrap: 'anywhere',
-    wordBreak: 'break-word',
-    lineHeight: 1.5,
-  },
 };
 /* ================== */
 
@@ -125,6 +134,39 @@ const LABELS = [
   { id: 'drafts', title: 'Черновики', icon: '📝' },
   { id: 'spam', title: 'Спам', icon: '🚫' },
 ];
+
+/* ====== helper: заменить cid: на blob: для inline-вложений ====== */
+function hydrateCidImages(message) {
+  if (!message?.html || !Array.isArray(message.attachments)) return message;
+
+  const urlMap = {};
+  const revoke = [];
+
+  for (const a of message.attachments) {
+    if (!a?.contentId || !a?.dataBase64) continue;
+    const cid = String(a.contentId).replace(/[<>]/g, ''); // убрать угловые скобки
+    try {
+      const bin = atob(a.dataBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: a.mimeType || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      urlMap[cid] = url;
+      revoke.push(url);
+    } catch (e) {
+      console.warn('inline image decode failed', a.filename, e);
+    }
+  }
+
+  let html = message.html;
+  html = html.replace(/src=["']cid:([^"']+)["']/gi, (m, cidRaw) => {
+    const key = String(cidRaw).replace(/[<>]/g, '');
+    const url = urlMap[key];
+    return url ? `src="${url}"` : m;
+  });
+
+  return { ...message, html, _blobUrlsToRevoke: revoke };
+}
 
 export default function EmailTab() {
   /* ======= STATE ======= */
@@ -166,7 +208,6 @@ export default function EmailTab() {
     return fetch(url, { ...options, headers });
   }
 
-  // формат даты: для сегодняшних показываем только время, для остальных — локальную дату
   const fmtDate = (iso) => {
     if (!iso) return '';
     const d = new Date(iso);
@@ -197,9 +238,7 @@ export default function EmailTab() {
       else o.push(m);
     }
 
-    // сортировка по убыванию даты
     const byDesc = (a, b) => new Date(b.date || 0) - new Date(a.date || 0);
-
     return { todayList: t.sort(byDesc), olderList: o.sort(byDesc) };
   }, [list, folder]);
 
@@ -241,7 +280,8 @@ export default function EmailTab() {
       const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id }) });
       if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
       const data = await r.json();
-      setCurrent(data || {});
+      const hydrated = hydrateCidImages(data || {});
+      setCurrent(hydrated);
     } catch (e) {
       console.error(e);
       const m = list.find(x => x.id === id);
@@ -256,6 +296,14 @@ export default function EmailTab() {
     }
   }
 
+  function closeRead() {
+    // освобождаем blob-URL для inline изображений
+    if (current?._blobUrlsToRevoke) {
+      current._blobUrlsToRevoke.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
+    }
+    setReadOpen(false);
+  }
+
   /* ======= SEND ======= */
   async function onSubmit(e) {
     e.preventDefault();
@@ -265,7 +313,6 @@ export default function EmailTab() {
       const subject = subjectRef.current?.value || '';
       const baseText = textRef.current?.value || '';
 
-      // Добавляем подпись при отправке (если включена и её ещё нет в тексте)
       const shouldAppend = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
       const text = shouldAppend ? `${baseText}${SIGNATURE}` : baseText;
 
@@ -317,15 +364,6 @@ export default function EmailTab() {
       </div>
     </div>
   );
-
-  // ✨ Инлайн-стили для HTML-писем (картинки/таблицы адаптивно)
-  const responsiveEmailCss =
-    `<style>
-      img{max-width:100%;height:auto}
-      table{max-width:100%;width:auto;border-collapse:collapse}
-      pre{white-space:pre-wrap}
-      body{margin:0;padding:0}
-    </style>`;
 
   /* ======= RENDER ======= */
   return (
@@ -414,9 +452,8 @@ export default function EmailTab() {
                 </>
               )
               : (
-                // Для остальных папок или когда идёт поиск — обычный плоский список
                 list
-                  .slice() // копия
+                  .slice()
                   .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
                   .map(m => <MailRow key={m.id} m={m} />)
               )
@@ -477,32 +514,32 @@ export default function EmailTab() {
 
       {/* READ MODAL */}
       {readOpen && (
-        <div style={styles.overlay} onClick={() => setReadOpen(false)}>
+        <div style={styles.overlay} onClick={closeRead}>
           <div style={styles.readModal} onClick={(e) => e.stopPropagation()}>
-            {/* header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ marginTop: 0, marginBottom: 8 }}>{current?.subject || '(без темы)'}</h3>
-              <button style={styles.btn} onClick={() => setReadOpen(false)}>Закрыть</button>
+            <div style={styles.readHeader}>
+              <h3 style={{ margin: 0 }}>{current?.subject || '(без темы)'}</h3>
+              <button style={styles.btn} onClick={closeRead}>Закрыть</button>
             </div>
 
-            {/* meta */}
-            <div style={{ color: colors.subtext }}>
+            <div style={styles.readMeta}>
               <div><b>От:</b> {current?.from || ''}</div>
               {current?.to ? <div><b>Кому:</b> {current.to}</div> : null}
               <div><b>Дата:</b> {current?.date ? new Date(current.date).toLocaleString() : ''}</div>
             </div>
 
-            {/* ✨ ПРОКРУЧИВАЕМОЕ ТЕЛО ПИСЬМА */}
             <div style={styles.readBody}>
               {reading ? (
                 <div style={{ color: colors.subtext }}>Загрузка письма…</div>
               ) : current?.html ? (
-                <div
-                  style={styles.htmlContainer}
-                  dangerouslySetInnerHTML={{
-                    __html: responsiveEmailCss + current.html
-                  }}
-                />
+                <>
+                  <style>{`
+                    .email-body * { max-width: 100%; box-sizing: border-box; }
+                    .email-body img { height: auto; }
+                    .email-body table { width: 100%; }
+                    .email-body pre { white-space: pre-wrap; }
+                  `}</style>
+                  <div className="email-body" dangerouslySetInnerHTML={{ __html: current.html }} />
+                </>
               ) : (
                 <pre style={{ whiteSpace: 'pre-wrap' }}>{current?.text || '(пустое письмо)'}</pre>
               )}
@@ -510,7 +547,7 @@ export default function EmailTab() {
               {Array.isArray(current?.attachments) && current.attachments.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <b>Вложения:</b>
-                  <ul>
+                  <ul style={{ marginTop: 6 }}>
                     {current.attachments.map((a, i) => (
                       <li key={i}>{a.filename} {a.size ? `(${a.size}B)` : ''}</li>
                     ))}
