@@ -79,14 +79,43 @@ const styles = {
 
   /* MODALS */
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
+
+  // ✨ Изменено: модалка чтения стала колонкой с ограничением по высоте
+  readModal: {
+    width: 860,
+    maxWidth: '95vw',
+    background: colors.white,
+    borderRadius: 12,
+    border: `1px solid ${colors.border}`,
+    padding: 16,
+    display: 'flex',
+    flexDirection: 'column',
+    maxHeight: '85vh', // чтобы помещалась на экран
+  },
+
+  // ✨ Новое: прокручиваемая область тела письма
+  readBody: {
+    flex: 1,
+    overflow: 'auto',
+    marginTop: 8,
+    paddingRight: 4,
+    borderTop: `1px solid ${colors.border}`,
+  },
+
   composeModal: { width: 720, maxWidth: '90vw', background: colors.white, borderRadius: 12, border: `1px solid ${colors.border}`, padding: 16 },
-  readModal: { width: 860, maxWidth: '95vw', background: colors.white, borderRadius: 12, border: `1px solid ${colors.border}`, padding: 16 },
   formRow: { marginBottom: 10 },
   input: { width: '100%', padding: 10, borderRadius: 8, border: `1px solid ${colors.border}` },
   btnLine: { display: 'flex', gap: 8, marginTop: 8 },
   btnPrimary: { padding: '8px 14px', borderRadius: 10, background: colors.blue, color: '#fff', border: 'none', cursor: 'pointer' },
   btn: { padding: '8px 14px', borderRadius: 10, background: colors.bg, border: `1px solid ${colors.border}`, cursor: 'pointer' },
   signatureHint: { fontSize: 12, color: colors.subtext, marginTop: 6, whiteSpace: 'pre-wrap' },
+
+  // ✨ Новое: обёртка для HTML письма (ломаем длинные слова, сжимаем контент)
+  htmlContainer: {
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    lineHeight: 1.5,
+  },
 };
 /* ================== */
 
@@ -289,6 +318,15 @@ export default function EmailTab() {
     </div>
   );
 
+  // ✨ Инлайн-стили для HTML-писем (картинки/таблицы адаптивно)
+  const responsiveEmailCss =
+    `<style>
+      img{max-width:100%;height:auto}
+      table{max-width:100%;width:auto;border-collapse:collapse}
+      pre{white-space:pre-wrap}
+      body{margin:0;padding:0}
+    </style>`;
+
   /* ======= RENDER ======= */
   return (
     <div style={styles.app}>
@@ -441,32 +479,45 @@ export default function EmailTab() {
       {readOpen && (
         <div style={styles.overlay} onClick={() => setReadOpen(false)}>
           <div style={styles.readModal} onClick={(e) => e.stopPropagation()}>
+            {/* header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ marginTop: 0, marginBottom: 8 }}>{current?.subject || '(без темы)'}</h3>
               <button style={styles.btn} onClick={() => setReadOpen(false)}>Закрыть</button>
             </div>
-            <div style={{ color: colors.subtext, marginBottom: 8 }}>
+
+            {/* meta */}
+            <div style={{ color: colors.subtext }}>
               <div><b>От:</b> {current?.from || ''}</div>
               {current?.to ? <div><b>Кому:</b> {current.to}</div> : null}
               <div><b>Дата:</b> {current?.date ? new Date(current.date).toLocaleString() : ''}</div>
             </div>
-            {reading ? (
-              <div style={{ color: colors.subtext }}>Загрузка письма…</div>
-            ) : current?.html ? (
-              <div dangerouslySetInnerHTML={{ __html: current.html }} />
-            ) : (
-              <pre style={{ whiteSpace: 'pre-wrap' }}>{current?.text || '(пустое письмо)'}</pre>
-            )}
-            {Array.isArray(current?.attachments) && current.attachments.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <b>Вложения:</b>
-                <ul>
-                  {current.attachments.map((a, i) => (
-                    <li key={i}>{a.filename} {a.size ? `(${a.size}B)` : ''}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+
+            {/* ✨ ПРОКРУЧИВАЕМОЕ ТЕЛО ПИСЬМА */}
+            <div style={styles.readBody}>
+              {reading ? (
+                <div style={{ color: colors.subtext }}>Загрузка письма…</div>
+              ) : current?.html ? (
+                <div
+                  style={styles.htmlContainer}
+                  dangerouslySetInnerHTML={{
+                    __html: responsiveEmailCss + current.html
+                  }}
+                />
+              ) : (
+                <pre style={{ whiteSpace: 'pre-wrap' }}>{current?.text || '(пустое письмо)'}</pre>
+              )}
+
+              {Array.isArray(current?.attachments) && current.attachments.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <b>Вложения:</b>
+                  <ul>
+                    {current.attachments.map((a, i) => (
+                      <li key={i}>{a.filename} {a.size ? `(${a.size}B)` : ''}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
