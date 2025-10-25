@@ -168,6 +168,24 @@ function hydrateCidImages(message) {
   return { ...message, html, _blobUrlsToRevoke: revoke };
 }
 
+/* ====== helpers: HTML-обёртка (Times New Roman) ====== */
+const nl2br = (s) => String(s).replace(/\n/g, '<br>');
+function wrapHtmlTimes(contentHtml) {
+  return `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Email</title>
+<style>
+  body { font-family: "Times New Roman", Times, serif; font-size: 14px; line-height: 1.45; color:#111; }
+  a { color:#1d4ed8; }
+  p { margin:0 0 10px; }
+</style>
+</head>
+<body>${contentHtml}</body>
+</html>`;
+}
+
 export default function EmailTab() {
   /* ======= STATE ======= */
   const [folder, setFolder] = useState('inbox');
@@ -304,7 +322,7 @@ export default function EmailTab() {
     setReadOpen(false);
   }
 
-  /* ======= SEND ======= */
+  /* ======= SEND (Times New Roman HTML + plain) ======= */
   async function onSubmit(e) {
     e.preventDefault();
     try {
@@ -314,17 +332,31 @@ export default function EmailTab() {
       const baseText = textRef.current?.value || '';
 
       const shouldAppend = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
-      const text = shouldAppend ? `${baseText}${SIGNATURE}` : baseText;
+      const textForBody = shouldAppend ? `${baseText}${SIGNATURE}` : baseText;
+
+      // HTML-версия с Times New Roman
+      const htmlContent = nl2br(textForBody);
+      const html = wrapHtmlTimes(`<div>${htmlContent}</div>`);
+
+      // plain-text fallback
+      const text = textForBody;
 
       const files = Array.from(filesRef.current?.files || []);
       const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
         const fr = new FileReader();
         fr.onerror = () => rej(new Error('File read error'));
-        fr.onload = () => res({ filename: f.name, mimeType: f.type || 'application/octet-stream', base64: btoa(String.fromCharCode(...new Uint8Array(fr.result))) });
+        fr.onload = () => res({
+          filename: f.name,
+          mimeType: f.type || 'application/octet-stream',
+          base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
+        });
         fr.readAsArrayBuffer(f);
       })));
 
-      const r = await authedFetch(API.send, { method: 'POST', body: JSON.stringify({ to, subject, text, attachments }) });
+      const r = await authedFetch(API.send, {
+        method: 'POST',
+        body: JSON.stringify({ to, subject, text, html, attachments })
+      });
       if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
       setComposeOpen(false);
       setFolder('sent');
