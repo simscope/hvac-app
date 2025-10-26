@@ -14,7 +14,7 @@ const STATUS_VALUES = [
   'Diagnosis',
 ];
 
-// Показываем в таблице и списке ТОЛЬКО эти три
+// Показываем в UI только эти три
 const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 // Human-readable labels
@@ -36,7 +36,7 @@ const normalizeStatusForDb = (s) => {
   return raw;
 };
 
-/* ---------- Small helpers ---------- */
+/* ---------- utils ---------- */
 const toIntOrNull = (v) => {
   if (v === '' || v == null) return null;
   const n = parseInt(v, 10);
@@ -48,7 +48,6 @@ const toFloatOrNull = (v) => {
   return Number.isNaN(n) ? null : n;
 };
 
-/* ---------- Safe getters ---------- */
 function getSystemLabel(job) {
   if (!job) return '';
   return String(job.system_type || job.type || job.request_type || job.ticket_type || '').trim();
@@ -60,50 +59,25 @@ function getProblemText(job) {
   ).trim();
 }
 
-/* Клиент (вариант без JOIN): берём из clientsById или из самих полей job как фоллбэк */
-function buildClientNameFromClientRow(c) {
-  if (!c) return '';
+function getClientDisplay(job) {
+  const c = job?.client || {};
   const name =
     c.full_name ||
     c.name ||
     [c.first_name, c.last_name].filter(Boolean).join(' ') ||
     c.company ||
     '';
-  return String(name).trim();
-}
-function buildClientPhoneFromClientRow(c) {
-  if (!c) return '';
-  return String(c.phone || c.mobile || c.phone_number || '').trim();
-}
-function buildClientFromJobFields(job) {
-  const name =
-    job.client_name ||
-    job.customer_name ||
-    job.client_full_name ||
-    [job.first_name, job.last_name].filter(Boolean).join(' ') ||
-    job.company ||
-    '';
-  const phone = job.client_phone || job.customer_phone || job.phone || '';
-  return { name: String(name).trim(), phone: String(phone).trim() };
-}
-function resolveClientForJob(job, clientsById) {
-  const byId = job?.client_id ? clientsById.get(String(job.client_id)) : null;
-  const nameFromClient = buildClientNameFromClientRow(byId);
-  const phoneFromClient = buildClientPhoneFromClientRow(byId);
-  const fb = buildClientFromJobFields(job);
-
-  const name = (nameFromClient || fb.name || '').trim();
-  const phone = (phoneFromClient || fb.phone || '').trim();
-
-  // компания отдельно (если нужна в скобках)
-  const company = (byId?.company || job?.company || '').trim();
-
-  return { name, phone, company };
+  const company = c.company || '';
+  const phone = c.phone || c.mobile || c.phone_number || '';
+  return {
+    name: String(name || '').trim(),
+    company: String(company || '').trim(),
+    phone: String(phone || '').trim(),
+  };
 }
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
-  const [clients, setClients] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [comments, setComments] = useState([]);
@@ -187,8 +161,23 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: j }, { data: m }, { data: t }, { data: c }, { data: cl }] = await Promise.all([
-        supabase.from('jobs').select('*'),
+      // ВАЖНО: jobs + client через FK-констрейнт (LEFT JOIN).
+      // Если имя FK другое — замени 'jobs_client_id_fkey' на своё.
+      const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
+        supabase
+          .from('jobs')
+          .select(`
+            id,
+            job_number,
+            system_type,
+            issue,
+            status,
+            technician_id,
+            client_id,
+            client:clients!jobs_client_id_fkey (
+              id, full_name, name, first_name, last_name, company, phone, mobile, phone_number
+            )
+          `),
         supabase.from('materials').select('*'),
         supabase
           .from('technicians')
@@ -200,15 +189,11 @@ export default function MaterialsPage() {
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
-        supabase
-          .from('clients')
-          .select('id, full_name, name, first_name, last_name, company, phone, mobile, phone_number'),
       ]);
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
       setComments(c || []);
-      setClients(cl || []);
     } finally {
       setLoading(false);
     }
@@ -313,12 +298,6 @@ export default function MaterialsPage() {
   }, [technicians]);
   const techName = (id) => techById.get(String(id))?.name || '';
 
-  const clientsById = useMemo(() => {
-    const m = new Map();
-    (clients || []).forEach((c) => m.set(String(c.id), c));
-    return m;
-  }, [clients]);
-
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
     role: 'button',
@@ -396,7 +375,7 @@ export default function MaterialsPage() {
     return map;
   }, [jobs]);
 
-  // ФИЛЬТР: показываем только нужные статусы + доп. фильтры
+  // ТАБЛИЦА: только нужные статусы + доп. фильтры
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -434,7 +413,7 @@ export default function MaterialsPage() {
 
   /* ---------- render helpers ---------- */
   const renderJobCell = (job) => {
-    const { name, phone, company } = resolveClientForJob(job, clientsById);
+    const { name, phone, company } = getClientDisplay(job);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
@@ -456,7 +435,7 @@ export default function MaterialsPage() {
   };
 
   const renderJobLineCompact = (job) => {
-    const { name, phone, company } = resolveClientForJob(job, clientsById);
+    const { name, phone, company } = getClientDisplay(job);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
