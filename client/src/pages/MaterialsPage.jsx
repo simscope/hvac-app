@@ -47,15 +47,9 @@ const STATUS_VALUES = [
 const input = { width: '100%', padding: '6px 8px', boxSizing: 'border-box' };
 const btn = { padding: '8px 12px', cursor: 'pointer' };
 
-/* ---------- helpers для сопоставления client_id ↔ clients ---------- */
-const norm = (v) => String(v ?? '').trim();
-const keyVariations = (v) => {
-  const k = norm(v);
-  if (!k) return [];
-  const lower = k.toLowerCase();
-  const noDash = lower.replace(/-/g, '');
-  return [k, lower, noDash];
-};
+/* ---------- helpers ---------- */
+const str = (v) => String(v ?? '').trim();
+const lower = (v) => str(v).toLowerCase();
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
@@ -180,16 +174,16 @@ export default function MaterialsPage() {
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
-  /* ---------- индекс клиентов: по id, uuid и «без дефисов/в нижнем регистре» ---------- */
-  const clientsIndex = useMemo(() => {
+  /* ---------- индекс клиентов: строго по uuid и по id ---------- */
+  const clientsIndexByUuid = useMemo(() => {
     const m = new Map();
-    (clients || []).forEach((c) => {
-      const keys = [
-        ...keyVariations(c?.id),
-        ...keyVariations(c?.uuid),
-      ];
-      keys.forEach((k) => m.set(k, c));
-    });
+    (clients || []).forEach((c) => m.set(lower(c?.uuid), c));
+    return m;
+  }, [clients]);
+
+  const clientsIndexById = useMemo(() => {
+    const m = new Map();
+    (clients || []).forEach((c) => m.set(lower(c?.id), c));
     return m;
   }, [clients]);
 
@@ -204,20 +198,20 @@ export default function MaterialsPage() {
   const getSystemLabel = (job) => String(job?.system_type || '').trim();
   const getProblemText = (job) => String(job?.issue || '').trim();
 
-  /* ---------- поиск клиента для job ---------- */
+  /* ---------- поиск клиента для job (client_id хранит clients.uuid) ---------- */
   function pickClientFromJob(job) {
-    // 1) nested-join вернул клиента
-    if (job?.client) return job.client;
-
-    // 2) пробуем разными вариантами ключа
+    if (job?.client) return job.client;          // если join вдруг сработал
     const cid = job?.client_id;
     if (!cid) return null;
 
-    const variants = keyVariations(cid);
-    for (const v of variants) {
-      const hit = clientsIndex.get(v);
-      if (hit) return hit;
-    }
+    // 1) у тебя client_id = clients.uuid
+    const byUuid = clientsIndexByUuid.get(lower(cid));
+    if (byUuid) return byUuid;
+
+    // 2) запасной вариант — если где-то положили clients.id
+    const byId = clientsIndexById.get(lower(cid));
+    if (byId) return byId;
+
     return null;
   }
 
@@ -237,8 +231,7 @@ export default function MaterialsPage() {
         phone: String(phone).trim(),
       };
     }
-    // Фолбэк — короткий client_id (как сейчас и видишь «Client bb4e…»)
-    if (job?.client_id) return { name: `Client ${norm(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
+    if (job?.client_id) return { name: `Client ${str(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
     return { name: '', company: '', phone: '' };
   }
 
@@ -301,11 +294,13 @@ export default function MaterialsPage() {
     const prevStatus = normalizeStatusForDb(job.status);
 
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: newStatus } : j)));
+
     const { error } = await supabase.from('jobs').update({ status: newStatus }).eq('id', job.id);
     if (error) {
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
+
     await fetchAll();
   };
 
