@@ -101,18 +101,29 @@ export default function MaterialsPage() {
 
   async function fetchJobsSafe() {
     // 1) пробуем nested select по FK client_id
-    const try1 = await supabase
-      .from('jobs')
-      .select(`
-        id,
-        job_number,
-        system_type,
-        issue,
-        status,
-        technician_id,
-        client_id,
-        client:client_id ( id, full_name, name, first_name, last_name, company, phone, mobile, phone_number )
-      `);
+   const try1 = await supabase
+  .from('jobs')
+  .select(`
+    id,
+    job_number,
+    system_type,
+    issue,
+    status,
+    technician_id,
+    client_id,
+    client:client_id (
+      id,
+      uuid,                -- < добавили
+      full_name,
+      name,
+      first_name,
+      last_name,
+      company,
+      phone,
+      mobile,
+      phone_number
+    )
+  `);
 
     if (!try1.error && Array.isArray(try1.data)) return try1.data;
 
@@ -740,3 +751,4 @@ export default function MaterialsPage() {
     </div>
   );
 }
+
