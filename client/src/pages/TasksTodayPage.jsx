@@ -77,23 +77,24 @@ export default function TasksTodayPage() {
     })();
   }, []);
 
-  /* ---------- load today ---------- */
+  /* ---------- load today + always-active payment tasks ---------- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
     const today = nyToday();
 
     try {
-      // серверная логика
-      await supabase.rpc('rollover_open_tasks_to_today');
-      await supabase.rpc('ensure_payment_tasks_for_today', { p_user: me.id });
-      await supabase.rpc('tick_task_reminders');
+      // серверные тики/перекладка: платёжные типы исключены на сервере (рекомендовано)
+      await supabase.rpc('rollover_open_tasks_to_today').catch(() => {});
+      await supabase.rpc('tick_task_reminders').catch(() => {});
 
-      // выборка задач на сегодня (DATE)
+      // выборка:
+      // 1) обычные задачи due_date = today
+      // 2) ИЛИ любые активные платёжные задачи (type in (...)) независимо от даты
       const { data: t, error: tErr } = await supabase
         .from('tasks')
         .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
-        .eq('due_date', today)
+        .or(`due_date.eq.${today},and(status.eq.active,type.in.(payment,payment_due,unpaid,invoice,scf))`)
         .order('status', { ascending: true })
         .order('updated_at', { ascending: false });
 
@@ -129,7 +130,7 @@ export default function TasksTodayPage() {
         setComments({});
       }
 
-      // 🛠 Самоисправление: если "неоплатный" таск активен, но у него уже есть комменты — закрываем.
+      // 🛠 Клиентское самоисправление (можно удалить, если есть серверный триггер автозакрытия):
       const toClose = (t || []).filter(x =>
         x.status === 'active' && isPaymentTask(x) && (commentsMap[x.id]?.length > 0)
       );
@@ -142,7 +143,7 @@ export default function TasksTodayPage() {
         const { data: t2 } = await supabase
           .from('tasks')
           .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,last_reminded_at,created_at,updated_at')
-          .eq('due_date', today)
+          .or(`due_date.eq.${today},and(status.eq.active,type.in.(payment,payment_due,unpaid,invoice,scf))`)
           .order('status', { ascending: true })
           .order('updated_at', { ascending: false });
         if (mounted.current && t2) setTasks(t2);
@@ -203,7 +204,7 @@ export default function TasksTodayPage() {
     const today = nyToday();
     const ch = supabase
       .channel(`tasks_today_${today}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `due_date=eq.${today}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => load())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'task_comments' }, () => load())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'task_notifications', filter: `user_id=eq.${me.id}` }, (p) => setNotif(p.new))
       .subscribe();
@@ -223,7 +224,7 @@ export default function TasksTodayPage() {
     await load();
   };
 
-  // ⚙️ Добавление комментария: если таск «неоплата» — сразу делаем его done
+  // ⚙️ Добавление комментария: если таск «неоплата» — сразу делаем его done (клиентский дубль серверной логики)
   const addComment = async (task, text) => {
     if (!text?.trim() || !me) return;
     const taskId = task.id;
