@@ -53,20 +53,20 @@ export default function MaterialsPage() {
   const [technicians, setTechnicians] = useState([]);
 
   // quick filters
-  const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
-  const [filterTech, setFilterTech] = useState('all');     // 'all' | techId(string)
-  const [searchJob, setSearchJob] = useState('');          // job number/id search
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterTech, setFilterTech] = useState('all');
+  const [searchJob, setSearchJob] = useState('');
 
   // modal state
   const [modalJob, setModalJob] = useState(null);
   const [modalRows, setModalRows] = useState([]);
-  const [deletedRowIds, setDeletedRowIds] = useState([]);     // <-- NEW: track deletions
+  const [deletedRowIds, setDeletedRowIds] = useState([]);
   const [modalTechnician, setModalTechnician] = useState('');
   const [modalStatus, setModalStatus] = useState('');
 
-  // latest comment/photo for the opened job (last only)
-  const [modalCommentText, setModalCommentText] = useState('');
-  const [modalPhotoUrl, setModalPhotoUrl] = useState('');
+  // comments & photos (ALL for the job)
+  const [modalComments, setModalComments] = useState([]); // [{text,created_at}]
+  const [modalPhotos, setModalPhotos] = useState([]);     // [url, ...]
 
   const [hoveredJobId, setHoveredJobId] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -190,7 +190,7 @@ export default function MaterialsPage() {
     },
   });
 
-  // inline: change status (→ Title Case)
+  // inline: change status
   const handleInlineStatusChange = async (job, newVal) => {
     const newStatus = normalizeStatusForDb(newVal);
     const prevStatus = normalizeStatusForDb(job.status);
@@ -205,7 +205,6 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save status');
       console.error(error);
-      // rollback UI
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
@@ -235,7 +234,6 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save technician');
       console.error(error);
-      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
@@ -243,7 +241,7 @@ export default function MaterialsPage() {
     }
   };
 
-  // open modal: fetch latest comment & photo for this job
+  // open modal: fetch rows + ALL comments and ALL photos
   const openModal = async (job) => {
     const existingRows = materials.filter((m) => m.job_id === job.id);
     const st = normalizeStatusForDb(job.status) || '';
@@ -255,26 +253,30 @@ export default function MaterialsPage() {
         ? existingRows
         : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
     );
-    setDeletedRowIds([]); // <-- reset deletions when opening modal
+    setDeletedRowIds([]);
     setModalJob(job);
-    setModalCommentText('');
-    setModalPhotoUrl('');
+    setModalComments([]);
+    setModalPhotos([]);
 
+    // грузим ВСЕ комментарии (и фото) этой работы
     try {
-      const { data: cmt } = await supabase
+      const { data: cmts, error } = await supabase
         .from('comments')
         .select('text,image_url,created_at')
         .eq('job_id', job.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: true }); // старые сверху, новые снизу
 
-      if (cmt) {
-        setModalCommentText(cmt.text || '');
-        if (cmt.image_url) setModalPhotoUrl(cmt.image_url);
+      if (!error && Array.isArray(cmts)) {
+        const comments = cmts.filter((c) => (c.text || '').trim() !== '');
+        const photos = cmts
+          .map((c) => (c.image_url || '').trim())
+          .filter((u) => u.length > 0);
+
+        setModalComments(comments);
+        setModalPhotos(photos);
       }
     } catch (e) {
-      console.warn('Failed to load latest comment/photo:', e?.message || e);
+      console.warn('Failed to load comments/photos:', e?.message || e);
     }
   };
 
@@ -288,13 +290,11 @@ export default function MaterialsPage() {
       { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
     ]);
 
-  // remove in UI + remember ids to delete from DB
+  // remember ids to delete from DB
   const removeModalRow = (index) => {
     setModalRows((prev) => {
       const row = prev[index];
-      if (row?.id) {
-        setDeletedRowIds((ids) => (ids.includes(row.id) ? ids : [...ids, row.id]));
-      }
+      if (row?.id) setDeletedRowIds((ids) => (ids.includes(row.id) ? ids : [...ids, row.id]));
       return prev.filter((_, i) => i !== index);
     });
   };
@@ -302,7 +302,7 @@ export default function MaterialsPage() {
   const handleModalSave = async () => {
     if (!modalJob) return;
 
-    // Save technician & job status (status → Title Case)
+    // Save job fields
     await supabase
       .from('jobs')
       .update({
@@ -316,12 +316,12 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
-    // 1) Deletes
+    // Deletes
     if (deletedRowIds.length) {
       await supabase.from('materials').delete().in('id', deletedRowIds);
     }
 
-    // 2) Updates
+    // Updates
     const updates = modalRows.filter((r) => r.id);
     for (const u of updates) {
       await supabase
@@ -335,7 +335,7 @@ export default function MaterialsPage() {
         .eq('id', u.id);
     }
 
-    // 3) Inserts (only non-empty)
+    // Inserts
     const inserts = modalRows
       .filter((r) => !r.id && (r.name || r.price || r.quantity || r.supplier))
       .map((r) => ({
@@ -345,9 +345,7 @@ export default function MaterialsPage() {
         quantity: toIntOrNull(r.quantity),
         supplier: r.supplier || null,
       }));
-    if (inserts.length) {
-      await supabase.from('materials').insert(inserts);
-    }
+    if (inserts.length) await supabase.from('materials').insert(inserts);
 
     setModalJob(null);
     await fetchAll();
@@ -360,7 +358,6 @@ export default function MaterialsPage() {
     return map;
   }, [jobs]);
 
-  // filter Materials rows by quick filters (status/tech/search)
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -387,16 +384,16 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
-  // jobs without materials (in SHOW_STATUSES)
-  const jobsWithoutMaterials = useMemo(() => {
-    return jobs.filter(
-      (j) =>
-        SHOW_STATUSES.has(normalizeStatusForDb(j.status)) &&
-        !materials.find((m) => m.job_id === j.id)
-    );
-  }, [jobs, materials]);
+  const jobsWithoutMaterials = useMemo(
+    () =>
+      jobs.filter(
+        (j) =>
+          SHOW_STATUSES.has(normalizeStatusForDb(j.status)) &&
+          !materials.find((m) => m.job_id === j.id)
+      ),
+    [jobs, materials]
+  );
 
-  // helpers for client/company display
   const clientDisplay = (job) => {
     const c = clientsById.get(job.client_id);
     if (!c) return '—';
@@ -525,7 +522,7 @@ export default function MaterialsPage() {
                     <span style={linkNumStyle}>{jobHeaderLine(job)}</span>
                   </td>
 
-                  {/* Technician: INLINE SELECT */}
+                  {/* Technician inline */}
                   <td
                     style={td(COL.TECH)}
                     onClick={(e) => e.stopPropagation()}
@@ -553,7 +550,7 @@ export default function MaterialsPage() {
                   <td style={td(COL.PRICE, 'right')}>{row.price}</td>
                   <td style={td(COL.SUPPLIER)}>{row.supplier}</td>
 
-                  {/* Status: INLINE SELECT */}
+                  {/* Status inline */}
                   <td
                     style={td(COL.STATUS)}
                     onClick={(e) => e.stopPropagation()}
@@ -591,7 +588,7 @@ export default function MaterialsPage() {
         </table>
       </div>
 
-      {/* Modal: edit materials */}
+      {/* Modal */}
       {modalJob && (
         <div
           style={{
@@ -602,26 +599,45 @@ export default function MaterialsPage() {
             background: '#fff',
           }}
         >
-          <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-            {jobHeaderLine(modalJob)}
-          </h3>
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>{jobHeaderLine(modalJob)}</h3>
 
-          {/* Latest comment & photo for the job */}
-          <div style={{ marginBottom: 10, fontSize: 14, display: 'grid', gap: 6 }}>
+          {/* ALL comments & ALL photos */}
+          <div style={{ marginBottom: 12, fontSize: 14, display: 'grid', gap: 8 }}>
             <div>
-              <strong>Comment:</strong> {modalCommentText?.trim() ? modalCommentText : '—'}
-            </div>
-            <div>
-              <strong>Photo:</strong>{' '}
-              {modalPhotoUrl ? (
-                <img
-                  src={modalPhotoUrl}
-                  width="160"
-                  alt="job photo"
-                  style={{ borderRadius: 4, border: '1px solid #ddd' }}
-                />
+              <strong>Comments:</strong>
+              {modalComments.length === 0 ? (
+                <span> —</span>
               ) : (
-                '—'
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {modalComments.map((c, idx) => (
+                    <li key={`${c.created_at}_${idx}`} style={{ marginBottom: 4 }}>
+                      <span style={{ color: '#6b7280', fontSize: 12, marginRight: 6 }}>
+                        {new Date(c.created_at).toLocaleString()}
+                      </span>
+                      {c.text}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div>
+              <strong>Photos:</strong>
+              {modalPhotos.length === 0 ? (
+                <span> —</span>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                  {modalPhotos.map((url, i) => (
+                    <a key={`${url}_${i}`} href={url} target="_blank" rel="noreferrer">
+                      <img
+                        src={url}
+                        alt={`job photo ${i + 1}`}
+                        width={120}
+                        style={{ borderRadius: 4, border: '1px solid #ddd' }}
+                      />
+                    </a>
+                  ))}
+                </div>
               )}
             </div>
           </div>
