@@ -11,7 +11,11 @@ const STATUS_VALUES = [
   'In progress',
   'To finish',
   'Completed',
+  'Diagnosis',
 ];
+
+// Показываем в таблице и списке ТОЛЬКО эти три
+const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 // Human-readable labels
 const STATUS_LABEL = (v) => v;
@@ -23,16 +27,14 @@ const normalizeStatusForDb = (s) => {
   const low = raw.toLowerCase();
 
   if (low === 'recall' || raw === 'ReCall') return 'Recall';
-  if (low === 'parts ordered') return 'Parts ordered';
+  if (low === 'parts ordered' || low === 'part(s) ordered') return 'Parts ordered';
   if (low === 'waiting for parts') return 'Waiting for parts';
   if (low === 'in progress') return 'In progress';
   if (low === 'to finish') return 'To finish';
   if (low === 'completed' || low === 'done' || raw === 'выполнено') return 'Completed';
+  if (low === 'diagnosis' || low === 'diag') return 'Diagnosis';
   return raw;
 };
-
-/* ---------- Rows are shown only for these statuses ---------- */
-const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 /* ---------- Small helpers ---------- */
 const toIntOrNull = (v) => {
@@ -58,26 +60,50 @@ function getProblemText(job) {
   ).trim();
 }
 
-/* Клиент формируется из вложенного job.client (join), с аккуратными фоллбэками */
-function getClientDisplay(job) {
-  const c = job?.client || {};
+/* Клиент (вариант без JOIN): берём из clientsById или из самих полей job как фоллбэк */
+function buildClientNameFromClientRow(c) {
+  if (!c) return '';
   const name =
     c.full_name ||
     c.name ||
     [c.first_name, c.last_name].filter(Boolean).join(' ') ||
     c.company ||
     '';
-  const company = c.company || '';
-  const phone = c.phone || c.mobile || c.phone_number || '';
-  return {
-    name: String(name).trim(),
-    company: String(company).trim(),
-    phone: String(phone).trim(),
-  };
+  return String(name).trim();
+}
+function buildClientPhoneFromClientRow(c) {
+  if (!c) return '';
+  return String(c.phone || c.mobile || c.phone_number || '').trim();
+}
+function buildClientFromJobFields(job) {
+  const name =
+    job.client_name ||
+    job.customer_name ||
+    job.client_full_name ||
+    [job.first_name, job.last_name].filter(Boolean).join(' ') ||
+    job.company ||
+    '';
+  const phone = job.client_phone || job.customer_phone || job.phone || '';
+  return { name: String(name).trim(), phone: String(phone).trim() };
+}
+function resolveClientForJob(job, clientsById) {
+  const byId = job?.client_id ? clientsById.get(String(job.client_id)) : null;
+  const nameFromClient = buildClientNameFromClientRow(byId);
+  const phoneFromClient = buildClientPhoneFromClientRow(byId);
+  const fb = buildClientFromJobFields(job);
+
+  const name = (nameFromClient || fb.name || '').trim();
+  const phone = (phoneFromClient || fb.phone || '').trim();
+
+  // компания отдельно (если нужна в скобках)
+  const company = (byId?.company || job?.company || '').trim();
+
+  return { name, phone, company };
 }
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
+  const [clients, setClients] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [comments, setComments] = useState([]);
@@ -98,7 +124,7 @@ export default function MaterialsPage() {
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 560,         // чтобы влезли Job / Client / System / Problem
+    JOB: 560,  // шире, чтобы влезли Job / Client / System / Problem
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -161,13 +187,8 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      // jobs вместе с client (join по client_id)
-      const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
-        supabase
-          .from('jobs')
-          .select(
-            '*, client:client_id (id, full_name, name, first_name, last_name, company, phone, mobile, phone_number, email)'
-          ),
+      const [{ data: j }, { data: m }, { data: t }, { data: c }, { data: cl }] = await Promise.all([
+        supabase.from('jobs').select('*'),
         supabase.from('materials').select('*'),
         supabase
           .from('technicians')
@@ -179,11 +200,15 @@ export default function MaterialsPage() {
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
+        supabase
+          .from('clients')
+          .select('id, full_name, name, first_name, last_name, company, phone, mobile, phone_number'),
       ]);
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
       setComments(c || []);
+      setClients(cl || []);
     } finally {
       setLoading(false);
     }
@@ -205,13 +230,11 @@ export default function MaterialsPage() {
   const handleModalChange = (index, field, value) => {
     setModalRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
   };
-
   const addModalRow = () =>
     setModalRows((prev) => [
       ...prev,
       { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
     ]);
-
   const removeModalRow = (index) =>
     setModalRows((prev) => prev.filter((_, i) => i !== index));
 
@@ -288,8 +311,13 @@ export default function MaterialsPage() {
     (technicians || []).forEach((t) => m.set(String(t.id), t));
     return m;
   }, [technicians]);
-
   const techName = (id) => techById.get(String(id))?.name || '';
+
+  const clientsById = useMemo(() => {
+    const m = new Map();
+    (clients || []).forEach((c) => m.set(String(c.id), c));
+    return m;
+  }, [clients]);
 
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
@@ -368,7 +396,7 @@ export default function MaterialsPage() {
     return map;
   }, [jobs]);
 
-  // filter Materials rows by quick filters (status/tech/search)
+  // ФИЛЬТР: показываем только нужные статусы + доп. фильтры
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -395,7 +423,7 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
-  // jobs without materials (in SHOW_STATUSES)
+  // Jobs без материалов — тоже только нужные статусы
   const jobsWithoutMaterials = useMemo(() => {
     return jobs.filter(
       (j) =>
@@ -406,7 +434,7 @@ export default function MaterialsPage() {
 
   /* ---------- render helpers ---------- */
   const renderJobCell = (job) => {
-    const { name, company, phone } = getClientDisplay(job);
+    const { name, phone, company } = resolveClientForJob(job, clientsById);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
@@ -428,7 +456,7 @@ export default function MaterialsPage() {
   };
 
   const renderJobLineCompact = (job) => {
-    const { name, company, phone } = getClientDisplay(job);
+    const { name, phone, company } = resolveClientForJob(job, clientsById);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
@@ -454,14 +482,18 @@ export default function MaterialsPage() {
       {/* Quick filters */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <div>
-          <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Status</label>
+          <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>
+            Status
+          </label>
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ ...input, width: 220 }}
+            style={{ ...input, width: 260 }}
           >
-            <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
-            {STATUS_VALUES.map((s) => (
+            <option value="all">
+              All (showing only: Recall / Part(s) ordered / Waiting for parts)
+            </option>
+            {['Recall', 'Parts ordered', 'Waiting for parts'].map((s) => (
               <option key={s} value={s}>
                 {STATUS_LABEL(s)}
               </option>
@@ -601,7 +633,7 @@ export default function MaterialsPage() {
                           {STATUS_LABEL(normalizeStatusForDb(job.status) || '')}
                         </option>
                       )}
-                      {STATUS_VALUES.map((s) => (
+                      {['Recall', 'Parts ordered', 'Waiting for parts'].map((s) => (
                         <option key={s} value={s}>
                           {STATUS_LABEL(s)}
                         </option>
@@ -698,7 +730,7 @@ export default function MaterialsPage() {
                     {STATUS_LABEL(normalizeStatusForDb(modalStatus) || '')}
                   </option>
                 )}
-                {STATUS_VALUES.map((s) => (
+                {['Recall', 'Parts ordered', 'Waiting for parts'].map((s) => (
                   <option key={s} value={s}>
                     {STATUS_LABEL(s)}
                   </option>
@@ -807,4 +839,3 @@ export default function MaterialsPage() {
     </div>
   );
 }
-
