@@ -186,41 +186,45 @@ export default function MaterialsPage() {
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
-  const clientsIndex = useMemo(() => {
-    const m = new Map();
-    (clients || []).forEach((c) => m.set(String(c.id), c));
-    return m;
-  }, [clients]);
+ const clientsIndex = useMemo(() => {
+  const m = new Map();
+  (clients || []).forEach((c) => {
+    const k1 = c?.id ? String(c.id) : null;
+    const k2 = c?.uuid ? String(c.uuid) : null;
+    if (k1) m.set(k1, c);
+    if (k2) m.set(k2, c);  // ключ по uuid
+  });
+  return m;
+}, [clients]);
 
-  const techById = useMemo(() => {
-    const m = new Map();
-    (technicians || []).forEach((t) => m.set(String(t.id), t));
-    return m;
-  }, [technicians]);
-
-  const techName = (id) => techById.get(String(id))?.name || '';
-
-  function getSystemLabel(job) {
-    return String(job?.system_type || '').trim();
+function pickClientFromJob(job) {
+  // 1) если nested-join вернул клиента — используем его
+  if (job?.client) return job.client;
+  // 2) иначе ищем по client_id и в id, и в uuid
+  if (job?.client_id) {
+    const hit = clientsIndex.get(String(job.client_id));
+    if (hit) return hit;
   }
-  function getProblemText(job) {
-    return String(job?.issue || '').trim();
-  }
+  return null;
+}
 
-  function getClientDisplay(job) {
-    // 1) если nested-join сработал
-    const c1 = job?.client;
-    if (c1) {
-      const name =
-        c1.full_name ||
-        c1.name ||
-        [c1.first_name, c1.last_name].filter(Boolean).join(' ') ||
-        c1.company ||
-        '';
-      const phone = c1.phone || c1.mobile || c1.phone_number || '';
-      return { name: name.trim(), company: String(c1.company||'').trim(), phone: String(phone).trim() };
-    }
-    // 2) иначе — пробуем добрать из общего списка клиентов (если RLS позволила)
+function getClientDisplay(job) {
+  const c = pickClientFromJob(job);
+  if (c) {
+    const name =
+      c.full_name ||
+      c.name ||
+      [c.first_name, c.last_name].filter(Boolean).join(' ') ||
+      c.company ||
+      '';
+    const phone = c.phone || c.mobile || c.phone_number || '';
+    return { name: name.trim(), company: String(c.company || '').trim(), phone: String(phone).trim() };
+  }
+  // жёсткий фолбэк — короткий client_id
+  if (job?.client_id) return { name: `Client ${String(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
+  return { name: '', company: '', phone: '' };
+}
+     // 2) иначе — пробуем добрать из общего списка клиентов (если RLS позволила)
     const c2 = job?.client_id ? clientsById.get(String(job.client_id)) : null;
     if (c2) {
       const name =
@@ -751,5 +755,6 @@ export default function MaterialsPage() {
     </div>
   );
 }
+
 
 
