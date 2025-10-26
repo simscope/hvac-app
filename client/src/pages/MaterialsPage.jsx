@@ -13,7 +13,6 @@ const STATUS_VALUES = [
   'Completed',
 ];
 
-// Человеческие метки (пока 1:1)
 const STATUS_LABEL = (v) => v;
 
 /* Normalize any incoming value → DB format with Capitalized form */
@@ -31,7 +30,7 @@ const normalizeStatusForDb = (s) => {
   return raw;
 };
 
-/* ---------- Rows are shown only for these statuses ---------- */
+/* ---------- Show only these in the table ---------- */
 const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 /* ---------- Small helpers ---------- */
@@ -54,9 +53,9 @@ export default function MaterialsPage() {
   const [clients, setClients] = useState([]);
 
   // quick filters
-  const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
-  const [filterTech, setFilterTech] = useState('all');     // 'all' | techId(string)
-  const [searchJob, setSearchJob] = useState('');          // job number/id search
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterTech, setFilterTech] = useState('all');
+  const [searchJob, setSearchJob] = useState('');
 
   // modal state
   const [modalJob, setModalJob] = useState(null);
@@ -69,7 +68,7 @@ export default function MaterialsPage() {
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 440,
+    JOB: 560, // шире, т.к. выводим больше текста
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -141,7 +140,7 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
-        supabase.from('clients').select('id, full_name, company'), // <— добавили клиентов
+        supabase.from('clients').select('id, full_name, company'),
         supabase
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
@@ -198,15 +197,14 @@ export default function MaterialsPage() {
   const getLatestComment = (jobId) => {
     const arr = commentsByJob.get(jobId) || [];
     if (!arr.length) return null;
-    const c = arr[0]; // уже последний по времени
-    const imgUrl = c.image_url || c.technician_photos || null; // поддержка старого поля
+    const c = arr[0];
+    const imgUrl = c.image_url || c.technician_photos || null;
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
   const handleModalSave = async () => {
     if (!modalJob) return;
 
-    // Save technician & job status (status → Title Case)
     await supabase
       .from('jobs')
       .update({
@@ -220,7 +218,6 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
-    // Split to inserts / updates
     const inserts = modalRows
       .filter((r) => !r.id)
       .map((r) => ({
@@ -287,7 +284,7 @@ export default function MaterialsPage() {
     },
   });
 
-  // inline: change status (→ Title Case)
+  // inline: change status/technician
   const handleInlineStatusChange = async (job, newVal) => {
     const newStatus = normalizeStatusForDb(newVal);
     const prevStatus = normalizeStatusForDb(job.status);
@@ -302,7 +299,6 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save status');
       console.error(error);
-      // rollback UI
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
@@ -310,7 +306,6 @@ export default function MaterialsPage() {
     await fetchAll();
   };
 
-  // inline: change technician
   const handleInlineTechChange = async (job, newTechId) => {
     const parsed =
       newTechId === '' || newTechId == null
@@ -332,7 +327,6 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save technician');
       console.error(error);
-      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
@@ -340,14 +334,13 @@ export default function MaterialsPage() {
     }
   };
 
-  /* ---------- derived lists ---------- */
+  /* ---------- derived ---------- */
   const jobsMap = useMemo(() => {
     const map = new Map();
     jobs.forEach((j) => map.set(j.id, j));
     return map;
   }, [jobs]);
 
-  // фильтруем Materials-строки по быстрым фильтрам (как и было)
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -374,7 +367,6 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
-  // jobs without materials (в нужных статусах)
   const jobsWithoutMaterials = useMemo(() => {
     return jobs.filter(
       (j) =>
@@ -383,28 +375,27 @@ export default function MaterialsPage() {
     );
   }, [jobs, materials]);
 
-  /* ---------- helpers to render job title with client ---------- */
-  const jobClientText = (job) => {
+  /* ---------- форматирование без слов: № — Company — Full Name — System — Problem ---------- */
+  const clientPlain = (job) => {
     const cl = clientsById.get(job.client_id);
-    const clientLabel = cl?.full_name || cl?.company || '—';
-    return clientLabel;
+    const hasCompany = !!(cl && cl.company && cl.company.trim());
+    const hasName = !!(cl && cl.full_name && cl.full_name.trim());
+    if (hasCompany && hasName) return `${cl.company} — ${cl.full_name}`;
+    if (hasCompany) return cl.company;
+    if (hasName) return cl.full_name;
+    return '—';
   };
 
-  const renderJobSentence = (job) => {
+  const sentenceForJob = (job) => {
     const num = job.job_number || job.id;
-    const clientLabel = jobClientText(job);
+    const client = clientPlain(job);
     const sys = job.system_type || '—';
     const problem = job.issue || job.problem || '—';
-    return `№${num} — Client: ${clientLabel} — System: ${sys} — Problem: ${problem}`;
+    return `№${num} — ${client} — ${sys} — ${problem}`;
   };
 
   const renderJobCell = (job) => (
-    <div>
-      <div style={{ fontWeight: 600 }}>
-        <span style={linkNumStyle}>№{job.job_number || job.id}</span>{' '}
-        — Client: {jobClientText(job)} — System: {job.system_type || '—'} — Problem: {job.issue || job.problem || '—'}
-      </div>
-    </div>
+    <div style={{ fontWeight: 600 }}>{sentenceForJob(job)}</div>
   );
 
   return (
@@ -412,8 +403,7 @@ export default function MaterialsPage() {
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Materials by Jobs</h2>
 
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the materials editor.
-        You can change <strong>Status</strong> and <strong>Technician</strong> inline.
+        💡 Tip: click job row to open the materials editor. You can change Status and Technician inline.
       </div>
 
       {/* Quick filters */}
@@ -423,7 +413,7 @@ export default function MaterialsPage() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ ...input, width: 260 }}
+            style={{ ...input, width: 320 }}
           >
             <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
             {STATUS_VALUES.map((s) => (
@@ -472,7 +462,7 @@ export default function MaterialsPage() {
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {jobsWithoutMaterials.map((j) => (
               <li key={j.id} style={{ marginBottom: 6 }}>
-                <span style={linkNumStyle}>{renderJobSentence(j)}</span>{' '}
+                <span>{sentenceForJob(j)}</span>{' '}
                 <button
                   onClick={() => openModal(j)}
                   style={{ ...btn, padding: '4px 8px', border: '1px solid #ddd', marginLeft: 6 }}
@@ -593,15 +583,8 @@ export default function MaterialsPage() {
           }}
         >
           <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-            Job №{modalJob.job_number || modalJob.id}
+            {sentenceForJob(modalJob)}
           </h3>
-          <div style={{ marginBottom: 6, color: '#374151' }}>
-            <strong>Client:</strong> {jobClientText(modalJob)}
-          </div>
-          <div style={{ marginBottom: 6, color: '#6b7280' }}>
-            <strong>System:</strong> {modalJob.system_type || '—'}{' '}
-            <strong style={{ marginLeft: 8 }}>Problem:</strong> {modalJob.issue || modalJob.problem || '—'}
-          </div>
 
           {(() => {
             const lc = getLatestComment(modalJob.id);
