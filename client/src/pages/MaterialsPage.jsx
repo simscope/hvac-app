@@ -46,28 +46,58 @@ const toFloatOrNull = (v) => {
   return Number.isNaN(n) ? null : n;
 };
 
-/* ---------- Safe getters (гибко читаем поля из разных схем) ---------- */
-function getClientDisplayName(c) {
-  if (!c) return '';
-  const name = c.name || c.full_name || '';
-  const fn = c.first_name || '';
-  const ln = c.last_name || '';
-  const combo = [fn, ln].filter(Boolean).join(' ');
-  return (name || combo || c.company || '').trim();
-}
-
+/* ---------- Safe getters ---------- */
 function getSystemLabel(job) {
   if (!job) return '';
-  return String(
-    job.system_type || job.type || job.request_type || job.ticket_type || ''
-  ).trim();
+  return String(job.system_type || job.type || job.request_type || job.ticket_type || '').trim();
 }
-
 function getProblemText(job) {
   if (!job) return '';
   return String(
     job.problem || job.issue || job.details || job.description || job.problem_text || ''
   ).trim();
+}
+
+/* Собираем «имя клиента» максимально надёжно: сначала из clients по client_id,
+   иначе — из полей самой заявки (client_name, customer_name, и т.п.) */
+function buildClientNameFromClientRow(c) {
+  if (!c) return '';
+  const name =
+    c.name ||
+    c.full_name ||
+    [c.first_name, c.last_name].filter(Boolean).join(' ') ||
+    c.company ||
+    '';
+  return String(name).trim();
+}
+function buildClientPhoneFromClientRow(c) {
+  if (!c) return '';
+  return String(c.phone || c.mobile || c.phone_number || '').trim();
+}
+function buildClientFromJobFields(job) {
+  const name =
+    job.client_name ||
+    job.customer_name ||
+    job.client_full_name ||
+    [job.first_name, job.last_name].filter(Boolean).join(' ') ||
+    job.company ||
+    '';
+  const phone = job.client_phone || job.customer_phone || job.phone || '';
+  return { name: String(name).trim(), phone: String(phone).trim() };
+}
+function resolveClientForJob(job, clientsById) {
+  // 1) по ссылке client_id
+  const byId = job?.client_id ? clientsById.get(String(job.client_id)) : null;
+  const nameFromClient = buildClientNameFromClientRow(byId);
+  const phoneFromClient = buildClientPhoneFromClientRow(byId);
+
+  // 2) фоллбэк из полей job
+  const fb = buildClientFromJobFields(job);
+
+  const name = (nameFromClient || fb.name || '').trim();
+  const phone = (phoneFromClient || fb.phone || '').trim();
+
+  return { name, phone };
 }
 
 export default function MaterialsPage() {
@@ -93,7 +123,7 @@ export default function MaterialsPage() {
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 480,         // расширили, чтобы влезли Job/Client/System/Problem
+    JOB: 520,         // расширили, чтобы влезли Job / Client / System / Problem
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -165,15 +195,13 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
-        // 🔧 comments — только нужные поля
         supabase
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
-        // 🔧 клиенты — берём несколько наиболее вероятных полей
         supabase
           .from('clients')
-          .select('id, name, full_name, first_name, last_name, company, phone, email'),
+          .select('id, name, full_name, first_name, last_name, company, phone, mobile, phone_number, email'),
       ]);
       setJobs(j || []);
       setMaterials(m || []);
@@ -214,7 +242,6 @@ export default function MaterialsPage() {
   /* ---------- комментарии по job (быстрый доступ) ---------- */
   const commentsByJob = useMemo(() => {
     const map = new Map();
-    // список уже отсортирован DESC — первый элемент в массиве будет последним комментом
     (comments || []).forEach((c) => {
       const key = c.job_id;
       if (!map.has(key)) map.set(key, []);
@@ -226,15 +253,14 @@ export default function MaterialsPage() {
   const getLatestComment = (jobId) => {
     const arr = commentsByJob.get(jobId) || [];
     if (!arr.length) return null;
-    const c = arr[0]; // уже последний по времени
-    const imgUrl = c.image_url || c.technician_photos || null; // поддержка старого поля
+    const c = arr[0];
+    const imgUrl = c.image_url || c.technician_photos || null;
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
   const handleModalSave = async () => {
     if (!modalJob) return;
 
-    // Save technician & job status (status → Title Case)
     await supabase
       .from('jobs')
       .update({
@@ -248,7 +274,6 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
-    // Split to inserts / updates
     const inserts = modalRows
       .filter((r) => !r.id)
       .map((r) => ({
@@ -287,7 +312,6 @@ export default function MaterialsPage() {
     (technicians || []).forEach((t) => m.set(String(t.id), t));
     return m;
   }, [technicians]);
-
   const techName = (id) => techById.get(String(id))?.name || '';
 
   const clientsById = useMemo(() => {
@@ -330,12 +354,10 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save status');
       console.error(error);
-      // rollback UI
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
 
-    // if job left SHOW_STATUSES → refresh table
     await fetchAll();
   };
 
@@ -361,7 +383,6 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save technician');
       console.error(error);
-      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
@@ -376,7 +397,6 @@ export default function MaterialsPage() {
     return map;
   }, [jobs]);
 
-  // filter Materials rows by quick filters (status/tech/search)
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -403,7 +423,6 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
-  // jobs without materials (in SHOW_STATUSES)
   const jobsWithoutMaterials = useMemo(() => {
     return jobs.filter(
       (j) =>
@@ -414,8 +433,7 @@ export default function MaterialsPage() {
 
   /* ---------- render helpers ---------- */
   const renderJobCell = (job) => {
-    const client = clientsById.get(String(job.client_id));
-    const clientName = getClientDisplayName(client);
+    const { name, phone } = resolveClientForJob(job, clientsById);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
@@ -423,7 +441,8 @@ export default function MaterialsPage() {
       <div>
         <div>
           <span style={linkNumStyle}>№{job.job_number || job.id}</span>
-          {clientName ? <span> — {clientName}</span> : null}
+          {name ? <span> — {name}</span> : null}
+          {phone ? <span> ({phone})</span> : null}
         </div>
         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
           {system ? <span><strong>System:</strong> {system}</span> : null}
@@ -435,14 +454,13 @@ export default function MaterialsPage() {
   };
 
   const renderJobLineCompact = (job) => {
-    const client = clientsById.get(String(job.client_id));
-    const clientName = getClientDisplayName(client);
+    const { name, phone } = resolveClientForJob(job, clientsById);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
     const pieces = [
       `№${job.job_number || job.id}`,
-      clientName || '',
+      name ? `${name}${phone ? ` (${phone})` : ''}` : '',
       system ? `System: ${system}` : '',
       problem ? `Problem: ${problem}` : '',
     ].filter(Boolean);
