@@ -18,12 +18,12 @@ const CANON = {
 const SHOW_STATUSES = new Set([CANON.RECALL, CANON.PARTS_ORDERED, CANON.WAITING]);
 
 /* Нормализация статусов к канонической форме.
-   Ловим разные написания: "Part(s) ordered", "Parts Ordered", "Waiting for Parts", и т.д. */
+   Ловим разные написания: "Part(s) ordered", "Parts Ordered", "Waiting for Parts", и т.п. */
 function normalizeStatusForDb(s) {
   if (!s) return null;
   const raw = String(s).trim();
-
   const low = raw.toLowerCase();
+
   if (low === 'recall' || raw === 'ReCall') return CANON.RECALL;
 
   // любые варианты "parts ordered" / "part(s) ordered" / "parts ord"
@@ -87,51 +87,62 @@ export default function MaterialsPage() {
   const TABLE_WIDTH =
     COL.JOB + COL.TECH + COL.NAME + COL.QTY + COL.PRICE + COL.SUPPLIER + COL.STATUS;
   const tableStyle = {
-    tableLayout: 'fixed', borderCollapse: 'collapse', width: `${TABLE_WIDTH}px`,
+    tableLayout: 'fixed',
+    borderCollapse: 'collapse',
+    width: `${TABLE_WIDTH}px`,
   };
-  const th = (w, a='left') => ({
-    width:w, border:'1px solid #ccc', padding:'6px 8px', textAlign:a, background:'#f5f5f5', fontWeight:600
+  const th = (w, a = 'left') => ({
+    width: w,
+    border: '1px solid #ccc',
+    padding: '6px 8px',
+    textAlign: a,
+    background: '#f5f5f5',
+    fontWeight: 600,
   });
-  const td = (w, a='left') => ({
-    width:w, border:'1px solid #ccc', padding:'6px 8px', textAlign:a, verticalAlign:'top',
-    whiteSpace:'normal', wordBreak:'break-word'
+  const td = (w, a = 'left') => ({
+    width: w,
+    border: '1px solid #ccc',
+    padding: '6px 8px',
+    textAlign: a,
+    verticalAlign: 'top',
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
   });
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => {
+    fetchAll();
+  }, []);
 
   async function fetchJobsSafe() {
-    // 1) пробуем nested select по FK client_id
-   const try1 = await supabase
-  .from('jobs')
-  .select(`
-    id,
-    job_number,
-    system_type,
-    issue,
-    status,
-    technician_id,
-    client_id,
-    client:client_id (
-      id,
-      uuid,                -- < добавили
-      full_name,
-      name,
-      first_name,
-      last_name,
-      company,
-      phone,
-      mobile,
-      phone_number
-    )
-  `);
+    // 1) пробуем nested select по FK client_id; тянем и uuid, и id
+    const try1 = await supabase
+      .from('jobs')
+      .select(`
+        id,
+        job_number,
+        system_type,
+        issue,
+        status,
+        technician_id,
+        client_id,
+        client:client_id (
+          id,
+          uuid,
+          full_name,
+          name,
+          first_name,
+          last_name,
+          company,
+          phone,
+          mobile,
+          phone_number
+        )
+      `);
 
     if (!try1.error && Array.isArray(try1.data)) return try1.data;
 
     // 2) если не получилось (неверный путь/ошибка) — откатываемся к простому select
-    const try2 = await supabase
-      .from('jobs')
-      .select('*');
-
+    const try2 = await supabase.from('jobs').select('*');
     return try2.data || [];
   }
 
@@ -156,7 +167,7 @@ export default function MaterialsPage() {
       // клиентов пробуем грузить «best effort» — если RLS не даст, просто будет []
       const clRes = await supabase
         .from('clients')
-        .select('id, full_name, name, first_name, last_name, company, phone, mobile, phone_number');
+        .select('id, uuid, full_name, name, first_name, last_name, company, phone, mobile, phone_number');
 
       setJobs(j || []);
       setMaterials(mRes.data || []);
@@ -168,6 +179,7 @@ export default function MaterialsPage() {
     }
   };
 
+  /* ---------- comments helpers ---------- */
   const commentsByJob = useMemo(() => {
     const map = new Map();
     (comments || []).forEach((c) => {
@@ -186,61 +198,66 @@ export default function MaterialsPage() {
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
- const clientsIndex = useMemo(() => {
-  const m = new Map();
-  (clients || []).forEach((c) => {
-    const k1 = c?.id ? String(c.id) : null;
-    const k2 = c?.uuid ? String(c.uuid) : null;
-    if (k1) m.set(k1, c);
-    if (k2) m.set(k2, c);  // ключ по uuid
-  });
-  return m;
-}, [clients]);
+  /* ---------- clients index: по id И по uuid ---------- */
+  const clientsIndex = useMemo(() => {
+    const m = new Map();
+    (clients || []).forEach((c) => {
+      const k1 = c?.id ? String(c.id) : null;
+      const k2 = c?.uuid ? String(c.uuid) : null;
+      if (k1) m.set(k1, c);
+      if (k2) m.set(k2, c);
+    });
+    return m;
+  }, [clients]);
 
-function pickClientFromJob(job) {
-  // 1) если nested-join вернул клиента — используем его
-  if (job?.client) return job.client;
-  // 2) иначе ищем по client_id и в id, и в uuid
-  if (job?.client_id) {
-    const hit = clientsIndex.get(String(job.client_id));
-    if (hit) return hit;
-  }
-  return null;
-}
+  const techById = useMemo(() => {
+    const m = new Map();
+    (technicians || []).forEach((t) => m.set(String(t.id), t));
+    return m;
+  }, [technicians]);
 
-function getClientDisplay(job) {
-  const c = pickClientFromJob(job);
-  if (c) {
-    const name =
-      c.full_name ||
-      c.name ||
-      [c.first_name, c.last_name].filter(Boolean).join(' ') ||
-      c.company ||
-      '';
-    const phone = c.phone || c.mobile || c.phone_number || '';
-    return { name: name.trim(), company: String(c.company || '').trim(), phone: String(phone).trim() };
+  const techName = (id) => techById.get(String(id))?.name || '';
+
+  function getSystemLabel(job) {
+    return String(job?.system_type || '').trim();
   }
-  // жёсткий фолбэк — короткий client_id
-  if (job?.client_id) return { name: `Client ${String(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
-  return { name: '', company: '', phone: '' };
-}
-     // 2) иначе — пробуем добрать из общего списка клиентов (если RLS позволила)
-    const c2 = job?.client_id ? clientsById.get(String(job.client_id)) : null;
-    if (c2) {
-      const name =
-        c2.full_name ||
-        c2.name ||
-        [c2.first_name, c2.last_name].filter(Boolean).join(' ') ||
-        c2.company ||
-        '';
-      const phone = c2.phone || c2.mobile || c2.phone_number || '';
-      return { name: name.trim(), company: String(c2.company||'').trim(), phone: String(phone).trim() };
+  function getProblemText(job) {
+    return String(job?.issue || '').trim();
+  }
+
+  function pickClientFromJob(job) {
+    // 1) если nested-join вернул клиента — используем его
+    if (job?.client) return job.client;
+    // 2) иначе ищем по client_id и в id, и в uuid
+    if (job?.client_id) {
+      const hit = clientsIndex.get(String(job.client_id));
+      if (hit) return hit;
     }
-    // 3) совсем уж фоллбэк — короткий client_id, чтобы хоть что-то видеть
-    if (job?.client_id) return { name: `Client ${String(job.client_id).slice(0,8)}…`, company: '', phone: '' };
+    return null;
+  }
+
+  function getClientDisplay(job) {
+    const c = pickClientFromJob(job);
+    if (c) {
+      const name =
+        c.full_name ||
+        c.name ||
+        [c.first_name, c.last_name].filter(Boolean).join(' ') ||
+        c.company ||
+        '';
+      const phone = c.phone || c.mobile || c.phone_number || '';
+      return {
+        name: name.trim(),
+        company: String(c.company || '').trim(),
+        phone: String(phone).trim(),
+      };
+    }
+    // жёсткий фолбэк — короткий client_id
+    if (job?.client_id) return { name: `Client ${String(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
     return { name: '', company: '', phone: '' };
   }
 
+  /* ---------- UI actions ---------- */
   const openModal = (job) => {
     const existingRows = materials.filter((m) => m.job_id === job.id);
     const st = normalizeStatusForDb(job.status) || '';
@@ -270,10 +287,18 @@ function getClientDisplay(job) {
     role: 'button',
     tabIndex: 0,
     onClick: () => openModal(job),
-    onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openModal(job); } },
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openModal(job);
+      }
+    },
     onMouseEnter: () => setHoveredJobId(job.id),
     onMouseLeave: () => setHoveredJobId(null),
-    style: { cursor: 'pointer', background: hoveredJobId === job.id ? '#f9fafb' : 'transparent' },
+    style: {
+      cursor: 'pointer',
+      background: hoveredJobId === job.id ? '#f9fafb' : 'transparent',
+    },
   });
 
   // inline: status
@@ -302,12 +327,16 @@ function getClientDisplay(job) {
         : parseInt(newTechId, 10);
 
     const prev = job.technician_id ?? null;
-    setJobs((prevJobs) => prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: parsed } : j)));
+    setJobs((prevJobs) =>
+      prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: parsed } : j))
+    );
 
     const { error } = await supabase.from('jobs').update({ technician_id: parsed }).eq('id', job.id);
     if (error) {
       // rollback
-      setJobs((prevJobs) => prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j)));
+      setJobs((prevJobs) =>
+        prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
+      );
     }
   };
 
@@ -390,9 +419,23 @@ function getClientDisplay(job) {
     return pieces.join(' — ');
   };
 
+  /* ---------- modal sizing ---------- */
   const mCOL = { NAME: 320, QTY: 110, PRICE: 130, SUP: 280, ACT: 80 };
-  const mth = (w, a='left') => ({ width:w, border:'1px solid #ccc', padding:'6px 8px', background:'#f5f5f5', fontWeight:600, textAlign:a });
-  const mtd = (w, a='left') => ({ width:w, border:'1px solid #ccc', padding:'6px 8px', textAlign:a, verticalAlign:'top' });
+  const mth = (w, a = 'left') => ({
+    width: w,
+    border: '1px solid #ccc',
+    padding: '6px 8px',
+    background: '#f5f5f5',
+    fontWeight: 600,
+    textAlign: a,
+  });
+  const mtd = (w, a = 'left') => ({
+    width: w,
+    border: '1px solid #ccc',
+    padding: '6px 8px',
+    textAlign: a,
+    verticalAlign: 'top',
+  });
 
   return (
     <div style={{ padding: 16 }}>
@@ -755,6 +798,3 @@ function getClientDisplay(job) {
     </div>
   );
 }
-
-
-
