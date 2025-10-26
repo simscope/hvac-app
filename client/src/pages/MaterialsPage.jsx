@@ -1,79 +1,75 @@
 // client/src/pages/MaterialsPage.jsx
-// Materials table + inline status/technician editing, modal to add/edit/delete materials
+// Materials table + inline status/technician editing, modal to add/edit materials
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-/* ---------- Canonical statuses ---------- */
-const CANON = {
-  RECALL: 'Recall',
-  PARTS_ORDERED: 'Parts ordered',
-  WAITING: 'Waiting for parts',
-  IN_PROGRESS: 'In progress',
-  TO_FINISH: 'To finish',
-  COMPLETED: 'Completed',
-  DIAGNOSIS: 'Diagnosis',
-};
+/* ---------- Status values stored in DB (Title Case) ---------- */
+const STATUS_VALUES = [
+  'Recall',
+  'Parts ordered',
+  'Waiting for parts',
+  'In progress',
+  'To finish',
+  'Completed',
+];
 
-/* Показываем в UI только эти три */
-const SHOW_STATUSES = new Set([CANON.RECALL, CANON.PARTS_ORDERED, CANON.WAITING]);
+// Человеческие метки (пока 1:1)
+const STATUS_LABEL = (v) => v;
 
-/* Нормализация статусов к канонической форме. */
-function normalizeStatusForDb(s) {
+/* Normalize any incoming value → DB format with Capitalized form */
+const normalizeStatusForDb = (s) => {
   if (!s) return null;
   const raw = String(s).trim();
   const low = raw.toLowerCase();
 
-  if (low === 'recall' || raw === 'ReCall') return CANON.RECALL;
-  if (/^part/i.test(low) && /order/i.test(low)) return CANON.PARTS_ORDERED; // Parts/Part(s) ordered
-  if (/wait/i.test(low) && /part/i.test(low)) return CANON.WAITING;         // Waiting for parts
-  if (low === 'in progress') return CANON.IN_PROGRESS;
-  if (low === 'to finish') return CANON.TO_FINISH;
-  if (low === 'completed' || low === 'done' || raw === 'выполнено') return CANON.COMPLETED;
-  if (low === 'diagnosis' || low === 'diag') return CANON.DIAGNOSIS;
+  if (low === 'recall' || raw === 'ReCall') return 'Recall';
+  if (low === 'parts ordered') return 'Parts ordered';
+  if (low === 'waiting for parts') return 'Waiting for parts';
+  if (low === 'in progress') return 'In progress';
+  if (low === 'to finish') return 'To finish';
+  if (low === 'completed' || low === 'done' || raw === 'выполнено') return 'Completed';
   return raw;
-}
+};
 
-const STATUS_FILTER_OPTIONS = [CANON.RECALL, CANON.PARTS_ORDERED, CANON.WAITING];
-const STATUS_VALUES = [
-  CANON.RECALL,
-  CANON.PARTS_ORDERED,
-  CANON.WAITING,
-  CANON.IN_PROGRESS,
-  CANON.TO_FINISH,
-  CANON.COMPLETED,
-  CANON.DIAGNOSIS,
-];
+/* ---------- Rows are shown only for these statuses ---------- */
+const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
-const input = { width: '100%', padding: '6px 8px', boxSizing: 'border-box' };
-const btn = { padding: '8px 12px', cursor: 'pointer' };
-
-/* ---------- helpers ---------- */
-const str = (v) => String(v ?? '').trim();
-const lower = (v) => str(v).toLowerCase();
+/* ---------- Small helpers ---------- */
+const toIntOrNull = (v) => {
+  if (v === '' || v == null) return null;
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? null : n;
+};
+const toFloatOrNull = (v) => {
+  if (v === '' || v == null) return null;
+  const n = parseFloat(v);
+  return Number.isNaN(n) ? null : n;
+};
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
-  const [clients, setClients] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [comments, setComments] = useState([]);
+  const [clients, setClients] = useState([]);
 
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterTech, setFilterTech] = useState('all');
-  const [searchJob, setSearchJob] = useState('');
+  // quick filters
+  const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
+  const [filterTech, setFilterTech] = useState('all');     // 'all' | techId(string)
+  const [searchJob, setSearchJob] = useState('');          // job number/id search
 
+  // modal state
   const [modalJob, setModalJob] = useState(null);
   const [modalRows, setModalRows] = useState([]);
   const [modalTechnician, setModalTechnician] = useState('');
   const [modalStatus, setModalStatus] = useState('');
-  const [modalDeletedIds, setModalDeletedIds] = useState([]);
 
   const [hoveredJobId, setHoveredJobId] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // ---------- table sizing ----------
+  // ---------- fixed widths ----------
   const COL = {
-    JOB: 560,
+    JOB: 440,
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -83,52 +79,61 @@ export default function MaterialsPage() {
   };
   const TABLE_WIDTH =
     COL.JOB + COL.TECH + COL.NAME + COL.QTY + COL.PRICE + COL.SUPPLIER + COL.STATUS;
+
   const tableStyle = {
     tableLayout: 'fixed',
     borderCollapse: 'collapse',
     width: `${TABLE_WIDTH}px`,
   };
-  const th = (w, a = 'left') => ({
+  const th = (w, align = 'left') => ({
     width: w,
     border: '1px solid #ccc',
     padding: '6px 8px',
-    textAlign: a,
+    textAlign: align,
     background: '#f5f5f5',
     fontWeight: 600,
   });
-  const td = (w, a = 'left') => ({
+  const td = (w, align = 'left') => ({
+    width: w,
+    border: '1px solid #ccc',
+    padding: '6px 8px',
+    textAlign: align,
+    verticalAlign: 'top',
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
+  });
+  const input = { width: '100%', padding: '6px 8px', boxSizing: 'border-box' };
+  const btn = { padding: '8px 12px', cursor: 'pointer' };
+
+  // modal (materials table)
+  const MCOL = { NAME: 320, QTY: 110, PRICE: 130, SUP: 280, ACT: 80 };
+  const MTABLE_WIDTH = MCOL.NAME + MCOL.QTY + MCOL.PRICE + MCOL.SUP + MCOL.ACT;
+  const mth = (w, a = 'left') => ({
+    width: w,
+    border: '1px solid #ccc',
+    padding: '6px 8px',
+    background: '#f5f5f5',
+    fontWeight: 600,
+    textAlign: a,
+  });
+  const mtd = (w, a = 'left') => ({
     width: w,
     border: '1px solid #ccc',
     padding: '6px 8px',
     textAlign: a,
     verticalAlign: 'top',
-    whiteSpace: 'normal',
-    wordBreak: 'break-word',
   });
 
   useEffect(() => {
     fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function fetchJobsSafe() {
-    // Если когда-нибудь включишь FK и will do a join — это сработает
-    const try1 = await supabase
-      .from('jobs')
-      .select(`
-        id, job_number, system_type, issue, status, technician_id, client_id,
-        client:client_id ( id, full_name, name, first_name, last_name, company, phone, mobile, phone_number )
-      `);
-    if (!try1.error && Array.isArray(try1.data)) return try1.data;
-
-    const try2 = await supabase.from('jobs').select('*');
-    return try2.data || [];
-  }
 
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [j, mRes, tRes, cRes] = await Promise.all([
-        fetchJobsSafe(),
+      const [{ data: j }, { data: m }, { data: t }, { data: c }, { data: cmts }] = await Promise.all([
+        supabase.from('jobs').select('*'),
         supabase.from('materials').select('*'),
         supabase
           .from('technicians')
@@ -136,27 +141,50 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
+        supabase.from('clients').select('id, full_name, company'), // <— добавили клиентов
         supabase
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
       ]);
 
-      const clRes = await supabase
-        .from('clients')
-        .select('id, full_name, name, first_name, last_name, company, phone, mobile, phone_number');
-
       setJobs(j || []);
-      setMaterials(mRes.data || []);
-      setTechnicians(tRes.data || []);
-      setComments(cRes.data || []);
-      setClients(clRes.data || []);
+      setMaterials(m || []);
+      setTechnicians(t || []);
+      setClients(c || []);
+      setComments(cmts || []);
     } finally {
       setLoading(false);
     }
   };
 
-  /* ---------- comments helpers ---------- */
+  const openModal = (job) => {
+    const existingRows = materials.filter((m) => m.job_id === job.id);
+    const st = normalizeStatusForDb(job.status) || '';
+    setModalTechnician(job.technician_id ?? '');
+    setModalStatus(st);
+    setModalRows(
+      existingRows.length
+        ? existingRows
+        : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
+    );
+    setModalJob(job);
+  };
+
+  const handleModalChange = (index, field, value) => {
+    setModalRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
+  };
+
+  const addModalRow = () =>
+    setModalRows((prev) => [
+      ...prev,
+      { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
+    ]);
+
+  const removeModalRow = (index) =>
+    setModalRows((prev) => prev.filter((_, i) => i !== index));
+
+  /* ---------- комментарии по job (быстрый доступ) ---------- */
   const commentsByJob = useMemo(() => {
     const map = new Map();
     (comments || []).forEach((c) => {
@@ -170,95 +198,75 @@ export default function MaterialsPage() {
   const getLatestComment = (jobId) => {
     const arr = commentsByJob.get(jobId) || [];
     if (!arr.length) return null;
-    const c = arr[0];
-    const imgUrl = c.image_url || c.technician_photos || null;
+    const c = arr[0]; // уже последний по времени
+    const imgUrl = c.image_url || c.technician_photos || null; // поддержка старого поля
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
-  /* ---------- индекс клиентов по id (именно id в jobs.client_id) ---------- */
-  const clientsIndexById = useMemo(() => {
-    const m = new Map();
-    (clients || []).forEach((c) => m.set(lower(c?.id), c));
-    return m;
-  }, [clients]);
+  const handleModalSave = async () => {
+    if (!modalJob) return;
 
+    // Save technician & job status (status → Title Case)
+    await supabase
+      .from('jobs')
+      .update({
+        technician_id:
+          modalTechnician === '' || modalTechnician == null
+            ? null
+            : Number.isNaN(Number(modalTechnician))
+            ? modalTechnician
+            : parseInt(modalTechnician, 10),
+        status: normalizeStatusForDb(modalStatus) || null,
+      })
+      .eq('id', modalJob.id);
+
+    // Split to inserts / updates
+    const inserts = modalRows
+      .filter((r) => !r.id)
+      .map((r) => ({
+        job_id: modalJob.id,
+        name: r.name,
+        price: toFloatOrNull(r.price),
+        quantity: toIntOrNull(r.quantity),
+        supplier: r.supplier || null,
+      }));
+
+    const updates = modalRows.filter((r) => r.id);
+
+    for (const u of updates) {
+      await supabase
+        .from('materials')
+        .update({
+          name: u.name,
+          price: toFloatOrNull(u.price),
+          quantity: toIntOrNull(u.quantity),
+          supplier: u.supplier || null,
+        })
+        .eq('id', u.id);
+    }
+
+    if (inserts.length > 0) {
+      await supabase.from('materials').insert(inserts);
+    }
+
+    setModalJob(null);
+    await fetchAll();
+  };
+
+  /* ---------- memo maps ---------- */
   const techById = useMemo(() => {
     const m = new Map();
     (technicians || []).forEach((t) => m.set(String(t.id), t));
     return m;
   }, [technicians]);
 
+  const clientsById = useMemo(() => {
+    const m = new Map();
+    (clients || []).forEach((cl) => m.set(cl.id, cl));
+    return m;
+  }, [clients]);
+
   const techName = (id) => techById.get(String(id))?.name || '';
-
-  const getSystemLabel = (job) => String(job?.system_type || '').trim();
-  const getProblemText = (job) => String(job?.issue || '').trim();
-
-  /* ---------- поиск клиента для job (client_id хранит clients.id) ---------- */
-  function pickClientFromJob(job) {
-    if (job?.client) return job.client; // если вдруг join вернулся
-    const cid = job?.client_id;
-    if (!cid) return null;
-
-    const byId = clientsIndexById.get(lower(cid));
-    if (byId) return byId;
-
-    return null;
-  }
-
-  function getClientDisplay(job) {
-    const c = pickClientFromJob(job);
-    if (c) {
-      const name =
-        c.full_name ||
-        c.name ||
-        [c.first_name, c.last_name].filter(Boolean).join(' ') ||
-        c.company ||
-        '';
-      const phone = c.phone || c.mobile || c.phone_number || '';
-      return {
-        name: name.trim(),
-        company: String(c.company || '').trim(),
-        phone: String(phone).trim(),
-      };
-    }
-    if (job?.client_id) return { name: `Client ${str(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
-    return { name: '', company: '', phone: '' };
-  }
-
-  /* ---------- UI actions ---------- */
-  const openModal = (job) => {
-    const existingRows = materials.filter((m) => m.job_id === job.id);
-    const st = normalizeStatusForDb(job.status) || '';
-    setModalTechnician(job.technician_id ?? '');
-    setModalStatus(st);
-    setModalRows(
-      existingRows.length
-        ? existingRows
-        : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
-    );
-    setModalDeletedIds([]);
-    setModalJob(job);
-  };
-
-  const handleModalChange = (index, field, value) => {
-    setModalRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
-  };
-
-  const removeModalRow = (index) => {
-    setModalRows((prev) => {
-      const row = prev[index];
-      if (row?.id) {
-        setModalDeletedIds((ids) => (ids.includes(row.id) ? ids : ids.concat(row.id)));
-      }
-      return prev.filter((_, i) => i !== index);
-    });
-  };
-
-  const addModalRow = () =>
-    setModalRows((prev) => [
-      ...prev,
-      { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
-    ]);
 
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
@@ -279,14 +287,22 @@ export default function MaterialsPage() {
     },
   });
 
+  // inline: change status (→ Title Case)
   const handleInlineStatusChange = async (job, newVal) => {
     const newStatus = normalizeStatusForDb(newVal);
     const prevStatus = normalizeStatusForDb(job.status);
 
     setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: newStatus } : j)));
 
-    const { error } = await supabase.from('jobs').update({ status: newStatus }).eq('id', job.id);
+    const { error } = await supabase
+      .from('jobs')
+      .update({ status: newStatus })
+      .eq('id', job.id);
+
     if (error) {
+      alert('Failed to save status');
+      console.error(error);
+      // rollback UI
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
@@ -294,6 +310,7 @@ export default function MaterialsPage() {
     await fetchAll();
   };
 
+  // inline: change technician
   const handleInlineTechChange = async (job, newTechId) => {
     const parsed =
       newTechId === '' || newTechId == null
@@ -307,21 +324,30 @@ export default function MaterialsPage() {
       prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: parsed } : j))
     );
 
-    const { error } = await supabase.from('jobs').update({ technician_id: parsed }).eq('id', job.id);
+    const { error } = await supabase
+      .from('jobs')
+      .update({ technician_id: parsed })
+      .eq('id', job.id);
+
     if (error) {
+      alert('Failed to save technician');
+      console.error(error);
+      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
+      return;
     }
   };
 
-  /* ---------- derived ---------- */
+  /* ---------- derived lists ---------- */
   const jobsMap = useMemo(() => {
     const map = new Map();
     jobs.forEach((j) => map.set(j.id, j));
     return map;
   }, [jobs]);
 
+  // фильтруем Materials-строки по быстрым фильтрам (как и было)
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -348,6 +374,7 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
+  // jobs without materials (в нужных статусах)
   const jobsWithoutMaterials = useMemo(() => {
     return jobs.filter(
       (j) =>
@@ -356,71 +383,40 @@ export default function MaterialsPage() {
     );
   }, [jobs, materials]);
 
-  const renderJobCell = (job) => {
-    const { name, phone, company } = getClientDisplay(job);
-    const system = getSystemLabel(job);
-    const problem = getProblemText(job);
+  /* ---------- helpers to render job title with client ---------- */
+  const jobClientText = (job) => {
+    const cl = clientsById.get(job.client_id);
+    const clientLabel = cl?.full_name || cl?.company || '—';
+    return clientLabel;
+  };
 
-    return (
-      <div>
-        <div>
-          <span style={linkNumStyle}>№{job.job_number || job.id}</span>
-          {name ? <span> — {name}</span> : null}
-          {company ? <span> ({company})</span> : null}
-          {phone ? <span> • {phone}</span> : null}
-        </div>
-        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-          {system ? <span><strong>System:</strong> {system}</span> : null}
-          {system && problem ? <span> • </span> : null}
-          {problem ? <span><strong>Problem:</strong> {problem}</span> : null}
-        </div>
+  const renderJobSentence = (job) => {
+    const num = job.job_number || job.id;
+    const clientLabel = jobClientText(job);
+    const sys = job.system_type || '—';
+    const problem = job.issue || job.problem || '—';
+    return `№${num} — Client: ${clientLabel} — System: ${sys} — Problem: ${problem}`;
+  };
+
+  const renderJobCell = (job) => (
+    <div>
+      <div style={{ fontWeight: 600 }}>
+        <span style={linkNumStyle}>№{job.job_number || job.id}</span>{' '}
+        — Client: {jobClientText(job)} — System: {job.system_type || '—'} — Problem: {job.issue || job.problem || '—'}
       </div>
-    );
-  };
-
-  const renderJobLineCompact = (job) => {
-    const { name, phone, company } = getClientDisplay(job);
-    const system = getSystemLabel(job);
-    const problem = getProblemText(job);
-
-    const pieces = [
-      `№${job.job_number || job.id}`,
-      [name, company].filter(Boolean).join(' / ') || '',
-      phone || '',
-      system ? `System: ${system}` : '',
-      problem ? `Problem: ${problem}` : '',
-    ].filter(Boolean);
-
-    return pieces.join(' — ');
-  };
-
-  /* ---------- modal sizing ---------- */
-  const mCOL = { NAME: 320, QTY: 110, PRICE: 130, SUP: 280, ACT: 80 };
-  const mth = (w, a = 'left') => ({
-    width: w,
-    border: '1px solid #ccc',
-    padding: '6px 8px',
-    background: '#f5f5f5',
-    fontWeight: 600,
-    textAlign: a,
-  });
-  const mtd = (w, a = 'left') => ({
-    width: w,
-    border: '1px solid #ccc',
-    padding: '6px 8px',
-    textAlign: a,
-    verticalAlign: 'top',
-  });
+    </div>
+  );
 
   return (
     <div style={{ padding: 16 }}>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Materials by Jobs</h2>
 
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-        💡 Tip: click <span style={{ color: '#2563eb', textDecoration: 'underline' }}>job number</span> or anywhere on a row to open the materials editor. You can change <strong>Status</strong> and <strong>Technician</strong> inline.
+        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the materials editor.
+        You can change <strong>Status</strong> and <strong>Technician</strong> inline.
       </div>
 
-      {/* Filters */}
+      {/* Quick filters */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
         <div>
           <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Status</label>
@@ -430,8 +426,10 @@ export default function MaterialsPage() {
             style={{ ...input, width: 260 }}
           >
             <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
-            {STATUS_FILTER_OPTIONS.map((s) => (
-              <option key={s} value={s}>{s}</option>
+            {STATUS_VALUES.map((s) => (
+              <option key={s} value={s}>
+                {STATUS_LABEL(s)}
+              </option>
             ))}
           </select>
         </div>
@@ -445,7 +443,9 @@ export default function MaterialsPage() {
           >
             <option value="all">All</option>
             {technicians.map((t) => (
-              <option key={t.id} value={String(t.id)}>{t.name}</option>
+              <option key={t.id} value={String(t.id)}>
+                {t.name}
+              </option>
             ))}
           </select>
         </div>
@@ -472,7 +472,7 @@ export default function MaterialsPage() {
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {jobsWithoutMaterials.map((j) => (
               <li key={j.id} style={{ marginBottom: 6 }}>
-                <span style={{ color: '#2563eb', textDecoration: 'underline' }}>{renderJobLineCompact(j)}</span>{' '}
+                <span style={linkNumStyle}>{renderJobSentence(j)}</span>{' '}
                 <button
                   onClick={() => openModal(j)}
                   style={{ ...btn, padding: '4px 8px', border: '1px solid #ddd', marginLeft: 6 }}
@@ -536,7 +536,9 @@ export default function MaterialsPage() {
                         <option value={jobTechVal}>{techName(job.technician_id) || `ID ${jobTechVal}`}</option>
                       )}
                       {technicians.map((t) => (
-                        <option key={t.id} value={String(t.id)}>{t.name}</option>
+                        <option key={t.id} value={String(t.id)}>
+                          {t.name}
+                        </option>
                       ))}
                     </select>
                   </td>
@@ -557,13 +559,10 @@ export default function MaterialsPage() {
                       onChange={(e) => handleInlineStatusChange(job, e.target.value)}
                       style={input}
                     >
-                      {!STATUS_VALUES.includes(normalizeStatusForDb(job.status) || '') && (
-                        <option value={normalizeStatusForDb(job.status) || ''}>
-                          {normalizeStatusForDb(job.status) || ''}
+                      {STATUS_VALUES.map((s) => (
+                        <option key={s} value={s}>
+                          {STATUS_LABEL(s)}
                         </option>
-                      )}
-                      {STATUS_FILTER_OPTIONS.map((s) => (
-                        <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
                   </td>
@@ -582,201 +581,183 @@ export default function MaterialsPage() {
         </table>
       </div>
 
-      {/* Modal */}
-      {modalJob && (() => {
-        const lc = getLatestComment(modalJob.id);
-        const mCOLW = mCOL.NAME + mCOL.QTY + mCOL.PRICE + mCOL.SUP + mCOL.ACT;
-        return (
-          <div
-            style={{
-              border: '1px solid #ccc',
-              padding: 16,
-              borderRadius: 8,
-              maxWidth: mCOLW,
-              background: '#fff',
-            }}
-          >
-            <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-              Job №{modalJob.job_number || modalJob.id}
-            </h3>
+      {/* Modal: edit materials */}
+      {modalJob && (
+        <div
+          style={{
+            border: '1px solid #ccc',
+            padding: 16,
+            borderRadius: 8,
+            maxWidth: MTABLE_WIDTH,
+            background: '#fff',
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>
+            Job №{modalJob.job_number || modalJob.id}
+          </h3>
+          <div style={{ marginBottom: 6, color: '#374151' }}>
+            <strong>Client:</strong> {jobClientText(modalJob)}
+          </div>
+          <div style={{ marginBottom: 6, color: '#6b7280' }}>
+            <strong>System:</strong> {modalJob.system_type || '—'}{' '}
+            <strong style={{ marginLeft: 8 }}>Problem:</strong> {modalJob.issue || modalJob.problem || '—'}
+          </div>
 
-            <div style={{ marginBottom: 8, fontSize: 14 }}>
-              <strong>Comment:</strong> {lc?.text?.trim() ? lc.text : '—'}
-            </div>
+          {(() => {
+            const lc = getLatestComment(modalJob.id);
+            return (
+              <>
+                <div style={{ marginBottom: 8, fontSize: 14 }}>
+                  <strong>Comment:</strong> {lc?.text?.trim() ? lc.text : '—'}
+                </div>
 
-            <div style={{ marginBottom: 10, fontSize: 14 }}>
-              <strong>Photo:</strong>{' '}
-              {lc?.image_url ? (
-                <img
-                  src={lc.image_url}
-                  width="150"
-                  alt="technician photo"
-                  style={{ borderRadius: 4, border: '1px solid #ddd' }}
-                />
-              ) : '—'}
-            </div>
-
-            <div style={{ marginBottom: 10, display: 'flex', gap: 16 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Technician</label>
-                <select
-                  value={modalTechnician ?? ''}
-                  onChange={(e) => setModalTechnician(e.target.value)}
-                  style={input}
-                >
-                  <option value="">—</option>
-                  {technicians.map((t) => (
-                    <option key={t.id} value={String(t.id)}>{t.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Status</label>
-                <select
-                  value={normalizeStatusForDb(modalStatus) || ''}
-                  onChange={(e) => setModalStatus(e.target.value)}
-                  style={input}
-                >
-                  {!STATUS_VALUES.includes(normalizeStatusForDb(modalStatus) || '') && (
-                    <option value={normalizeStatusForDb(modalStatus) || ''}>
-                      {normalizeStatusForDb(modalStatus) || ''}
-                    </option>
+                <div style={{ marginBottom: 10, fontSize: 14 }}>
+                  <strong>Photo:</strong>{' '}
+                  {lc?.image_url ? (
+                    <img
+                      src={lc.image_url}
+                      width="150"
+                      alt="technician"
+                      style={{ borderRadius: 4, border: '1px solid #ddd' }}
+                    />
+                  ) : (
+                    '—'
                   )}
-                  {STATUS_FILTER_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+                </div>
+              </>
+            );
+          })()}
 
-            <div style={{ overflowX: 'auto', marginTop: 10 }}>
-              <table style={{ tableLayout: 'fixed', borderCollapse: 'collapse', width: `${mCOLW}px` }}>
-                <colgroup>
-                  <col style={{ width: mCOL.NAME }} />
-                  <col style={{ width: mCOL.QTY }} />
-                  <col style={{ width: mCOL.PRICE }} />
-                  <col style={{ width: mCOL.SUP }} />
-                  <col style={{ width: mCOL.ACT }} />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th style={mth(mCOL.NAME)}>Material</th>
-                    <th style={mth(mCOL.QTY, 'right')}>Qty</th>
-                    <th style={mth(mCOL.PRICE, 'right')}>Price</th>
-                    <th style={mth(mCOL.SUP)}>Supplier</th>
-                    <th style={mth(mCOL.ACT, 'center')}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {modalRows.map((r, i) => (
-                    <tr key={`${r.id || 'new'}_${i}`}>
-                      <td style={mtd(mCOL.NAME)}>
-                        <input
-                          value={r.name}
-                          onChange={(e) => handleModalChange(i, 'name', e.target.value)}
-                          style={input}
-                          placeholder="Name"
-                        />
-                      </td>
-                      <td style={mtd(mCOL.QTY, 'right')}>
-                        <input
-                          type="number"
-                          value={r.quantity}
-                          onChange={(e) => handleModalChange(i, 'quantity', e.target.value)}
-                          style={{ ...input, textAlign: 'right' }}
-                          placeholder="1"
-                        />
-                      </td>
-                      <td style={mtd(mCOL.PRICE, 'right')}>
-                        <input
-                          type="number"
-                          value={r.price}
-                          onChange={(e) => handleModalChange(i, 'price', e.target.value)}
-                          style={{ ...input, textAlign: 'right' }}
-                          placeholder="$"
-                        />
-                      </td>
-                      <td style={mtd(mCOL.SUP)}>
-                        <input
-                          value={r.supplier}
-                          onChange={(e) => handleModalChange(i, 'supplier', e.target.value)}
-                          style={input}
-                          placeholder="Supplier"
-                        />
-                      </td>
-                      <td style={mtd(mCOL.ACT, 'center')}>
-                        <button onClick={() => removeModalRow(i)} title="Remove row" style={btn}>×</button>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {modalRows.length === 0 && (
-                    <tr>
-                      <td colSpan={5} style={{ padding: 8, border: '1px solid #ccc' }}>No rows</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button onClick={addModalRow} style={{ ...btn, border: '1px solid #ddd' }}>+ Add another</button>
-              <div style={{ flex: 1 }} />
-              <button
-                onClick={async () => {
-                  if (!modalJob) return;
-
-                  // удаляем помеченные строки
-                  if (modalDeletedIds.length) {
-                    await supabase.from('materials').delete().in('id', modalDeletedIds);
-                  }
-
-                  // обновляем job
-                  await supabase.from('jobs').update({
-                    technician_id:
-                      modalTechnician === '' || modalTechnician == null
-                        ? null
-                        : Number.isNaN(Number(modalTechnician))
-                        ? modalTechnician
-                        : parseInt(modalTechnician, 10),
-                    status: normalizeStatusForDb(modalStatus) || null,
-                  }).eq('id', modalJob.id);
-
-                  // апдейты / инсёрты
-                  const inserts = modalRows
-                    .filter((r) => !r.id)
-                    .map((r) => ({
-                      job_id: modalJob.id,
-                      name: r.name,
-                      price: r.price === '' || r.price == null ? null : parseFloat(r.price),
-                      quantity: r.quantity === '' || r.quantity == null ? null : parseInt(r.quantity, 10),
-                      supplier: r.supplier || null,
-                    }));
-                  const updates = modalRows.filter((r) => r.id);
-
-                  for (const u of updates) {
-                    await supabase.from('materials').update({
-                      name: u.name,
-                      price: u.price === '' || u.price == null ? null : parseFloat(u.price),
-                      quantity: u.quantity === '' || u.quantity == null ? null : parseInt(u.quantity, 10),
-                      supplier: u.supplier || null,
-                    }).eq('id', u.id);
-                  }
-                  if (inserts.length) await supabase.from('materials').insert(inserts);
-
-                  setModalJob(null);
-                  await fetchAll();
-                }}
-                style={{ ...btn, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6 }}
+          <div style={{ marginBottom: 10, display: 'flex', gap: 16 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Technician</label>
+              <select
+                value={modalTechnician ?? ''}
+                onChange={(e) => setModalTechnician(e.target.value)}
+                style={input}
               >
-                Save
-              </button>
-              <button onClick={() => setModalJob(null)} style={{ ...btn, border: '1px solid #ddd' }}>Close</button>
+                <option value="">—</option>
+                {technicians.map((t) => (
+                  <option key={t.id} value={String(t.id)}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Status</label>
+              <select
+                value={normalizeStatusForDb(modalStatus) || ''}
+                onChange={(e) => setModalStatus(e.target.value)}
+                style={input}
+              >
+                {STATUS_VALUES.map((s) => (
+                  <option key={s} value={s}>
+                    {STATUS_LABEL(s)}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
-        );
-      })()}
+
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table
+              style={{
+                tableLayout: 'fixed',
+                borderCollapse: 'collapse',
+                width: `${MTABLE_WIDTH}px`,
+              }}
+            >
+              <colgroup>
+                <col style={{ width: MCOL.NAME }} />
+                <col style={{ width: MCOL.QTY }} />
+                <col style={{ width: MCOL.PRICE }} />
+                <col style={{ width: MCOL.SUP }} />
+                <col style={{ width: MCOL.ACT }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={mth(MCOL.NAME)}>Material</th>
+                  <th style={mth(MCOL.QTY, 'right')}>Qty</th>
+                  <th style={mth(MCOL.PRICE, 'right')}>Price</th>
+                  <th style={mth(MCOL.SUP)}>Supplier</th>
+                  <th style={mth(MCOL.ACT, 'center')}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {modalRows.map((r, i) => (
+                  <tr key={`${r.id || 'new'}_${i}`}>
+                    <td style={mtd(MCOL.NAME)}>
+                      <input
+                        value={r.name}
+                        onChange={(e) => handleModalChange(i, 'name', e.target.value)}
+                        style={input}
+                        placeholder="Name"
+                      />
+                    </td>
+                    <td style={mtd(MCOL.QTY, 'right')}>
+                      <input
+                        type="number"
+                        value={r.quantity}
+                        onChange={(e) => handleModalChange(i, 'quantity', e.target.value)}
+                        style={{ ...input, textAlign: 'right' }}
+                        placeholder="1"
+                      />
+                    </td>
+                    <td style={mtd(MCOL.PRICE, 'right')}>
+                      <input
+                        type="number"
+                        value={r.price}
+                        onChange={(e) => handleModalChange(i, 'price', e.target.value)}
+                        style={{ ...input, textAlign: 'right' }}
+                        placeholder="$"
+                      />
+                    </td>
+                    <td style={mtd(MCOL.SUP)}>
+                      <input
+                        value={r.supplier}
+                        onChange={(e) => handleModalChange(i, 'supplier', e.target.value)}
+                        style={input}
+                        placeholder="Supplier"
+                      />
+                    </td>
+                    <td style={mtd(MCOL.ACT, 'center')}>
+                      <button onClick={() => removeModalRow(i)} title="Remove row" style={btn}>
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+
+                {modalRows.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 8, border: '1px solid #ccc' }}>
+                      No rows
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button onClick={addModalRow} style={{ ...btn, border: '1px solid #ddd' }}>
+              + Add another
+            </button>
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={handleModalSave}
+              style={{ ...btn, background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6 }}
+            >
+              Save
+            </button>
+            <button onClick={() => setModalJob(null)} style={{ ...btn, border: '1px solid #ddd' }}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
