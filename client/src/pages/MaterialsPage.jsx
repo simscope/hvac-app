@@ -1,5 +1,5 @@
 // client/src/pages/MaterialsPage.jsx
-// Materials table + inline status/technician editing, modal to add/edit materials
+// Materials table + inline status/technician editing, modal to add/edit/delete materials
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
@@ -17,8 +17,7 @@ const CANON = {
 /* Показываем в UI только эти три */
 const SHOW_STATUSES = new Set([CANON.RECALL, CANON.PARTS_ORDERED, CANON.WAITING]);
 
-/* Нормализация статусов к канонической форме.
-   Ловим разные написания: "Part(s) ordered", "Parts Ordered", "Waiting for Parts", и т.п. */
+/* Нормализация статусов к канонической форме. */
 function normalizeStatusForDb(s) {
   if (!s) return null;
   const raw = String(s).trim();
@@ -26,10 +25,10 @@ function normalizeStatusForDb(s) {
 
   if (low === 'recall' || raw === 'ReCall') return CANON.RECALL;
 
-  // любые варианты "parts ordered" / "part(s) ordered" / "parts ord"
+  // любые варианты "parts ordered" / "part(s) ordered"
   if (/^part/i.test(low) && /order/i.test(low)) return CANON.PARTS_ORDERED;
 
-  // любые варианты "waiting for parts" / "wait parts" / "waiting parts"
+  // любые варианты "waiting for parts"
   if (/wait/i.test(low) && /part/i.test(low)) return CANON.WAITING;
 
   if (low === 'in progress') return CANON.IN_PROGRESS;
@@ -38,7 +37,7 @@ function normalizeStatusForDb(s) {
   if (low === 'completed' || low === 'done' || raw === 'выполнено') return CANON.COMPLETED;
   if (low === 'diagnosis' || low === 'diag') return CANON.DIAGNOSIS;
 
-  return raw; // неизвестное — оставляем как есть
+  return raw;
 }
 
 const STATUS_FILTER_OPTIONS = [CANON.RECALL, CANON.PARTS_ORDERED, CANON.WAITING];
@@ -57,7 +56,7 @@ const btn = { padding: '8px 12px', cursor: 'pointer' };
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
-  const [clients, setClients] = useState([]); // может быть пустым из-за RLS — это нормально
+  const [clients, setClients] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [comments, setComments] = useState([]);
@@ -70,6 +69,7 @@ export default function MaterialsPage() {
   const [modalRows, setModalRows] = useState([]);
   const [modalTechnician, setModalTechnician] = useState('');
   const [modalStatus, setModalStatus] = useState('');
+  const [modalDeletedIds, setModalDeletedIds] = useState([]); // <-- NEW: копим удалённые id
 
   const [hoveredJobId, setHoveredJobId] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -114,7 +114,7 @@ export default function MaterialsPage() {
   }, []);
 
   async function fetchJobsSafe() {
-    // 1) пробуем nested select по FK client_id; тянем и uuid, и id
+    // 1) nested select по FK client_id; тянем и uuid, и id
     const try1 = await supabase
       .from('jobs')
       .select(`
@@ -141,7 +141,7 @@ export default function MaterialsPage() {
 
     if (!try1.error && Array.isArray(try1.data)) return try1.data;
 
-    // 2) если не получилось (неверный путь/ошибка) — откатываемся к простому select
+    // 2) fallback
     const try2 = await supabase.from('jobs').select('*');
     return try2.data || [];
   }
@@ -164,7 +164,6 @@ export default function MaterialsPage() {
           .order('created_at', { ascending: false }),
       ]);
 
-      // клиентов пробуем грузить «best effort» — если RLS не даст, просто будет []
       const clRes = await supabase
         .from('clients')
         .select('id, uuid, full_name, name, first_name, last_name, company, phone, mobile, phone_number');
@@ -173,7 +172,7 @@ export default function MaterialsPage() {
       setMaterials(mRes.data || []);
       setTechnicians(tRes.data || []);
       setComments(cRes.data || []);
-      setClients(clRes.data || []); // может быть []
+      setClients(clRes.data || []);
     } finally {
       setLoading(false);
     }
@@ -226,11 +225,9 @@ export default function MaterialsPage() {
   }
 
   function pickClientFromJob(job) {
-    // 1) если nested-join вернул клиента — используем его
-    if (job?.client) return job.client;
-    // 2) иначе ищем по client_id и в id, и в uuid
+    if (job?.client) return job.client;             // nested-join сработал
     if (job?.client_id) {
-      const hit = clientsIndex.get(String(job.client_id));
+      const hit = clientsIndex.get(String(job.client_id)); // поиск по id/uuid
       if (hit) return hit;
     }
     return null;
@@ -252,7 +249,6 @@ export default function MaterialsPage() {
         phone: String(phone).trim(),
       };
     }
-    // жёсткий фолбэк — короткий client_id
     if (job?.client_id) return { name: `Client ${String(job.client_id).slice(0, 8)}…`, company: '', phone: '' };
     return { name: '', company: '', phone: '' };
   }
@@ -268,19 +264,34 @@ export default function MaterialsPage() {
         ? existingRows
         : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
     );
+    setModalDeletedIds([]); // сбрасываем список удалений при открытии
     setModalJob(job);
   };
 
   const handleModalChange = (index, field, value) => {
     setModalRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
   };
+
+  // Удаление строки в модалке:
+  //  - если у строки есть id → кладём его в modalDeletedIds (удалим в БД при Save)
+  //  - всегда убираем строку из UI
+  const removeModalRow = (index) => {
+    setModalRows((prev) => {
+      const row = prev[index];
+      if (row?.id) {
+        setModalDeletedIds((ids) =>
+          ids.includes(row.id) ? ids : ids.concat(row.id)
+        );
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
   const addModalRow = () =>
     setModalRows((prev) => [
       ...prev,
       { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
     ]);
-  const removeModalRow = (index) =>
-    setModalRows((prev) => prev.filter((_, i) => i !== index));
 
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
@@ -310,7 +321,6 @@ export default function MaterialsPage() {
 
     const { error } = await supabase.from('jobs').update({ status: newStatus }).eq('id', job.id);
     if (error) {
-      // rollback
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
@@ -333,7 +343,6 @@ export default function MaterialsPage() {
 
     const { error } = await supabase.from('jobs').update({ technician_id: parsed }).eq('id', job.id);
     if (error) {
-      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
@@ -752,7 +761,13 @@ export default function MaterialsPage() {
               <button
                 onClick={async () => {
                   if (!modalJob) return;
-                  // save job fields
+
+                  // 1) DELETE существующих материалов, отмеченных крестиком
+                  if (modalDeletedIds.length) {
+                    await supabase.from('materials').delete().in('id', modalDeletedIds);
+                  }
+
+                  // 2) Save technician & status
                   await supabase.from('jobs').update({
                     technician_id:
                       modalTechnician === '' || modalTechnician == null
@@ -763,15 +778,18 @@ export default function MaterialsPage() {
                     status: normalizeStatusForDb(modalStatus) || null,
                   }).eq('id', modalJob.id);
 
-                  // split
-                  const inserts = modalRows.filter(r => !r.id).map(r => ({
-                    job_id: modalJob.id,
-                    name: r.name,
-                    price: r.price === '' || r.price == null ? null : parseFloat(r.price),
-                    quantity: r.quantity === '' || r.quantity == null ? null : parseInt(r.quantity, 10),
-                    supplier: r.supplier || null,
-                  }));
-                  const updates = modalRows.filter(r => r.id);
+                  // 3) Split rows на inserts / updates (после удаления)
+                  const inserts = modalRows
+                    .filter((r) => !r.id) // новые
+                    .map((r) => ({
+                      job_id: modalJob.id,
+                      name: r.name,
+                      price: r.price === '' || r.price == null ? null : parseFloat(r.price),
+                      quantity: r.quantity === '' || r.quantity == null ? null : parseInt(r.quantity, 10),
+                      supplier: r.supplier || null,
+                    }));
+
+                  const updates = modalRows.filter((r) => r.id); // существующие, не удалённые
 
                   for (const u of updates) {
                     await supabase.from('materials').update({
@@ -781,7 +799,10 @@ export default function MaterialsPage() {
                       supplier: u.supplier || null,
                     }).eq('id', u.id);
                   }
-                  if (inserts.length) await supabase.from('materials').insert(inserts);
+
+                  if (inserts.length) {
+                    await supabase.from('materials').insert(inserts);
+                  }
 
                   setModalJob(null);
                   await fetchAll();
