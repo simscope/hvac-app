@@ -60,10 +60,11 @@ export default function MaterialsPage() {
   // modal state
   const [modalJob, setModalJob] = useState(null);
   const [modalRows, setModalRows] = useState([]);
+  const [deletedRowIds, setDeletedRowIds] = useState([]);     // <-- NEW: track deletions
   const [modalTechnician, setModalTechnician] = useState('');
   const [modalStatus, setModalStatus] = useState('');
 
-  // latest comment/photo for the opened job
+  // latest comment/photo for the opened job (last only)
   const [modalCommentText, setModalCommentText] = useState('');
   const [modalPhotoUrl, setModalPhotoUrl] = useState('');
 
@@ -254,6 +255,7 @@ export default function MaterialsPage() {
         ? existingRows
         : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
     );
+    setDeletedRowIds([]); // <-- reset deletions when opening modal
     setModalJob(job);
     setModalCommentText('');
     setModalPhotoUrl('');
@@ -286,8 +288,16 @@ export default function MaterialsPage() {
       { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
     ]);
 
-  const removeModalRow = (index) =>
-    setModalRows((prev) => prev.filter((_, i) => i !== index));
+  // remove in UI + remember ids to delete from DB
+  const removeModalRow = (index) => {
+    setModalRows((prev) => {
+      const row = prev[index];
+      if (row?.id) {
+        setDeletedRowIds((ids) => (ids.includes(row.id) ? ids : [...ids, row.id]));
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
 
   const handleModalSave = async () => {
     if (!modalJob) return;
@@ -306,19 +316,13 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
-    // Split to inserts / updates
-    const inserts = modalRows
-      .filter((r) => !r.id && (r.name || r.price || r.quantity || r.supplier))
-      .map((r) => ({
-        job_id: modalJob.id,
-        name: r.name,
-        price: toFloatOrNull(r.price),
-        quantity: toIntOrNull(r.quantity),
-        supplier: r.supplier || null,
-      }));
+    // 1) Deletes
+    if (deletedRowIds.length) {
+      await supabase.from('materials').delete().in('id', deletedRowIds);
+    }
 
+    // 2) Updates
     const updates = modalRows.filter((r) => r.id);
-
     for (const u of updates) {
       await supabase
         .from('materials')
@@ -331,7 +335,17 @@ export default function MaterialsPage() {
         .eq('id', u.id);
     }
 
-    if (inserts.length > 0) {
+    // 3) Inserts (only non-empty)
+    const inserts = modalRows
+      .filter((r) => !r.id && (r.name || r.price || r.quantity || r.supplier))
+      .map((r) => ({
+        job_id: modalJob.id,
+        name: r.name,
+        price: toFloatOrNull(r.price),
+        quantity: toIntOrNull(r.quantity),
+        supplier: r.supplier || null,
+      }));
+    if (inserts.length) {
       await supabase.from('materials').insert(inserts);
     }
 
@@ -486,7 +500,7 @@ export default function MaterialsPage() {
             <col style={{ width: COL.SUPPLIER }} />
             <col style={{ width: COL.STATUS }} />
           </colgroup>
-        <thead>
+          <thead>
             <tr>
               <th style={th(COL.JOB)}>Job / Client / System / Problem</th>
               <th style={th(COL.TECH)}>Technician</th>
