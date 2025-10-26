@@ -186,7 +186,7 @@ export default function MaterialsPage() {
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
-  const clientsById = useMemo(() => {
+  const clientsIndex = useMemo(() => {
     const m = new Map();
     (clients || []).forEach((c) => m.set(String(c.id), c));
     return m;
@@ -751,4 +751,5 @@ export default function MaterialsPage() {
     </div>
   );
 }
+
 
