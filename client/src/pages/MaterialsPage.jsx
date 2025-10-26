@@ -13,6 +13,7 @@ const STATUS_VALUES = [
   'Completed',
 ];
 
+// Human-readable labels
 const STATUS_LABEL = (v) => v;
 
 /* Normalize any incoming value → DB format with Capitalized form */
@@ -30,7 +31,7 @@ const normalizeStatusForDb = (s) => {
   return raw;
 };
 
-/* ---------- Show only these in the table ---------- */
+/* ---------- Rows are shown only for these statuses ---------- */
 const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 /* ---------- Small helpers ---------- */
@@ -47,15 +48,14 @@ const toFloatOrNull = (v) => {
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
+  const [clients, setClients] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
-  const [comments, setComments] = useState([]);
-  const [clients, setClients] = useState([]);
 
   // quick filters
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterTech, setFilterTech] = useState('all');
-  const [searchJob, setSearchJob] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
+  const [filterTech, setFilterTech] = useState('all');     // 'all' | techId(string)
+  const [searchJob, setSearchJob] = useState('');          // job number/id search
 
   // modal state
   const [modalJob, setModalJob] = useState(null);
@@ -63,12 +63,16 @@ export default function MaterialsPage() {
   const [modalTechnician, setModalTechnician] = useState('');
   const [modalStatus, setModalStatus] = useState('');
 
+  // latest comment/photo for the opened job
+  const [modalCommentText, setModalCommentText] = useState('');
+  const [modalPhotoUrl, setModalPhotoUrl] = useState('');
+
   const [hoveredJobId, setHoveredJobId] = useState(null);
   const [loading, setLoading] = useState(false);
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 560, // шире, т.к. выводим больше текста
+    JOB: 420,
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -131,7 +135,7 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: j }, { data: m }, { data: t }, { data: c }, { data: cmts }] = await Promise.all([
+      const [{ data: j }, { data: m }, { data: t }, { data: cl }] = await Promise.all([
         supabase.from('jobs').select('*'),
         supabase.from('materials').select('*'),
         supabase
@@ -141,25 +145,108 @@ export default function MaterialsPage() {
           .eq('is_active', true)
           .order('name', { ascending: true }),
         supabase.from('clients').select('id, full_name, company'),
-        supabase
-          .from('comments')
-          .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
-          .order('created_at', { ascending: false }),
       ]);
 
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
-      setClients(c || []);
-      setComments(cmts || []);
+      setClients(cl || []);
     } finally {
       setLoading(false);
     }
   };
 
-  const openModal = (job) => {
+  const clientsById = useMemo(() => {
+    const map = new Map();
+    (clients || []).forEach((c) => map.set(c.id, c));
+    return map;
+  }, [clients]);
+
+  const techById = useMemo(() => {
+    const m = new Map();
+    (technicians || []).forEach((t) => m.set(String(t.id), t));
+    return m;
+  }, [technicians]);
+
+  const techName = (id) => techById.get(String(id))?.name || '';
+
+  const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
+  const rowClickableProps = (job) => ({
+    role: 'button',
+    tabIndex: 0,
+    onClick: () => openModal(job),
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openModal(job);
+      }
+    },
+    onMouseEnter: () => setHoveredJobId(job.id),
+    onMouseLeave: () => setHoveredJobId(null),
+    style: {
+      cursor: 'pointer',
+      background: hoveredJobId === job.id ? '#f9fafb' : 'transparent',
+    },
+  });
+
+  // inline: change status (→ Title Case)
+  const handleInlineStatusChange = async (job, newVal) => {
+    const newStatus = normalizeStatusForDb(newVal);
+    const prevStatus = normalizeStatusForDb(job.status);
+
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: newStatus } : j)));
+
+    const { error } = await supabase
+      .from('jobs')
+      .update({ status: newStatus })
+      .eq('id', job.id);
+
+    if (error) {
+      alert('Failed to save status');
+      console.error(error);
+      // rollback UI
+      setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
+      return;
+    }
+
+    await fetchAll();
+  };
+
+  // inline: change technician
+  const handleInlineTechChange = async (job, newTechId) => {
+    const parsed =
+      newTechId === '' || newTechId == null
+        ? null
+        : Number.isNaN(Number(newTechId))
+        ? newTechId
+        : parseInt(newTechId, 10);
+
+    const prev = job.technician_id ?? null;
+    setJobs((prevJobs) =>
+      prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: parsed } : j))
+    );
+
+    const { error } = await supabase
+      .from('jobs')
+      .update({ technician_id: parsed })
+      .eq('id', job.id);
+
+    if (error) {
+      alert('Failed to save technician');
+      console.error(error);
+      // rollback
+      setJobs((prevJobs) =>
+        prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
+      );
+      return;
+    }
+  };
+
+  // open modal: fetch latest comment & photo for this job
+  const openModal = async (job) => {
     const existingRows = materials.filter((m) => m.job_id === job.id);
     const st = normalizeStatusForDb(job.status) || '';
+
     setModalTechnician(job.technician_id ?? '');
     setModalStatus(st);
     setModalRows(
@@ -168,6 +255,25 @@ export default function MaterialsPage() {
         : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
     );
     setModalJob(job);
+    setModalCommentText('');
+    setModalPhotoUrl('');
+
+    try {
+      const { data: cmt } = await supabase
+        .from('comments')
+        .select('text,image_url,created_at')
+        .eq('job_id', job.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (cmt) {
+        setModalCommentText(cmt.text || '');
+        if (cmt.image_url) setModalPhotoUrl(cmt.image_url);
+      }
+    } catch (e) {
+      console.warn('Failed to load latest comment/photo:', e?.message || e);
+    }
   };
 
   const handleModalChange = (index, field, value) => {
@@ -183,28 +289,10 @@ export default function MaterialsPage() {
   const removeModalRow = (index) =>
     setModalRows((prev) => prev.filter((_, i) => i !== index));
 
-  /* ---------- комментарии по job (быстрый доступ) ---------- */
-  const commentsByJob = useMemo(() => {
-    const map = new Map();
-    (comments || []).forEach((c) => {
-      const key = c.job_id;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(c);
-    });
-    return map;
-  }, [comments]);
-
-  const getLatestComment = (jobId) => {
-    const arr = commentsByJob.get(jobId) || [];
-    if (!arr.length) return null;
-    const c = arr[0];
-    const imgUrl = c.image_url || c.technician_photos || null;
-    return { text: c.text ?? '', image_url: imgUrl };
-  };
-
   const handleModalSave = async () => {
     if (!modalJob) return;
 
+    // Save technician & job status (status → Title Case)
     await supabase
       .from('jobs')
       .update({
@@ -218,8 +306,9 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
+    // Split to inserts / updates
     const inserts = modalRows
-      .filter((r) => !r.id)
+      .filter((r) => !r.id && (r.name || r.price || r.quantity || r.supplier))
       .map((r) => ({
         job_id: modalJob.id,
         name: r.name,
@@ -250,97 +339,14 @@ export default function MaterialsPage() {
     await fetchAll();
   };
 
-  /* ---------- memo maps ---------- */
-  const techById = useMemo(() => {
-    const m = new Map();
-    (technicians || []).forEach((t) => m.set(String(t.id), t));
-    return m;
-  }, [technicians]);
-
-  const clientsById = useMemo(() => {
-    const m = new Map();
-    (clients || []).forEach((cl) => m.set(cl.id, cl));
-    return m;
-  }, [clients]);
-
-  const techName = (id) => techById.get(String(id))?.name || '';
-
-  const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
-  const rowClickableProps = (job) => ({
-    role: 'button',
-    tabIndex: 0,
-    onClick: () => openModal(job),
-    onKeyDown: (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openModal(job);
-      }
-    },
-    onMouseEnter: () => setHoveredJobId(job.id),
-    onMouseLeave: () => setHoveredJobId(null),
-    style: {
-      cursor: 'pointer',
-      background: hoveredJobId === job.id ? '#f9fafb' : 'transparent',
-    },
-  });
-
-  // inline: change status/technician
-  const handleInlineStatusChange = async (job, newVal) => {
-    const newStatus = normalizeStatusForDb(newVal);
-    const prevStatus = normalizeStatusForDb(job.status);
-
-    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: newStatus } : j)));
-
-    const { error } = await supabase
-      .from('jobs')
-      .update({ status: newStatus })
-      .eq('id', job.id);
-
-    if (error) {
-      alert('Failed to save status');
-      console.error(error);
-      setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
-      return;
-    }
-
-    await fetchAll();
-  };
-
-  const handleInlineTechChange = async (job, newTechId) => {
-    const parsed =
-      newTechId === '' || newTechId == null
-        ? null
-        : Number.isNaN(Number(newTechId))
-        ? newTechId
-        : parseInt(newTechId, 10);
-
-    const prev = job.technician_id ?? null;
-    setJobs((prevJobs) =>
-      prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: parsed } : j))
-    );
-
-    const { error } = await supabase
-      .from('jobs')
-      .update({ technician_id: parsed })
-      .eq('id', job.id);
-
-    if (error) {
-      alert('Failed to save technician');
-      console.error(error);
-      setJobs((prevJobs) =>
-        prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
-      );
-      return;
-    }
-  };
-
-  /* ---------- derived ---------- */
+  /* ---------- derived lists ---------- */
   const jobsMap = useMemo(() => {
     const map = new Map();
     jobs.forEach((j) => map.set(j.id, j));
     return map;
   }, [jobs]);
 
+  // filter Materials rows by quick filters (status/tech/search)
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -367,6 +373,7 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
+  // jobs without materials (in SHOW_STATUSES)
   const jobsWithoutMaterials = useMemo(() => {
     return jobs.filter(
       (j) =>
@@ -375,35 +382,27 @@ export default function MaterialsPage() {
     );
   }, [jobs, materials]);
 
-  /* ---------- форматирование без слов: № — Company — Full Name — System — Problem ---------- */
-  const clientPlain = (job) => {
-    const cl = clientsById.get(job.client_id);
-    const hasCompany = !!(cl && cl.company && cl.company.trim());
-    const hasName = !!(cl && cl.full_name && cl.full_name.trim());
-    if (hasCompany && hasName) return `${cl.company} — ${cl.full_name}`;
-    if (hasCompany) return cl.company;
-    if (hasName) return cl.full_name;
-    return '—';
+  // helpers for client/company display
+  const clientDisplay = (job) => {
+    const c = clientsById.get(job.client_id);
+    if (!c) return '—';
+    return c.company ? c.company : (c.full_name || '—');
   };
 
-  const sentenceForJob = (job) => {
+  const jobHeaderLine = (job) => {
     const num = job.job_number || job.id;
-    const client = clientPlain(job);
+    const companyOrClient = clientDisplay(job);
     const sys = job.system_type || '—';
-    const problem = job.issue || job.problem || '—';
-    return `№${num} — ${client} — ${sys} — ${problem}`;
+    const issue = job.issue || '—';
+    return `№${num} — ${companyOrClient} — ${sys} — ${issue}`;
   };
-
-  const renderJobCell = (job) => (
-    <div style={{ fontWeight: 600 }}>{sentenceForJob(job)}</div>
-  );
 
   return (
     <div style={{ padding: 16 }}>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Materials by Jobs</h2>
 
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-        💡 Tip: click job row to open the materials editor. You can change Status and Technician inline.
+        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the materials editor. You can change <strong>Status</strong> and <strong>Technician</strong> inline.
       </div>
 
       {/* Quick filters */}
@@ -413,7 +412,7 @@ export default function MaterialsPage() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ ...input, width: 320 }}
+            style={{ ...input, width: 280 }}
           >
             <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
             {STATUS_VALUES.map((s) => (
@@ -462,7 +461,7 @@ export default function MaterialsPage() {
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {jobsWithoutMaterials.map((j) => (
               <li key={j.id} style={{ marginBottom: 6 }}>
-                <span>{sentenceForJob(j)}</span>{' '}
+                <span style={linkNumStyle}>{jobHeaderLine(j)}</span>{' '}
                 <button
                   onClick={() => openModal(j)}
                   style={{ ...btn, padding: '4px 8px', border: '1px solid #ddd', marginLeft: 6 }}
@@ -487,7 +486,7 @@ export default function MaterialsPage() {
             <col style={{ width: COL.SUPPLIER }} />
             <col style={{ width: COL.STATUS }} />
           </colgroup>
-          <thead>
+        <thead>
             <tr>
               <th style={th(COL.JOB)}>Job / Client / System / Problem</th>
               <th style={th(COL.TECH)}>Technician</th>
@@ -508,7 +507,9 @@ export default function MaterialsPage() {
 
               return (
                 <tr key={row.id} {...rowClickableProps(job)}>
-                  <td style={td(COL.JOB)}>{renderJobCell(job)}</td>
+                  <td style={td(COL.JOB)}>
+                    <span style={linkNumStyle}>{jobHeaderLine(job)}</span>
+                  </td>
 
                   {/* Technician: INLINE SELECT */}
                   <td
@@ -549,6 +550,11 @@ export default function MaterialsPage() {
                       onChange={(e) => handleInlineStatusChange(job, e.target.value)}
                       style={input}
                     >
+                      {!STATUS_VALUES.includes(normalizeStatusForDb(job.status) || '') && (
+                        <option value={normalizeStatusForDb(job.status) || ''}>
+                          {STATUS_LABEL(normalizeStatusForDb(job.status) || '')}
+                        </option>
+                      )}
                       {STATUS_VALUES.map((s) => (
                         <option key={s} value={s}>
                           {STATUS_LABEL(s)}
@@ -583,33 +589,28 @@ export default function MaterialsPage() {
           }}
         >
           <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-            {sentenceForJob(modalJob)}
+            {jobHeaderLine(modalJob)}
           </h3>
 
-          {(() => {
-            const lc = getLatestComment(modalJob.id);
-            return (
-              <>
-                <div style={{ marginBottom: 8, fontSize: 14 }}>
-                  <strong>Comment:</strong> {lc?.text?.trim() ? lc.text : '—'}
-                </div>
-
-                <div style={{ marginBottom: 10, fontSize: 14 }}>
-                  <strong>Photo:</strong>{' '}
-                  {lc?.image_url ? (
-                    <img
-                      src={lc.image_url}
-                      width="150"
-                      alt="technician"
-                      style={{ borderRadius: 4, border: '1px solid #ddd' }}
-                    />
-                  ) : (
-                    '—'
-                  )}
-                </div>
-              </>
-            );
-          })()}
+          {/* Latest comment & photo for the job */}
+          <div style={{ marginBottom: 10, fontSize: 14, display: 'grid', gap: 6 }}>
+            <div>
+              <strong>Comment:</strong> {modalCommentText?.trim() ? modalCommentText : '—'}
+            </div>
+            <div>
+              <strong>Photo:</strong>{' '}
+              {modalPhotoUrl ? (
+                <img
+                  src={modalPhotoUrl}
+                  width="160"
+                  alt="job photo"
+                  style={{ borderRadius: 4, border: '1px solid #ddd' }}
+                />
+              ) : (
+                '—'
+              )}
+            </div>
+          </div>
 
           <div style={{ marginBottom: 10, display: 'flex', gap: 16 }}>
             <div>
@@ -620,6 +621,12 @@ export default function MaterialsPage() {
                 style={input}
               >
                 <option value="">—</option>
+                {modalTechnician &&
+                  !technicians.some((t) => String(t.id) === String(modalTechnician)) && (
+                    <option value={String(modalTechnician)}>
+                      {techName(modalTechnician) || `ID ${modalTechnician}`}
+                    </option>
+                  )}
                 {technicians.map((t) => (
                   <option key={t.id} value={String(t.id)}>
                     {t.name}
@@ -635,6 +642,11 @@ export default function MaterialsPage() {
                 onChange={(e) => setModalStatus(e.target.value)}
                 style={input}
               >
+                {!STATUS_VALUES.includes(normalizeStatusForDb(modalStatus) || '') && (
+                  <option value={normalizeStatusForDb(modalStatus) || ''}>
+                    {STATUS_LABEL(normalizeStatusForDb(modalStatus) || '')}
+                  </option>
+                )}
                 {STATUS_VALUES.map((s) => (
                   <option key={s} value={s}>
                     {STATUS_LABEL(s)}
