@@ -627,7 +627,7 @@ export default function MaterialsPage() {
       {modalJob && (
         <div
           style={{
-            border: '1px solid '#ccc',
+            border: '1px solid #ccc',
             padding: 16,
             borderRadius: 8,
             maxWidth: MTABLE_WIDTH,
@@ -807,3 +807,4 @@ export default function MaterialsPage() {
     </div>
   );
 }
+
