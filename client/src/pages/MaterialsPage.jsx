@@ -32,7 +32,7 @@ const normalizeStatusForDb = (s) => {
 };
 
 /* ---------- Rows are shown only for these statuses ---------- */
-const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
+the SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 /* ---------- Small helpers ---------- */
 const toIntOrNull = (v) => {
@@ -58,46 +58,22 @@ function getProblemText(job) {
   ).trim();
 }
 
-/* Собираем «имя клиента» максимально надёжно: сначала из clients по client_id,
-   иначе — из полей самой заявки (client_name, customer_name, и т.п.) */
-function buildClientNameFromClientRow(c) {
-  if (!c) return '';
+/* Клиент формируется из вложенного job.client (join), с аккуратными фоллбэками */
+function getClientDisplay(job) {
+  const c = job?.client || {};
   const name =
-    c.name ||
     c.full_name ||
+    c.name ||
     [c.first_name, c.last_name].filter(Boolean).join(' ') ||
     c.company ||
     '';
-  return String(name).trim();
-}
-function buildClientPhoneFromClientRow(c) {
-  if (!c) return '';
-  return String(c.phone || c.mobile || c.phone_number || '').trim();
-}
-function buildClientFromJobFields(job) {
-  const name =
-    job.client_name ||
-    job.customer_name ||
-    job.client_full_name ||
-    [job.first_name, job.last_name].filter(Boolean).join(' ') ||
-    job.company ||
-    '';
-  const phone = job.client_phone || job.customer_phone || job.phone || '';
-  return { name: String(name).trim(), phone: String(phone).trim() };
-}
-function resolveClientForJob(job, clientsById) {
-  // 1) по ссылке client_id
-  const byId = job?.client_id ? clientsById.get(String(job.client_id)) : null;
-  const nameFromClient = buildClientNameFromClientRow(byId);
-  const phoneFromClient = buildClientPhoneFromClientRow(byId);
-
-  // 2) фоллбэк из полей job
-  const fb = buildClientFromJobFields(job);
-
-  const name = (nameFromClient || fb.name || '').trim();
-  const phone = (phoneFromClient || fb.phone || '').trim();
-
-  return { name, phone };
+  const company = c.company || '';
+  const phone = c.phone || c.mobile || c.phone_number || '';
+  return {
+    name: String(name).trim(),
+    company: String(company).trim(),
+    phone: String(phone).trim(),
+  };
 }
 
 export default function MaterialsPage() {
@@ -105,7 +81,6 @@ export default function MaterialsPage() {
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [comments, setComments] = useState([]);
-  const [clients, setClients] = useState([]);
 
   // quick filters
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
@@ -123,7 +98,7 @@ export default function MaterialsPage() {
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 520,         // расширили, чтобы влезли Job / Client / System / Problem
+    JOB: 560,         // расширили, чтобы влезли Job / Client / System / Problem
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -186,8 +161,15 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: j }, { data: m }, { data: t }, { data: c }, { data: cl }] = await Promise.all([
-        supabase.from('jobs').select('*'),
+      // ВАЖНО: тянем jobs вместе с client (join по client_id)
+      // Если FK настроен стандартно (jobs.client_id → clients.id), такая форма будет работать:
+      // '*, client:client_id (id, full_name, name, company, phone, mobile, phone_number, email)'
+      const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
+        supabase
+          .from('jobs')
+          .select(
+            '*, client:client_id (id, full_name, name, first_name, last_name, company, phone, mobile, phone_number, email)'
+          ),
         supabase.from('materials').select('*'),
         supabase
           .from('technicians')
@@ -199,15 +181,11 @@ export default function MaterialsPage() {
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
-        supabase
-          .from('clients')
-          .select('id, name, full_name, first_name, last_name, company, phone, mobile, phone_number, email'),
       ]);
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
       setComments(c || []);
-      setClients(cl || []);
     } finally {
       setLoading(false);
     }
@@ -242,6 +220,7 @@ export default function MaterialsPage() {
   /* ---------- комментарии по job (быстрый доступ) ---------- */
   const commentsByJob = useMemo(() => {
     const map = new Map();
+    // список уже отсортирован DESC — первый элемент в массиве будет последним комментом
     (comments || []).forEach((c) => {
       const key = c.job_id;
       if (!map.has(key)) map.set(key, []);
@@ -253,14 +232,15 @@ export default function MaterialsPage() {
   const getLatestComment = (jobId) => {
     const arr = commentsByJob.get(jobId) || [];
     if (!arr.length) return null;
-    const c = arr[0];
-    const imgUrl = c.image_url || c.technician_photos || null;
+    const c = arr[0]; // уже последний по времени
+    const imgUrl = c.image_url || c.technician_photos || null; // поддержка старого поля
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
   const handleModalSave = async () => {
     if (!modalJob) return;
 
+    // Save technician & job status (status → Title Case)
     await supabase
       .from('jobs')
       .update({
@@ -274,6 +254,7 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
+    // Split to inserts / updates
     const inserts = modalRows
       .filter((r) => !r.id)
       .map((r) => ({
@@ -312,13 +293,8 @@ export default function MaterialsPage() {
     (technicians || []).forEach((t) => m.set(String(t.id), t));
     return m;
   }, [technicians]);
-  const techName = (id) => techById.get(String(id))?.name || '';
 
-  const clientsById = useMemo(() => {
-    const m = new Map();
-    (clients || []).forEach((c) => m.set(String(c.id), c));
-    return m;
-  }, [clients]);
+  const techName = (id) => techById.get(String(id))?.name || '';
 
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
@@ -354,10 +330,12 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save status');
       console.error(error);
+      // rollback UI
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
 
+    // if job left SHOW_STATUSES → refresh table
     await fetchAll();
   };
 
@@ -383,6 +361,7 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save technician');
       console.error(error);
+      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
@@ -397,6 +376,7 @@ export default function MaterialsPage() {
     return map;
   }, [jobs]);
 
+  // filter Materials rows by quick filters (status/tech/search)
   const filteredMaterials = useMemo(() => {
     return materials.filter((row) => {
       const job = jobsMap.get(row.job_id);
@@ -423,6 +403,7 @@ export default function MaterialsPage() {
     });
   }, [materials, jobsMap, filterStatus, filterTech, searchJob]);
 
+  // jobs without materials (in SHOW_STATUSES)
   const jobsWithoutMaterials = useMemo(() => {
     return jobs.filter(
       (j) =>
@@ -433,7 +414,7 @@ export default function MaterialsPage() {
 
   /* ---------- render helpers ---------- */
   const renderJobCell = (job) => {
-    const { name, phone } = resolveClientForJob(job, clientsById);
+    const { name, company, phone } = getClientDisplay(job);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
@@ -442,7 +423,8 @@ export default function MaterialsPage() {
         <div>
           <span style={linkNumStyle}>№{job.job_number || job.id}</span>
           {name ? <span> — {name}</span> : null}
-          {phone ? <span> ({phone})</span> : null}
+          {company ? <span> ({company})</span> : null}
+          {phone ? <span> • {phone}</span> : null}
         </div>
         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
           {system ? <span><strong>System:</strong> {system}</span> : null}
@@ -454,13 +436,14 @@ export default function MaterialsPage() {
   };
 
   const renderJobLineCompact = (job) => {
-    const { name, phone } = resolveClientForJob(job, clientsById);
+    const { name, company, phone } = getClientDisplay(job);
     const system = getSystemLabel(job);
     const problem = getProblemText(job);
 
     const pieces = [
       `№${job.job_number || job.id}`,
-      name ? `${name}${phone ? ` (${phone})` : ''}` : '',
+      [name, company].filter(Boolean).join(' / ') || '',
+      phone || '',
       system ? `System: ${system}` : '',
       problem ? `Problem: ${problem}` : '',
     ].filter(Boolean);
