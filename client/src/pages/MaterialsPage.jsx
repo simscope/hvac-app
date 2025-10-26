@@ -48,9 +48,9 @@ const toFloatOrNull = (v) => {
 
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
+  const [clients, setClients] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
-  const [comments, setComments] = useState([]);
 
   // quick filters
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
@@ -63,8 +63,12 @@ export default function MaterialsPage() {
   const [modalTechnician, setModalTechnician] = useState('');
   const [modalStatus, setModalStatus] = useState('');
 
-  const [loading, setLoading] = useState(false);
+  // latest comment/photo for the opened job
+  const [modalCommentText, setModalCommentText] = useState('');
+  const [modalPhotoUrl, setModalPhotoUrl] = useState('');
+
   const [hoveredJobId, setHoveredJobId] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   // ---------- fixed widths ----------
   const COL = {
@@ -131,7 +135,7 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
+      const [{ data: j }, { data: m }, { data: t }, { data: cl }] = await Promise.all([
         supabase.from('jobs').select('*'),
         supabase.from('materials').select('*'),
         supabase
@@ -140,125 +144,24 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
-       supabase
-          .from('comments')
-          .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
-          .order('created_at', { ascending: false }),
+        supabase.from('clients').select('id, full_name, company'),
       ]);
+
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
-      setComments(c || []);
+      setClients(cl || []);
     } finally {
       setLoading(false);
     }
   };
 
-  /* ---------- комментарии по job (быстрый доступ) ---------- */
-  const commentsByJob = useMemo(() => {
+  const clientsById = useMemo(() => {
     const map = new Map();
-    (comments || []).forEach((c) => {
-      const key = c.job_id;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(c); // уже отсортированы DESC
-    });
+    (clients || []).forEach((c) => map.set(c.id, c));
     return map;
-  }, [comments]);
+  }, [clients]);
 
-  // собрать фото (image_url или technician_photos) для job
-  const photosByJob = useMemo(() => {
-    const map = new Map();
-    commentsByJob.forEach((arr, jobId) => {
-      const urls = [];
-      arr.forEach((c) => {
-        const u =
-          (c.image_url && String(c.image_url).trim()) ||
-          (c.technician_photos && String(c.technician_photos).trim()) ||
-          '';
-        if (u) urls.push({ url: u, created_at: c.created_at });
-      });
-      map.set(jobId, urls);
-    });
-    return map;
-  }, [commentsByJob]);
-
-  const openModal = (job) => {
-    const existingRows = materials.filter((m) => m.job_id === job.id);
-    const st = normalizeStatusForDb(job.status) || '';
-    setModalTechnician(job.technician_id ?? '');
-    setModalStatus(st);
-    setModalRows(
-      existingRows.length
-        ? existingRows
-        : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
-    );
-    setModalJob(job);
-  };
-
-  const handleModalChange = (index, field, value) => {
-    setModalRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
-  };
-
-  const addModalRow = () =>
-    setModalRows((prev) => [
-      ...prev,
-      { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
-    ]);
-
-  const removeModalRow = (index) =>
-    setModalRows((prev) => prev.filter((_, i) => i !== index));
-
-  const handleModalSave = async () => {
-    if (!modalJob) return;
-
-    // Save technician & job status (status → Title Case)
-    await supabase
-      .from('jobs')
-      .update({
-        technician_id:
-          modalTechnician === '' || modalTechnician == null
-            ? null
-            : Number.isNaN(Number(modalTechnician))
-            ? modalTechnician
-            : parseInt(modalTechnician, 10),
-        status: normalizeStatusForDb(modalStatus) || null,
-      })
-      .eq('id', modalJob.id);
-
-    // Split to inserts / updates
-    const inserts = modalRows
-      .filter((r) => !r.id)
-      .map((r) => ({
-        job_id: modalJob.id,
-        name: r.name,
-        price: toFloatOrNull(r.price),
-        quantity: toIntOrNull(r.quantity),
-        supplier: r.supplier || null,
-      }));
-
-    const updates = modalRows.filter((r) => r.id);
-
-    for (const u of updates) {
-      await supabase
-        .from('materials')
-        .update({
-          name: u.name,
-          price: toFloatOrNull(u.price),
-          quantity: toIntOrNull(u.quantity),
-          supplier: u.supplier || null,
-        })
-        .eq('id', u.id);
-    }
-
-    if (inserts.length > 0) {
-      await supabase.from('materials').insert(inserts);
-    }
-
-    setModalJob(null);
-    await fetchAll();
-  };
-
-  /* ---------- memo maps ---------- */
   const techById = useMemo(() => {
     const m = new Map();
     (technicians || []).forEach((t) => m.set(String(t.id), t));
@@ -339,6 +242,103 @@ export default function MaterialsPage() {
     }
   };
 
+  // open modal: fetch latest comment & photo for this job
+  const openModal = async (job) => {
+    const existingRows = materials.filter((m) => m.job_id === job.id);
+    const st = normalizeStatusForDb(job.status) || '';
+
+    setModalTechnician(job.technician_id ?? '');
+    setModalStatus(st);
+    setModalRows(
+      existingRows.length
+        ? existingRows
+        : [{ name: '', price: '', quantity: 1, supplier: '', job_id: job.id }]
+    );
+    setModalJob(job);
+    setModalCommentText('');
+    setModalPhotoUrl('');
+
+    try {
+      const { data: cmt } = await supabase
+        .from('comments')
+        .select('text,image_url,created_at')
+        .eq('job_id', job.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (cmt) {
+        setModalCommentText(cmt.text || '');
+        if (cmt.image_url) setModalPhotoUrl(cmt.image_url);
+      }
+    } catch (e) {
+      console.warn('Failed to load latest comment/photo:', e?.message || e);
+    }
+  };
+
+  const handleModalChange = (index, field, value) => {
+    setModalRows((prev) => prev.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
+  };
+
+  const addModalRow = () =>
+    setModalRows((prev) => [
+      ...prev,
+      { name: '', price: '', quantity: 1, supplier: '', job_id: modalJob.id },
+    ]);
+
+  const removeModalRow = (index) =>
+    setModalRows((prev) => prev.filter((_, i) => i !== index));
+
+  const handleModalSave = async () => {
+    if (!modalJob) return;
+
+    // Save technician & job status (status → Title Case)
+    await supabase
+      .from('jobs')
+      .update({
+        technician_id:
+          modalTechnician === '' || modalTechnician == null
+            ? null
+            : Number.isNaN(Number(modalTechnician))
+            ? modalTechnician
+            : parseInt(modalTechnician, 10),
+        status: normalizeStatusForDb(modalStatus) || null,
+      })
+      .eq('id', modalJob.id);
+
+    // Split to inserts / updates
+    const inserts = modalRows
+      .filter((r) => !r.id && (r.name || r.price || r.quantity || r.supplier))
+      .map((r) => ({
+        job_id: modalJob.id,
+        name: r.name,
+        price: toFloatOrNull(r.price),
+        quantity: toIntOrNull(r.quantity),
+        supplier: r.supplier || null,
+      }));
+
+    const updates = modalRows.filter((r) => r.id);
+
+    for (const u of updates) {
+      await supabase
+        .from('materials')
+        .update({
+          name: u.name,
+          price: toFloatOrNull(u.price),
+          quantity: toIntOrNull(u.quantity),
+          supplier: u.supplier || null,
+        })
+        .eq('id', u.id);
+    }
+
+    if (inserts.length > 0) {
+      await supabase.from('materials').insert(inserts);
+    }
+
+    setModalJob(null);
+    await fetchAll();
+  };
+
   /* ---------- derived lists ---------- */
   const jobsMap = useMemo(() => {
     const map = new Map();
@@ -382,19 +382,19 @@ export default function MaterialsPage() {
     );
   }, [jobs, materials]);
 
-  // краткая строка: № — Организация/Клиент — Система — Проблема
-  const prettyJobHeader = (j) => {
-    const comp = j.company || '';
-    const client = j.client_name || ''; // если у вас есть поле client_name; если нет — можно оставить пустым
-    const who = comp || client;
-    const sys = j.system_type || '';
-    const issue = j.issue || '';
-    const parts = [];
-    parts.push(`№${j.job_number || j.id}`);
-    if (who) parts.push(who);
-    if (sys) parts.push(sys);
-    if (issue) parts.push(issue);
-    return parts.join(' — ');
+  // helpers for client/company display
+  const clientDisplay = (job) => {
+    const c = clientsById.get(job.client_id);
+    if (!c) return '—';
+    return c.company ? c.company : (c.full_name || '—');
+  };
+
+  const jobHeaderLine = (job) => {
+    const num = job.job_number || job.id;
+    const companyOrClient = clientDisplay(job);
+    const sys = job.system_type || '—';
+    const issue = job.issue || '—';
+    return `№${num} — ${companyOrClient} — ${sys} — ${issue}`;
   };
 
   return (
@@ -412,7 +412,7 @@ export default function MaterialsPage() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ ...input, width: 260 }}
+            style={{ ...input, width: 280 }}
           >
             <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
             {STATUS_VALUES.map((s) => (
@@ -461,7 +461,7 @@ export default function MaterialsPage() {
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {jobsWithoutMaterials.map((j) => (
               <li key={j.id} style={{ marginBottom: 6 }}>
-                <span style={linkNumStyle}>{prettyJobHeader(j)}</span>{' '}
+                <span style={linkNumStyle}>{jobHeaderLine(j)}</span>{' '}
                 <button
                   onClick={() => openModal(j)}
                   style={{ ...btn, padding: '4px 8px', border: '1px solid #ddd', marginLeft: 6 }}
@@ -486,9 +486,9 @@ export default function MaterialsPage() {
             <col style={{ width: COL.SUPPLIER }} />
             <col style={{ width: COL.STATUS }} />
           </colgroup>
-          <thead>
+        <thead>
             <tr>
-              <th style={th(COL.JOB)}>Job / Company or Client / System / Problem</th>
+              <th style={th(COL.JOB)}>Job / Client / System / Problem</th>
               <th style={th(COL.TECH)}>Technician</th>
               <th style={th(COL.NAME)}>Material</th>
               <th style={th(COL.QTY, 'right')}>Qty</th>
@@ -508,7 +508,7 @@ export default function MaterialsPage() {
               return (
                 <tr key={row.id} {...rowClickableProps(job)}>
                   <td style={td(COL.JOB)}>
-                    <span style={linkNumStyle}>{prettyJobHeader(job)}</span>
+                    <span style={linkNumStyle}>{jobHeaderLine(job)}</span>
                   </td>
 
                   {/* Technician: INLINE SELECT */}
@@ -577,7 +577,7 @@ export default function MaterialsPage() {
         </table>
       </div>
 
-      {/* Modal: edit materials + full comments & photos */}
+      {/* Modal: edit materials */}
       {modalJob && (
         <div
           style={{
@@ -589,97 +589,28 @@ export default function MaterialsPage() {
           }}
         >
           <h3 style={{ marginTop: 0, marginBottom: 8 }}>
-            {prettyJobHeader(modalJob)}
+            {jobHeaderLine(modalJob)}
           </h3>
 
-          {/* Лента комментариев (все) */}
-          {(() => {
-            const arr = commentsByJob.get(modalJob.id) || [];
-            return (
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Comments</div>
-                {arr.length === 0 ? (
-                  <div style={{ color: '#6b7280' }}>—</div>
-                ) : (
-                  <div
-                    style={{
-                      maxHeight: 220,
-                      overflowY: 'auto',
-                      border: '1px solid #eee',
-                      borderRadius: 6,
-                      padding: 8,
-                      display: 'grid',
-                      gap: 6,
-                      background: '#fafafa',
-                    }}
-                  >
-                    {arr.map((c) => (
-                      <div key={c.id} style={{ fontSize: 14, lineHeight: 1.35 }}>
-                        <span style={{ fontWeight: 600 }}>
-                          {c?.profiles?.full_name || (c.author_user_id || '').slice(0, 8)}
-                        </span>
-                        {': '}
-                        {c.text || '—'}
-                        <span style={{ color: '#6b7280', fontSize: 12, marginLeft: 6 }}>
-                          {new Date(c.created_at).toLocaleString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
-          {/* Галерея фото (все из комментариев) */}
-          {(() => {
-            const ph = photosByJob.get(modalJob.id) || [];
-            return (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>Photos</div>
-                {ph.length === 0 ? (
-                  <div style={{ color: '#6b7280' }}>—</div>
-                ) : (
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-                      gap: 8,
-                      maxHeight: 240,
-                      overflowY: 'auto',
-                      padding: 4,
-                      border: '1px solid #eee',
-                      borderRadius: 6,
-                      background: '#fafafa',
-                    }}
-                  >
-                    {ph.map((p, i) => (
-                      <a
-                        key={`${p.url}_${i}`}
-                        href={p.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          display: 'block',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: 6,
-                          overflow: 'hidden',
-                          background: '#fff',
-                        }}
-                        title={new Date(p.created_at).toLocaleString()}
-                      >
-                        <img
-                          src={p.url}
-                          alt="job photo"
-                          style={{ width: '100%', height: 110, objectFit: 'cover', display: 'block' }}
-                        />
-                      </a>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+          {/* Latest comment & photo for the job */}
+          <div style={{ marginBottom: 10, fontSize: 14, display: 'grid', gap: 6 }}>
+            <div>
+              <strong>Comment:</strong> {modalCommentText?.trim() ? modalCommentText : '—'}
+            </div>
+            <div>
+              <strong>Photo:</strong>{' '}
+              {modalPhotoUrl ? (
+                <img
+                  src={modalPhotoUrl}
+                  width="160"
+                  alt="job photo"
+                  style={{ borderRadius: 4, border: '1px solid #ddd' }}
+                />
+              ) : (
+                '—'
+              )}
+            </div>
+          </div>
 
           <div style={{ marginBottom: 10, display: 'flex', gap: 16 }}>
             <div>
@@ -825,4 +756,3 @@ export default function MaterialsPage() {
     </div>
   );
 }
-
