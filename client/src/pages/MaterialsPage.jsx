@@ -140,10 +140,9 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
-        // Все комментарии (последние сверху) — будем группировать по job_id
-        supabase
+       supabase
           .from('comments')
-          .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id, profiles:author_user_id (full_name)')
+          .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
       ]);
       setJobs(j || []);
@@ -826,3 +825,4 @@ export default function MaterialsPage() {
     </div>
   );
 }
+
