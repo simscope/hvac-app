@@ -111,11 +111,12 @@ export default function MaterialsPage() {
   }, []);
 
   async function fetchJobsSafe() {
+    // Если когда-нибудь включишь FK и will do a join — это сработает
     const try1 = await supabase
       .from('jobs')
       .select(`
         id, job_number, system_type, issue, status, technician_id, client_id,
-        client:client_id ( id, uuid, full_name, name, first_name, last_name, company, phone, mobile, phone_number )
+        client:client_id ( id, full_name, name, first_name, last_name, company, phone, mobile, phone_number )
       `);
     if (!try1.error && Array.isArray(try1.data)) return try1.data;
 
@@ -143,7 +144,7 @@ export default function MaterialsPage() {
 
       const clRes = await supabase
         .from('clients')
-        .select('id, uuid, full_name, name, first_name, last_name, company, phone, mobile, phone_number');
+        .select('id, full_name, name, first_name, last_name, company, phone, mobile, phone_number');
 
       setJobs(j || []);
       setMaterials(mRes.data || []);
@@ -174,13 +175,7 @@ export default function MaterialsPage() {
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
-  /* ---------- индекс клиентов: строго по uuid и по id ---------- */
-  const clientsIndexByUuid = useMemo(() => {
-    const m = new Map();
-    (clients || []).forEach((c) => m.set(lower(c?.uuid), c));
-    return m;
-  }, [clients]);
-
+  /* ---------- индекс клиентов по id (именно id в jobs.client_id) ---------- */
   const clientsIndexById = useMemo(() => {
     const m = new Map();
     (clients || []).forEach((c) => m.set(lower(c?.id), c));
@@ -198,17 +193,12 @@ export default function MaterialsPage() {
   const getSystemLabel = (job) => String(job?.system_type || '').trim();
   const getProblemText = (job) => String(job?.issue || '').trim();
 
-  /* ---------- поиск клиента для job (client_id хранит clients.uuid) ---------- */
+  /* ---------- поиск клиента для job (client_id хранит clients.id) ---------- */
   function pickClientFromJob(job) {
-    if (job?.client) return job.client;          // если join вдруг сработал
+    if (job?.client) return job.client; // если вдруг join вернулся
     const cid = job?.client_id;
     if (!cid) return null;
 
-    // 1) у тебя client_id = clients.uuid
-    const byUuid = clientsIndexByUuid.get(lower(cid));
-    if (byUuid) return byUuid;
-
-    // 2) запасной вариант — если где-то положили clients.id
     const byId = clientsIndexById.get(lower(cid));
     if (byId) return byId;
 
