@@ -32,7 +32,7 @@ const normalizeStatusForDb = (s) => {
 };
 
 /* ---------- Rows are shown only for these statuses ---------- */
-the SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
+const SHOW_STATUSES = new Set(['Recall', 'Parts ordered', 'Waiting for parts']);
 
 /* ---------- Small helpers ---------- */
 const toIntOrNull = (v) => {
@@ -98,7 +98,7 @@ export default function MaterialsPage() {
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 560,         // расширили, чтобы влезли Job / Client / System / Problem
+    JOB: 560,         // чтобы влезли Job / Client / System / Problem
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -161,9 +161,7 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      // ВАЖНО: тянем jobs вместе с client (join по client_id)
-      // Если FK настроен стандартно (jobs.client_id → clients.id), такая форма будет работать:
-      // '*, client:client_id (id, full_name, name, company, phone, mobile, phone_number, email)'
+      // jobs вместе с client (join по client_id)
       const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
         supabase
           .from('jobs')
@@ -220,7 +218,6 @@ export default function MaterialsPage() {
   /* ---------- комментарии по job (быстрый доступ) ---------- */
   const commentsByJob = useMemo(() => {
     const map = new Map();
-    // список уже отсортирован DESC — первый элемент в массиве будет последним комментом
     (comments || []).forEach((c) => {
       const key = c.job_id;
       if (!map.has(key)) map.set(key, []);
@@ -232,15 +229,14 @@ export default function MaterialsPage() {
   const getLatestComment = (jobId) => {
     const arr = commentsByJob.get(jobId) || [];
     if (!arr.length) return null;
-    const c = arr[0]; // уже последний по времени
-    const imgUrl = c.image_url || c.technician_photos || null; // поддержка старого поля
+    const c = arr[0];
+    const imgUrl = c.image_url || c.technician_photos || null;
     return { text: c.text ?? '', image_url: imgUrl };
   };
 
   const handleModalSave = async () => {
     if (!modalJob) return;
 
-    // Save technician & job status (status → Title Case)
     await supabase
       .from('jobs')
       .update({
@@ -254,7 +250,6 @@ export default function MaterialsPage() {
       })
       .eq('id', modalJob.id);
 
-    // Split to inserts / updates
     const inserts = modalRows
       .filter((r) => !r.id)
       .map((r) => ({
@@ -330,12 +325,10 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save status');
       console.error(error);
-      // rollback UI
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, status: prevStatus } : j)));
       return;
     }
 
-    // if job left SHOW_STATUSES → refresh table
     await fetchAll();
   };
 
@@ -361,7 +354,6 @@ export default function MaterialsPage() {
     if (error) {
       alert('Failed to save technician');
       console.error(error);
-      // rollback
       setJobs((prevJobs) =>
         prevJobs.map((j) => (j.id === job.id ? { ...j, technician_id: prev } : j))
       );
@@ -635,7 +627,7 @@ export default function MaterialsPage() {
       {modalJob && (
         <div
           style={{
-            border: '1px solid #ccc',
+            border: '1px solid '#ccc',
             padding: 16,
             borderRadius: 8,
             maxWidth: MTABLE_WIDTH,
