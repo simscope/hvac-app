@@ -46,11 +46,36 @@ const toFloatOrNull = (v) => {
   return Number.isNaN(n) ? null : n;
 };
 
+/* ---------- Safe getters (гибко читаем поля из разных схем) ---------- */
+function getClientDisplayName(c) {
+  if (!c) return '';
+  const name = c.name || c.full_name || '';
+  const fn = c.first_name || '';
+  const ln = c.last_name || '';
+  const combo = [fn, ln].filter(Boolean).join(' ');
+  return (name || combo || c.company || '').trim();
+}
+
+function getSystemLabel(job) {
+  if (!job) return '';
+  return String(
+    job.system_type || job.type || job.request_type || job.ticket_type || ''
+  ).trim();
+}
+
+function getProblemText(job) {
+  if (!job) return '';
+  return String(
+    job.problem || job.issue || job.details || job.description || job.problem_text || ''
+  ).trim();
+}
+
 export default function MaterialsPage() {
   const [jobs, setJobs] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [comments, setComments] = useState([]);
+  const [clients, setClients] = useState([]);
 
   // quick filters
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' | STATUS_VALUES
@@ -68,7 +93,7 @@ export default function MaterialsPage() {
 
   // ---------- fixed widths ----------
   const COL = {
-    JOB: 120,
+    JOB: 480,         // расширили, чтобы влезли Job/Client/System/Problem
     TECH: 220,
     NAME: 260,
     QTY: 80,
@@ -131,7 +156,7 @@ export default function MaterialsPage() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const [{ data: j }, { data: m }, { data: t }, { data: c }] = await Promise.all([
+      const [{ data: j }, { data: m }, { data: t }, { data: c }, { data: cl }] = await Promise.all([
         supabase.from('jobs').select('*'),
         supabase.from('materials').select('*'),
         supabase
@@ -140,16 +165,21 @@ export default function MaterialsPage() {
           .in('role', ['technician', 'tech'])
           .eq('is_active', true)
           .order('name', { ascending: true }),
-        // 🔧 берём только нужные поля + сортируем по дате (последние сверху)
+        // 🔧 comments — только нужные поля
         supabase
           .from('comments')
           .select('id, job_id, created_at, text, image_url, technician_photos, author_user_id')
           .order('created_at', { ascending: false }),
+        // 🔧 клиенты — берём несколько наиболее вероятных полей
+        supabase
+          .from('clients')
+          .select('id, name, full_name, first_name, last_name, company, phone, email'),
       ]);
       setJobs(j || []);
       setMaterials(m || []);
       setTechnicians(t || []);
       setComments(c || []);
+      setClients(cl || []);
     } finally {
       setLoading(false);
     }
@@ -259,6 +289,12 @@ export default function MaterialsPage() {
   }, [technicians]);
 
   const techName = (id) => techById.get(String(id))?.name || '';
+
+  const clientsById = useMemo(() => {
+    const m = new Map();
+    (clients || []).forEach((c) => m.set(String(c.id), c));
+    return m;
+  }, [clients]);
 
   const linkNumStyle = { color: '#2563eb', textDecoration: 'underline' };
   const rowClickableProps = (job) => ({
@@ -376,6 +412,44 @@ export default function MaterialsPage() {
     );
   }, [jobs, materials]);
 
+  /* ---------- render helpers ---------- */
+  const renderJobCell = (job) => {
+    const client = clientsById.get(String(job.client_id));
+    const clientName = getClientDisplayName(client);
+    const system = getSystemLabel(job);
+    const problem = getProblemText(job);
+
+    return (
+      <div>
+        <div>
+          <span style={linkNumStyle}>№{job.job_number || job.id}</span>
+          {clientName ? <span> — {clientName}</span> : null}
+        </div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+          {system ? <span><strong>System:</strong> {system}</span> : null}
+          {system && problem ? <span> • </span> : null}
+          {problem ? <span><strong>Problem:</strong> {problem}</span> : null}
+        </div>
+      </div>
+    );
+  };
+
+  const renderJobLineCompact = (job) => {
+    const client = clientsById.get(String(job.client_id));
+    const clientName = getClientDisplayName(client);
+    const system = getSystemLabel(job);
+    const problem = getProblemText(job);
+
+    const pieces = [
+      `№${job.job_number || job.id}`,
+      clientName || '',
+      system ? `System: ${system}` : '',
+      problem ? `Problem: ${problem}` : '',
+    ].filter(Boolean);
+
+    return pieces.join(' — ');
+  };
+
   return (
     <div style={{ padding: 16 }}>
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Materials by Jobs</h2>
@@ -439,8 +513,8 @@ export default function MaterialsPage() {
           <h3 style={{ margin: '6px 0' }}>Jobs without materials:</h3>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {jobsWithoutMaterials.map((j) => (
-              <li key={j.id} style={{ marginBottom: 4 }}>
-                №<span style={linkNumStyle}>{j.job_number || j.id}</span>{' '}
+              <li key={j.id} style={{ marginBottom: 6 }}>
+                <span style={linkNumStyle}>{renderJobLineCompact(j)}</span>{' '}
                 <button
                   onClick={() => openModal(j)}
                   style={{ ...btn, padding: '4px 8px', border: '1px solid #ddd', marginLeft: 6 }}
@@ -467,7 +541,7 @@ export default function MaterialsPage() {
           </colgroup>
           <thead>
             <tr>
-              <th style={th(COL.JOB)}>Job #</th>
+              <th style={th(COL.JOB)}>Job / Client / System / Problem</th>
               <th style={th(COL.TECH)}>Technician</th>
               <th style={th(COL.NAME)}>Material</th>
               <th style={th(COL.QTY, 'right')}>Qty</th>
@@ -487,7 +561,7 @@ export default function MaterialsPage() {
               return (
                 <tr key={row.id} {...rowClickableProps(job)}>
                   <td style={td(COL.JOB)}>
-                    <span style={linkNumStyle}>№{job.job_number || job.id}</span>
+                    {renderJobCell(job)}
                   </td>
 
                   {/* Technician: INLINE SELECT */}
