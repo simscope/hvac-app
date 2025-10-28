@@ -350,48 +350,55 @@ function CreateTaskModal({ me, onClose, onCreated }) {
 
   /**
    * ФРОНТ-ЗАГРУЗКА АКТИВНЫХ ЗАЯВОК:
-   * 1) jobs (только активные) -> берём client_id
-   * 2) clients по списку id -> получаем имена
+   * 1) jobs (все последние) -> локально фильтруем "неактивные" статусы
+   * 2) clients по списку id -> получаем имя + организацию
    * 3) мержим на фронте
    */
   useEffect(() => {
     (async () => {
       try {
-        const finishedList = '("Completed","Завершено","completed","Отказ","Canceled","Cancelled")';
-
-        // 1) только активные работы
-        const { data: jobs, error: jErr } = await supabase
+        const { data: jobsRaw, error: jErr } = await supabase
           .from('jobs')
           .select('id, job_number, status, client_id, updated_at')
-          .not('status', 'in', finishedList)
           .order('updated_at', { ascending: false })
-          .limit(400);
+          .limit(600);
         if (jErr) throw jErr;
 
-        // 2) тянем клиентов (если RLS позволит)
-        const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean)));
+        // статусы, которых НЕТ в дропдауне (неактивные)
+        const INACTIVE = new Set([
+          'completed', 'завершено', 'canceled', 'cancelled', 'cancel', 'closed', 'отказ'
+        ]);
+        const activeJobs = (jobsRaw || []).filter(j => {
+          const s = String(j.status || '').trim().toLowerCase();
+          return s && !INACTIVE.has(s);
+        });
+
+        const clientIds = Array.from(new Set(activeJobs.map(j => j.client_id).filter(Boolean)));
+
         let clientsMap = {};
         if (clientIds.length) {
           const { data: cli, error: cErr } = await supabase
             .from('clients')
-            .select('id, full_name, name')
+            .select('id, full_name, name, company')
             .in('id', clientIds);
           if (!cErr && Array.isArray(cli)) {
-            cli.forEach(c => { clientsMap[c.id] = c.full_name || c.name || ''; });
+            cli.forEach(c => {
+              const nm = c.full_name || c.name || '';
+              const comp = c.company ? ` (${c.company})` : '';
+              clientsMap[c.id] = (nm + comp).trim() || 'Без клиента';
+            });
           } else {
-            console.warn('clients read blocked by RLS or error:', cErr?.message || cErr);
+            console.warn('clients read blocked or error:', cErr?.message || cErr);
           }
         }
 
-        // 3) мержим
-        const list = (jobs || []).map(j => ({
+        const list = activeJobs.map(j => ({
           id: j.id,
           job_number: j.job_number ?? null,
           status: j.status ?? '',
-          client_name: clientsMap[j.client_id] || '',
+          client_name: clientsMap[j.client_id] || 'Без клиента',
           updated_at: j.updated_at,
         }))
-        // упорядочим по номеру, если он есть
         .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
 
         setJobsList(list);
@@ -469,7 +476,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
                 ? <option disabled>Активных заявок нет</option>
                 : jobsList.map(j => (
                     <option key={j.id} value={j.id}>
-                      #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.status || '—'}
+                      #{j.job_number ?? '—'} • {j.client_name} • {j.status || '—'}
                     </option>
                   ))
               }
