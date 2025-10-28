@@ -854,13 +854,13 @@ const deleteInvoice = async (item) => {
   if (!window.confirm(`Delete invoice${invoiceNoStr ? ' #' + invoiceNoStr : ''}?`)) return;
 
   try {
-    // 1) Нормальный путь — через Edge: она сама удалит файл и запись в БД
-    await callEdgeAuth('admin-delete-invoice', {
-      job_id: jobId,                // <-- ОБЯЗАТЕЛЬНО
-      invoice_no: invoiceNoNum,     // <-- ОБЯЗАТЕЛЬНО (число)
-      bucket: INVOICES_BUCKET,      // на случай если функция это использует
-      key,                          // не обязательно, но пусть будет
-    });
+    const fileName = inv?.name || `invoice_${invoiceNo}.pdf`;
+await callEdgeAuth('admin-delete-invoice', {
+  bucket: INVOICES_BUCKET,
+  job_id: jobId,
+  invoice_no: Number(invoiceNo),
+  file_name: fileName, // <-- достаточно; функция сама соберёт key
+});
   } catch (e) {
     console.warn('Edge delete failed:', e?.message || e);
 
@@ -1507,6 +1507,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
