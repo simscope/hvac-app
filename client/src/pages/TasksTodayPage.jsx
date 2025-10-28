@@ -337,7 +337,7 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
   );
 }
 
-/* ================== Create Modal (FRONT-ONLY) ================== */
+/* ================== Create Modal ================== */
 function CreateTaskModal({ me, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
@@ -348,62 +348,57 @@ function CreateTaskModal({ me, onClose, onCreated }) {
   const [dateStr, setDateStr] = useState(nyToday());
   const [saving, setSaving] = useState(false);
 
-  /**
-   * ФРОНТ-ЗАГРУЗКА АКТИВНЫХ ЗАЯВОК:
-   * 1) jobs (все последние) -> локально фильтруем "неактивные" статусы
-   * 2) clients по списку id -> получаем имя + организацию
-   * 3) мержим на фронте
-   */
+  const INACTIVE = new Set([
+    'completed', 'завершено', 'canceled', 'cancelled', 'cancel', 'closed', 'отказ'
+  ]);
+
+  const buildClientLabel = (cli) => {
+    if (!cli) return 'Без клиента';
+    const nm = cli.full_name || cli.name || '';
+    const comp = cli.company ? ` (${cli.company})` : '';
+    const label = (nm + comp).trim();
+    return label || 'Без клиента';
+    };
+
+  // Загружаем ТОЛЬКО активные и НЕархивные заявки + клиент
   useEffect(() => {
     (async () => {
       try {
         const { data: jobsRaw, error: jErr } = await supabase
           .from('jobs')
-          .select('id, job_number, status, client_id, updated_at')
+          .select(`
+            id,
+            job_number,
+            status,
+            archived_at,
+            updated_at,
+            client_id,
+            clients:client_id ( full_name, name, company )
+          `)
+          .is('archived_at', null)
           .order('updated_at', { ascending: false })
           .limit(600);
+
         if (jErr) throw jErr;
 
-        // статусы, которых НЕТ в дропдауне (неактивные)
-        const INACTIVE = new Set([
-          'completed', 'завершено', 'canceled', 'cancelled', 'cancel', 'closed', 'отказ'
-        ]);
         const activeJobs = (jobsRaw || []).filter(j => {
           const s = String(j.status || '').trim().toLowerCase();
           return s && !INACTIVE.has(s);
         });
 
-        const clientIds = Array.from(new Set(activeJobs.map(j => j.client_id).filter(Boolean)));
-
-        let clientsMap = {};
-        if (clientIds.length) {
-          const { data: cli, error: cErr } = await supabase
-            .from('clients')
-            .select('id, full_name, name, company')
-            .in('id', clientIds);
-          if (!cErr && Array.isArray(cli)) {
-            cli.forEach(c => {
-              const nm = c.full_name || c.name || '';
-              const comp = c.company ? ` (${c.company})` : '';
-              clientsMap[c.id] = (nm + comp).trim() || 'Без клиента';
-            });
-          } else {
-            console.warn('clients read blocked or error:', cErr?.message || cErr);
-          }
-        }
-
-        const list = activeJobs.map(j => ({
-          id: j.id,
-          job_number: j.job_number ?? null,
-          status: j.status ?? '',
-          client_name: clientsMap[j.client_id] || 'Без клиента',
-          updated_at: j.updated_at,
-        }))
-        .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+        const list = activeJobs
+          .map(j => ({
+            id: j.id,
+            job_number: j.job_number ?? null,
+            status: j.status ?? '',
+            client_name: buildClientLabel(j.clients),
+            updated_at: j.updated_at,
+          }))
+          .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
 
         setJobsList(list);
       } catch (e) {
-        console.error('Active jobs dropdown load error:', e?.message || e);
+        console.error('Active non-archived jobs load error:', e?.message || e);
         setJobsList([]);
       }
     })();
