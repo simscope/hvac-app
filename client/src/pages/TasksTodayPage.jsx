@@ -9,7 +9,7 @@ dayjs.extend(utc); dayjs.extend(tz);
 
 const NY = 'America/New_York';
 
-/* ========== UI STYLES (минималист) ========== */
+/* ========== UI (минимал) ========== */
 const PAGE = { padding: 16, display: 'grid', gap: 12, maxWidth: 1100, margin: '0 auto' };
 const ROW = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 };
 const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
@@ -20,15 +20,9 @@ const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db'
 const TA = { ...INPUT, minHeight: 90 };
 const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, cursor: 'pointer', background: '#fff' };
 
-/* ========== HELPERS ========== */
 const nyToday = () => dayjs().tz(NY).format('YYYY-MM-DD');
-const toNYTzISO = (dateStr, timeStr) => {
-  if (!dateStr || !timeStr) return null;
-  const d = dayjs.tz(`${dateStr} ${timeStr}`, 'YYYY-MM-DD HH:mm', NY);
-  return d.isValid() ? d.toISOString() : null;
-};
 
-/* «Это неоплата?» — по type/тегам */
+/* неоплата? по type или тегу 'unpaid' (на будущее) */
 const isUnpaidTask = (t) => {
   const tp = String(t?.type || '').toLowerCase();
   if (tp.includes('unpaid')) return true;
@@ -36,20 +30,30 @@ const isUnpaidTask = (t) => {
   return tags.some((s) => String(s).toLowerCase() === 'unpaid');
 };
 
-/* ========== MAIN PAGE ========== */
+/* допустимые статусы «активных» работ для селекта */
+const ACTIVE_JOB_STATUSES = [
+  'In progress',
+  'Parts ordered',
+  'Waiting for parts',
+  'To finish',
+  'Recall',
+  'New',
+  'Diagnose'
+];
+
+/* ================== PAGE ================== */
 export default function TasksTodayPage() {
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
 
   const [me, setMe] = useState(null);
   const [myProfile, setMyProfile] = useState(null);
-  const [managers, setManagers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [commentsByTask, setCommentsByTask] = useState({});
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
-  /* ---------- AUTH + PROFILE ---------- */
+  /* ---- AUTH + PROFILE ---- */
   useEffect(() => {
     let unsub = null;
     (async () => {
@@ -73,28 +77,19 @@ export default function TasksTodayPage() {
     return () => unsub?.unsubscribe?.();
   }, []);
 
-  /* ---------- MANAGERS LIST ---------- */
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select('id, full_name, role')
-        .in('role', ['admin', 'manager'])
-        .order('role', { ascending: true });
-      if (mounted.current) setManagers(data || []);
-    })();
-  }, []);
-
-  /* ---------- LOAD TASKS + COMMENTS ---------- */
+  /* ---- LOAD TASKS + COMMENTS ---- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
     try {
-      // Берём все активные (любой даты) + завершённые за сегодня (удобно видеть свежие закрытия)
+      // гарантированно создаём таски по неоплатам из твоего представления unpaid_jobs_current
+      await supabase.rpc('ensure_unpaid_tasks_from_view').catch(() => {});
+
       const today = nyToday();
       const { data: t, error } = await supabase
         .from('tasks')
         .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
+        // показываем все ACTIVE (любой даты) + DONE за сегодня
         .or(`status.eq.active,and(status.eq.done,due_date.eq.${today})`)
         .order('status', { ascending: true })
         .order('updated_at', { ascending: false });
@@ -104,6 +99,7 @@ export default function TasksTodayPage() {
         if (mounted.current) { setTasks([]); setCommentsByTask({}); }
         return;
       }
+
       const ids = t.map(x => x.id);
       const { data: cs, error: cErr } = await supabase
         .from('task_comments')
@@ -140,7 +136,7 @@ export default function TasksTodayPage() {
 
   useEffect(() => { if (me) load(); }, [me]);
 
-  /* ---------- REALTIME ---------- */
+  /* ---- REALTIME ---- */
   useEffect(() => {
     if (!me) return;
     const ch = supabase
@@ -151,19 +147,18 @@ export default function TasksTodayPage() {
     return () => supabase.removeChannel(ch);
   }, [me, load]);
 
-  /* ---------- DERIVED ---------- */
+  /* ---- DERIVED ---- */
   const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
   const doneToday = useMemo(() => {
     const today = nyToday();
     return (tasks || []).filter(t => t.status === 'done' && t.due_date === today);
   }, [tasks]);
-
   const isManagerMe = useMemo(() => {
     const r = String(myProfile?.role || '').toLowerCase();
     return r === 'admin' || r === 'manager';
   }, [myProfile?.role]);
 
-  /* ---------- ACTIONS ---------- */
+  /* ---- ACTIONS ---- */
   const toggleStatus = async (t) => {
     const next = t.status === 'active' ? 'done' : 'active';
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, status: next } : x));
@@ -175,10 +170,8 @@ export default function TasksTodayPage() {
     await load();
   };
 
-  // Кнопка «Сделать комментарий активным»: флаг is_active у комментария
   const pinComment = async (comment) => {
     if (!comment?.id) return;
-    // снимаем активность со всех комментов таска, активируем выбранный
     const taskId = comment.task_id;
     try {
       await supabase.from('task_comments').update({ is_active: false }).eq('task_id', taskId);
@@ -190,11 +183,10 @@ export default function TasksTodayPage() {
     }
   };
 
-  // Добавить комментарий; если задача "неоплата" и я менеджер — закрываем задачу
   const addComment = async (task, text) => {
     if (!text?.trim() || !me) return;
     const body = text.trim();
-    // локально отрисуем мгновенно
+    // быстрый tmp для UX
     const tempId = `tmp_${Math.random().toString(36).slice(2)}`;
     const tmp = {
       id: tempId, task_id: task.id, body, is_active: false,
@@ -213,11 +205,10 @@ export default function TasksTodayPage() {
       .insert({ task_id: task.id, body, author_id: me.id, is_active: false });
     if (error) {
       console.error('addComment error:', error?.message || error);
-      // можно откатить tmp, но оставим лайтово
       return;
     }
 
-    // ЛОГИКА: неоплата закрывается только после комментария МЕНЕДЖЕРА/АДМИНА
+    // неоплата закрывается после комментария менеджера/админа
     if (isUnpaidTask(task) && isManagerMe && task.status === 'active') {
       await supabase.from('tasks')
         .update({ status: 'done', updated_at: new Date().toISOString(), due_date: nyToday() })
@@ -237,7 +228,7 @@ export default function TasksTodayPage() {
         </div>
       </div>
 
-      {/* АКТИВНЫЕ */}
+      {/* Активные */}
       <div style={BOX}>
         <div style={{ ...H, margin: 0 }}>Активные</div>
         <div style={{ display: 'grid', gap: 10 }}>
@@ -257,7 +248,7 @@ export default function TasksTodayPage() {
         </div>
       </div>
 
-      {/* ЗАВЕРШЁННЫЕ СЕГОДНЯ */}
+      {/* Завершённые (сегодня) */}
       <div style={BOX}>
         <div style={{ ...H, margin: 0 }}>Завершённые (сегодня)</div>
         <div style={{ display: 'grid', gap: 10 }}>
@@ -288,7 +279,7 @@ export default function TasksTodayPage() {
   );
 }
 
-/* ========== SMALL PARTS ========== */
+/* ================== PARTS ================== */
 
 function PriBadge({ p }) {
   const map = { low: '#d1fae5', normal: '#e5e7eb', high: '#fee2e2' };
@@ -318,9 +309,19 @@ function TagList({ tags }) {
   );
 }
 
+/* кликабельная ссылка на карточку заявки */
+function JobLink({ id, number }) {
+  if (!id) return null;
+  const href = `#/jobs/${id}`; // поменяй, если у тебя другой роут
+  return (
+    <a href={href} style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}>
+      Заявка #{number || String(id).slice(0, 8)}
+    </a>
+  );
+}
+
 function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinComment }) {
   const [txt, setTxt] = useState('');
-
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'start' }}>
@@ -335,14 +336,14 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
           </div>
           {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
           {(task.job_number || task.job_id) && (
-            <div style={{ fontSize: 12, color: '#2563eb' }}>
-              Заявка #{task.job_number || String(task.job_id).slice(0, 8)}
+            <div>
+              <JobLink id={task.job_id} number={task.job_number} />
             </div>
           )}
           <TagList tags={task.tags} />
           {isUnpaidTask(task) && task.status === 'active' && (
             <div style={{ fontSize: 12, color: '#92400e' }}>
-              ⏳ Задача по неоплате закрывается автоматически после комментария <b>менеджера/админа</b>.
+              ⏳ Неоплата закроется автоматически после комментария <b>менеджера/админа</b>.
             </div>
           )}
         </div>
@@ -392,26 +393,38 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
   );
 }
 
-/* ========== CREATE MODAL ========== */
+/* ================== CREATE MODAL ================== */
 function CreateTaskModal({ me, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
   const [jobId, setJobId] = useState('');
   const [jobsList, setJobsList] = useState([]);
   const [priority, setPriority] = useState('normal');
-  const [type, setType] = useState('general');
-  const [dateStr, setDateStr] = useState(dayjs().tz('America/New_York').format('YYYY-MM-DD'));
+  const [type, setType] = useState('general'); // general | unpaid
+  const [dateStr, setDateStr] = useState(nyToday());
   const [saving, setSaving] = useState(false);
 
-  // загрузка активных работ
+  // подгрузка активных работ (если пусто из-за статусов/RLS — берём последние 200 любых)
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase
+      let { data } = await supabase
         .from('jobs')
-        .select('id, job_number, client_name, job_status')
-        .not('job_status', 'eq', 'Completed')
-        .order('job_number', { ascending: false });
-      if (!error && data) setJobsList(data);
+        .select('id, job_number, client_name, job_status, updated_at')
+        .in('job_status', ACTIVE_JOB_STATUSES)
+        .order('updated_at', { ascending: false })
+        .limit(200);
+
+      if (!data || data.length === 0) {
+        const res = await supabase
+          .from('jobs')
+          .select('id, job_number, client_name, job_status, updated_at')
+          .order('updated_at', { ascending: false })
+          .limit(200);
+        data = res.data || [];
+      }
+
+      const list = (data || []).sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+      setJobsList(list);
     })();
   }, []);
 
@@ -419,13 +432,16 @@ function CreateTaskModal({ me, onClose, onCreated }) {
     if (!me) return;
     setSaving(true);
     try {
-      const { data: jobData } = await supabase
-        .from('jobs')
-        .select('job_number')
-        .eq('id', jobId)
-        .maybeSingle();
+      let jobNumber = null;
+      if (jobId) {
+        const { data: jobData } = await supabase
+          .from('jobs')
+          .select('job_number')
+          .eq('id', jobId)
+          .maybeSingle();
+        jobNumber = jobData?.job_number ?? null;
+      }
 
-      const jobNumber = jobData?.job_number || null;
       await supabase.from('tasks').insert({
         title: (title || 'Задача').trim(),
         details: details.trim() || null,
@@ -435,14 +451,18 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         job_number: jobNumber,
         due_date: dateStr,
         created_by: me.id,
+        assignee_id: null,
         priority,
         tags: type === 'unpaid' ? ['unpaid', 'payment'] : [],
+        reminder_at: null,
+        remind_every_minutes: null,
+        last_reminded_at: null,
       });
 
       onCreated?.();
       onClose?.();
     } catch (e) {
-      console.error('CreateTaskModal save error:', e.message);
+      console.error('CreateTask save error:', e?.message || e);
     } finally {
       setSaving(false);
     }
@@ -473,7 +493,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
               <option value="">Без заявки</option>
               {jobsList.map(j => (
                 <option key={j.id} value={j.id}>
-                  #{j.job_number} — {j.client_name || 'Без клиента'}
+                  #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.job_status || '—'}
                 </option>
               ))}
             </select>
