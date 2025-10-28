@@ -349,7 +349,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         list = (data || []).map(j => ({
           id: j.id,
           job_number: j.job_number ?? null,
-          job_status: j.job_status ?? '',
+          status: j.status ?? '',
           client_name: j.client_name || '',
           updated_at: j.updated_at,
         }));
@@ -357,13 +357,13 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         // fallback без связей
         const r = await supabase
           .from('jobs')
-          .select('id, job_number, job_status, updated_at')
+          .select('id, job_number, status, updated_at')
           .order('updated_at', { ascending: false })
           .limit(300);
         list = (r.data || []).map(j => ({
           id: j.id,
           job_number: j.job_number ?? null,
-          job_status: j.job_status ?? '',
+          status: j.status ?? '',
           client_name: '',
           updated_at: j.updated_at,
         }));
@@ -440,7 +440,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
                 ? <option disabled>Заявок не найдено</option>
                 : jobsList.map(j => (
                     <option key={j.id} value={j.id}>
-                      #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.job_status || '—'}
+                      #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.status || '—'}
                     </option>
                   ))
               }
