@@ -726,19 +726,21 @@ export default function JobDetailsPage() {
 
   // Delete file (edge auth + fallback)
   const delPhoto = async (name) => {
-    if (!window.confirm('Delete file?')) return;
-    try {
-      await ('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
-      await loadPhotos();
-    } catch (e) {
-      const { error } = await storage().remove([`${jobId}/${name}`]);
-      if (error) {
-        alert(`Failed to delete file: ${e.message || error.message || 'error'}`);
-        return;
-      }
-      await loadPhotos();
+  if (!window.confirm('Delete file?')) return;
+  try {
+    await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
+    await loadPhotos();
+  } catch (e) {
+    // fallback: прямое удаление из Storage (если есть права RLS)
+    const { error } = await storage().remove([`${jobId}/${name}`]);
+    if (error) {
+      alert(`Failed to delete file: ${e.message || error.message || 'error'}`);
+      return;
     }
-  };
+    await loadPhotos();
+  }
+};
+
 
   const toggleAllPhotos = (checkedAll) => {
     setChecked(checkedAll ? Object.fromEntries(photos.map((p) => [p.name, true])) : {});
@@ -843,26 +845,42 @@ export default function JobDetailsPage() {
   };
 
   const deleteInvoice = async (item) => {
-    const fileName = item?.name || (item?.invoice_no ? `invoice_${item.invoice_no}.pdf` : null);
-    const key = fileName ? `${jobId}/${fileName}` : null;
+  const invoiceNo = item?.invoice_no != null ? String(item.invoice_no) : null;
+  const fileName   = item?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : null);
+  const key        = fileName ? `${jobId}/${fileName}` : null;
 
-    if (!window.confirm(`Delete invoice${item?.invoice_no ? ' #' + item.invoice_no : ''}?`)) return;
+  if (!window.confirm(`Delete invoice${invoiceNo ? ' #' + invoiceNo : ''}?`)) return;
 
-    try {
-      await ('admin-delete-invoice-bundle', {
-        bucket: INVOICES_BUCKET,
-        key,
-        db_id: item?.db_id || null,
-        job_id: jobId,
-        invoice_no: item?.invoice_no != null ? Number(item.invoice_no) : null,
-      });
-    } catch (e) {
-      alert(`Failed to delete invoice: ${e.message || e}`);
-      return;
+  try {
+    // 1) Пытаемся удалить PDF через Edge-функцию admin-delete-invoice
+    await callEdgeAuth('admin-delete-invoice', {
+      bucket: INVOICES_BUCKET,
+      key,                 // "<jobId>/invoice_123.pdf"
+    });
+  } catch (e) {
+    // Фоллбек — если Edge по какой-то причине не сработал, пробуем сами
+    try { if (key) await invStorage().remove([key]); } catch {}
+  }
+
+  // 2) Уберём запись из БД (если она есть)
+  try {
+    if (item?.db_id) {
+      await supabase.from('invoices').delete().eq('id', item.db_id);
+    } else if (invoiceNo) {
+      await supabase.from('invoices')
+        .delete()
+        .eq('job_id', jobId)
+        .eq('invoice_no', Number(invoiceNo));
     }
+  } catch (e) {
+    // Не критично: в худшем случае просто останется “висячая” запись,
+    // но в UI после обновления её уже не будет, если файла нет и записи не было.
+    console.warn('DB cleanup warn:', e?.message || e);
+  }
 
-    await loadInvoices();
-  };
+  await loadInvoices();
+};
+
 
   const createInvoice = () => {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
@@ -1486,3 +1504,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
