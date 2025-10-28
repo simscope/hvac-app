@@ -844,25 +844,38 @@ export default function JobDetailsPage() {
     URL.revokeObjectURL(url);
   };
 
-  const deleteInvoice = async (item) => {
+ const deleteInvoice = async (item) => {
   const invoiceNo = item?.invoice_no != null ? String(item.invoice_no) : null;
   const fileName   = item?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : null);
-  const key        = fileName ? `${jobId}/${fileName}` : null;
+  const path       = fileName ? `${jobId}/${fileName}` : null;   // <-- path!
 
   if (!window.confirm(`Delete invoice${invoiceNo ? ' #' + invoiceNo : ''}?`)) return;
 
+  let storageOk = false;
+
+  // 1) Пытаемся удалить PDF через Edge (используем path, как в admin-delete-photo)
   try {
-    // 1) Пытаемся удалить PDF через Edge-функцию admin-delete-invoice
     await callEdgeAuth('admin-delete-invoice', {
       bucket: INVOICES_BUCKET,
-      key,                 // "<jobId>/invoice_123.pdf"
+      path,                                // <-- было key
     });
+    storageOk = true;
   } catch (e) {
-    // Фоллбек — если Edge по какой-то причине не сработал, пробуем сами
-    try { if (key) await invStorage().remove([key]); } catch {}
+    console.warn('Edge delete failed:', e?.message || e);
   }
 
-  // 2) Уберём запись из БД (если она есть)
+  // 1b) Фоллбек — прямое удаление из Storage
+  if (!storageOk && path) {
+    try {
+      const { error } = await invStorage().remove([path]);
+      if (!error) storageOk = true;
+      else console.warn('Storage remove error:', error.message || error);
+    } catch (e) {
+      console.warn('Storage remove exception:', e?.message || e);
+    }
+  }
+
+  // 2) Чистим запись в БД (если есть)
   try {
     if (item?.db_id) {
       await supabase.from('invoices').delete().eq('id', item.db_id);
@@ -873,14 +886,15 @@ export default function JobDetailsPage() {
         .eq('invoice_no', Number(invoiceNo));
     }
   } catch (e) {
-    // Не критично: в худшем случае просто останется “висячая” запись,
-    // но в UI после обновления её уже не будет, если файла нет и записи не было.
     console.warn('DB cleanup warn:', e?.message || e);
   }
 
   await loadInvoices();
-};
 
+  if (!storageOk) {
+    alert('PDF не удалён из хранилища. Проверь права/функцию. Смотри консоль для деталей.');
+  }
+};
 
   const createInvoice = () => {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
@@ -1504,4 +1518,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
