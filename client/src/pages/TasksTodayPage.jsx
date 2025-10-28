@@ -354,17 +354,17 @@ function CreateTaskModal({ me, onClose, onCreated }) {
 
   const buildClientLabel = (cli) => {
     if (!cli) return 'Без клиента';
-    const nm = cli.full_name || cli.name || '';
+    const nm = cli.full_name || '';
     const comp = cli.company ? ` (${cli.company})` : '';
     const label = (nm + comp).trim();
     return label || 'Без клиента';
-    };
+  };
 
   // Загружаем ТОЛЬКО активные и НЕархивные заявки + клиент
   useEffect(() => {
     (async () => {
       try {
-        const { data: jobsRaw, error: jErr } = await supabase
+        const { data: withClient, error } = await supabase
           .from('jobs')
           .select(`
             id,
@@ -372,21 +372,29 @@ function CreateTaskModal({ me, onClose, onCreated }) {
             status,
             archived_at,
             updated_at,
-            client_id,
-            clients:client_id ( full_name, name, company )
+            clients:client_id ( full_name, company )
           `)
           .is('archived_at', null)
           .order('updated_at', { ascending: false })
           .limit(600);
 
-        if (jErr) throw jErr;
+        let rows = withClient;
+        if (error) throw error;
 
-        const activeJobs = (jobsRaw || []).filter(j => {
-          const s = String(j.status || '').trim().toLowerCase();
-          return s && !INACTIVE.has(s);
-        });
+        // Если пусто (например, из-за RLS на clients), берём без связи
+        if (!rows || rows.length === 0) {
+          const { data: plain, error: e2 } = await supabase
+            .from('jobs')
+            .select('id, job_number, status, archived_at, updated_at')
+            .is('archived_at', null)
+            .order('updated_at', { ascending: false })
+            .limit(600);
+          if (e2) throw e2;
+          rows = plain?.map(j => ({ ...j, clients: null })) ?? [];
+        }
 
-        const list = activeJobs
+        const list = (rows || [])
+          .filter(j => !INACTIVE.has(String(j.status || '').toLowerCase()))
           .map(j => ({
             id: j.id,
             job_number: j.job_number ?? null,
@@ -399,7 +407,29 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         setJobsList(list);
       } catch (e) {
         console.error('Active non-archived jobs load error:', e?.message || e);
-        setJobsList([]);
+        try {
+          const { data: plain } = await supabase
+            .from('jobs')
+            .select('id, job_number, status, archived_at, updated_at')
+            .is('archived_at', null)
+            .order('updated_at', { ascending: false })
+            .limit(600);
+
+          const list = (plain || [])
+            .filter(j => !INACTIVE.has(String(j.status || '').toLowerCase()))
+            .map(j => ({
+              id: j.id,
+              job_number: j.job_number ?? null,
+              status: j.status ?? '',
+              client_name: 'Без клиента',
+              updated_at: j.updated_at,
+            }))
+            .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+
+          setJobsList(list);
+        } catch {
+          setJobsList([]);
+        }
       }
     })();
   }, []);
