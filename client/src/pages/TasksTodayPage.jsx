@@ -397,68 +397,52 @@ function CreateTaskModal({ me, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
   const [jobId, setJobId] = useState('');
-  const [jobNumber, setJobNumber] = useState('');
+  const [jobsList, setJobsList] = useState([]);
   const [priority, setPriority] = useState('normal');
-  const [type, setType] = useState('general'); // general | unpaid
-  const [tags, setTags] = useState('');        // comma
-  const [dateStr, setDateStr] = useState(nyToday());
-  const [timeStr, setTimeStr] = useState('');
-  const [repeatMins, setRepeatMins] = useState('');
+  const [type, setType] = useState('general');
+  const [dateStr, setDateStr] = useState(dayjs().tz('America/New_York').format('YYYY-MM-DD'));
   const [saving, setSaving] = useState(false);
 
-  // автозаполнение job_number по job_id (и наоборот) — по возможности
+  // загрузка активных работ
   useEffect(() => {
-    let alive = true;
     (async () => {
-      const id = (jobId || '').trim();
-      if (!id) return;
-      const { data, error } = await supabase.from('jobs').select('id, job_number').eq('id', id).maybeSingle();
-      if (!alive) return;
-      if (!error && !jobNumber && data?.job_number != null) setJobNumber(String(data.job_number));
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('id, job_number, client_name, job_status')
+        .not('job_status', 'eq', 'Completed')
+        .order('job_number', { ascending: false });
+      if (!error && data) setJobsList(data);
     })();
-    return () => { alive = false; };
-  }, [jobId]);
+  }, []);
 
   const save = async () => {
     if (!me) return;
     setSaving(true);
     try {
-      let jId = (jobId || '').trim() || null;
-      let jNum = (jobNumber || '').trim() || null;
+      const { data: jobData } = await supabase
+        .from('jobs')
+        .select('job_number')
+        .eq('id', jobId)
+        .maybeSingle();
 
-      if (!jId && jNum) {
-        const { data } = await supabase.from('jobs').select('id, job_number').eq('job_number', jNum).maybeSingle();
-        if (data?.id) jId = data.id;
-      }
-      if (jId && !jNum) {
-        const { data } = await supabase.from('jobs').select('job_number').eq('id', jId).maybeSingle();
-        if (data?.job_number != null) jNum = String(data.job_number);
-      }
-
-      const reminder_at = timeStr ? toNYTzISO(dateStr, timeStr) : null;
-      const tagsArr = tags ? tags.split(',').map(s => s.trim()).filter(Boolean) : [];
-
+      const jobNumber = jobData?.job_number || null;
       await supabase.from('tasks').insert({
         title: (title || 'Задача').trim(),
         details: details.trim() || null,
         status: 'active',
         type,
-        job_id: jId,
-        job_number: jNum || null,
+        job_id: jobId || null,
+        job_number: jobNumber,
         due_date: dateStr,
         created_by: me.id,
-        assignee_id: null,
         priority,
-        tags: tagsArr,
-        reminder_at,
-        remind_every_minutes: repeatMins ? Number(repeatMins) : null,
-        last_reminded_at: null,
+        tags: type === 'unpaid' ? ['unpaid', 'payment'] : [],
       });
 
       onCreated?.();
       onClose?.();
     } catch (e) {
-      console.error('CreateTask save error:', e?.message || e);
+      console.error('CreateTaskModal save error:', e.message);
     } finally {
       setSaving(false);
     }
@@ -466,32 +450,35 @@ function CreateTaskModal({ me, onClose, onCreated }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'grid', placeItems: 'center', zIndex: 50 }}>
-      <div style={{ width: 650, background: '#fff', borderRadius: 16, padding: 16, display: 'grid', gap: 12 }}>
+      <div style={{ width: 600, background: '#fff', borderRadius: 16, padding: 16, display: 'grid', gap: 12 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
           <div style={{ fontWeight: 700, fontSize: 18 }}>Новая задача</div>
           <button style={BTN_L} onClick={onClose}>Закрыть</button>
         </div>
 
-        <div style={{ display: 'grid', gap: 8 }}>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Что надо сделать</div>
-            <input style={INPUT} value={title} onChange={e => setTitle(e.target.value)} placeholder="Например: Связаться с клиентом по оплате" />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Детали</div>
-            <textarea style={TA} value={details} onChange={e => setDetails(e.target.value)} placeholder="Коротко: что сделать, кому позвонить, суммы, сроки…" />
-          </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Что нужно сделать</div>
+          <input style={INPUT} value={title} onChange={e => setTitle(e.target.value)} placeholder="Например: связаться с клиентом" />
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Детали</div>
+          <textarea style={TA} value={details} onChange={e => setDetails(e.target.value)} placeholder="Описание задачи..." />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
           <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>UUID заявки (опц.)</div>
-            <input style={INPUT} value={jobId} onChange={e => setJobId(e.target.value)} placeholder="UUID заявки" />
+            <div style={{ fontSize: 12, color: '#6b7280' }}>Номер заявки</div>
+            <select style={INPUT} value={jobId} onChange={e => setJobId(e.target.value)}>
+              <option value="">Без заявки</option>
+              {jobsList.map(j => (
+                <option key={j.id} value={j.id}>
+                  #{j.job_number} — {j.client_name || 'Без клиента'}
+                </option>
+              ))}
+            </select>
           </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Номер заявки (опц.)</div>
-            <input style={INPUT} value={jobNumber} onChange={e => setJobNumber(e.target.value)} placeholder="Напр. 1024" />
-          </div>
+
           <div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Тип</div>
             <select style={INPUT} value={type} onChange={e => setType(e.target.value)}>
@@ -499,9 +486,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
               <option value="unpaid">Неоплата</option>
             </select>
           </div>
-        </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
           <div>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Приоритет</div>
             <select style={INPUT} value={priority} onChange={e => setPriority(e.target.value)}>
@@ -510,25 +495,11 @@ function CreateTaskModal({ me, onClose, onCreated }) {
               <option value="high">high</option>
             </select>
           </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Дата (NY)</div>
-            <input type="date" style={INPUT} value={dateStr} onChange={e => setDateStr(e.target.value)} />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Время напоминания (опц.)</div>
-            <input type="time" style={INPUT} value={timeStr} onChange={e => setTimeStr(e.target.value)} placeholder="09:30" />
-          </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Повтор, мин (опц.)</div>
-            <input type="number" min="5" step="5" style={INPUT} value={repeatMins} onChange={e => setRepeatMins(e.target.value)} placeholder="Напр. 30" />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: '#6b7280' }}>Теги (через запятую)</div>
-            <input style={INPUT} value={tags} onChange={e => setTags(e.target.value)} placeholder="unpaid, звонок, инвойс" />
-          </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Дата (NY)</div>
+          <input type="date" style={INPUT} value={dateStr} onChange={e => setDateStr(e.target.value)} />
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12 }}>
