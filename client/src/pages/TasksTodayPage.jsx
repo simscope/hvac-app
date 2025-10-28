@@ -30,7 +30,7 @@ const isUnpaidTask = (t) => {
   return tags.some((s) => String(s).toLowerCase() === 'unpaid');
 };
 
-/* какие статусы считаем «активными» работами для селекта */
+/* какие статусы считаем «активными» работами для селекта (можно не фильтровать) */
 const ACTIVE_JOB_STATUSES = [
   'New',
   'Diagnose',
@@ -403,24 +403,39 @@ function CreateTaskModal({ me, onClose, onCreated }) {
   const [dateStr, setDateStr] = useState(nyToday());
   const [saving, setSaving] = useState(false);
 
-  // загрузка активных работ; если пусто — берём последние 200 любых
+  // УСТОЙЧИВАЯ загрузка заявок с клиентом (FK), с фоллбеком
   useEffect(() => {
     (async () => {
-      let { data } = await supabase
+      // Пытаемся взять последние 300 с клиентом через связь
+      let q = supabase
         .from('jobs')
-        .select('id, job_number, client_name, job_status, updated_at')
-        .in('job_status', ACTIVE_JOB_STATUSES)
+        .select('id, job_number, job_status, updated_at, clients:client_id (full_name, name)')
         .order('updated_at', { ascending: false })
-        .limit(200);
-      if (!data || data.length === 0) {
-        const res = await supabase
+        .limit(300);
+
+      // Если хочешь фильтровать по активным статусам — раскомментируй:
+      // q = q.in('job_status', ACTIVE_JOB_STATUSES);
+
+      let { data, error } = await q;
+
+      // Фоллбек: без связей, без фильтров — лишь бы показать список
+      if (error || !data || data.length === 0) {
+        const r = await supabase
           .from('jobs')
-          .select('id, job_number, client_name, job_status, updated_at')
+          .select('id, job_number, job_status, updated_at')
           .order('updated_at', { ascending: false })
-          .limit(200);
-        data = res.data || [];
+          .limit(300);
+        data = r.data || [];
       }
-      const list = (data || []).sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+
+      const list = (data || []).map(j => ({
+        id: j.id,
+        job_number: j.job_number ?? null,
+        job_status: j.job_status ?? '',
+        client_name: j.clients?.full_name || j.clients?.name || '',
+        updated_at: j.updated_at,
+      })).sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+
       setJobsList(list);
     })();
   }, []);
@@ -488,11 +503,15 @@ function CreateTaskModal({ me, onClose, onCreated }) {
             <div style={{ fontSize: 12, color: '#6b7280' }}>Номер заявки</div>
             <select style={INPUT} value={jobId} onChange={e => setJobId(e.target.value)}>
               <option value="">Без заявки</option>
-              {jobsList.map(j => (
-                <option key={j.id} value={j.id}>
-                  #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.job_status || '—'}
-                </option>
-              ))}
+              {jobsList.length === 0 ? (
+                <option disabled>Заявок не найдено</option>
+              ) : (
+                jobsList.map(j => (
+                  <option key={j.id} value={j.id}>
+                    #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.job_status || '—'}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
