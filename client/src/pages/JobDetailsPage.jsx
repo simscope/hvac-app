@@ -844,56 +844,45 @@ export default function JobDetailsPage() {
     URL.revokeObjectURL(url);
   };
 
- const deleteInvoice = async (item) => {
-  const invoiceNo = item?.invoice_no != null ? String(item.invoice_no) : null;
-  const fileName   = item?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : null);
-  const path       = fileName ? `${jobId}/${fileName}` : null;   // <-- path!
+const deleteInvoice = async (item) => {
+  // определяем номер инвойса и ключ файла
+  const invoiceNoStr = item?.invoice_no != null ? String(item.invoice_no) : null;
+  const invoiceNoNum = invoiceNoStr ? Number(invoiceNoStr) : null;
+  const fileName = item?.name || (invoiceNoStr ? `invoice_${invoiceNoStr}.pdf` : null);
+  const key = fileName ? `${jobId}/${fileName}` : null;
 
-  if (!window.confirm(`Delete invoice${invoiceNo ? ' #' + invoiceNo : ''}?`)) return;
+  if (!window.confirm(`Delete invoice${invoiceNoStr ? ' #' + invoiceNoStr : ''}?`)) return;
 
-  let storageOk = false;
-
-  // 1) Пытаемся удалить PDF через Edge (используем path, как в admin-delete-photo)
   try {
+    // 1) Нормальный путь — через Edge: она сама удалит файл и запись в БД
     await callEdgeAuth('admin-delete-invoice', {
-      bucket: INVOICES_BUCKET,
-      path,                                // <-- было key
+      job_id: jobId,                // <-- ОБЯЗАТЕЛЬНО
+      invoice_no: invoiceNoNum,     // <-- ОБЯЗАТЕЛЬНО (число)
+      bucket: INVOICES_BUCKET,      // на случай если функция это использует
+      key,                          // не обязательно, но пусть будет
     });
-    storageOk = true;
   } catch (e) {
     console.warn('Edge delete failed:', e?.message || e);
-  }
 
-  // 1b) Фоллбек — прямое удаление из Storage
-  if (!storageOk && path) {
+    // 2) Фоллбек: удаляем файл из Storage
+    try { if (key) await invStorage().remove([key]); } catch {}
+
+    // 3) Фоллбек: чистим записи из БД
     try {
-      const { error } = await invStorage().remove([path]);
-      if (!error) storageOk = true;
-      else console.warn('Storage remove error:', error.message || error);
-    } catch (e) {
-      console.warn('Storage remove exception:', e?.message || e);
+      if (item?.db_id) {
+        await supabase.from('invoices').delete().eq('id', item.db_id);
+      } else if (invoiceNoNum != null) {
+        await supabase.from('invoices')
+          .delete()
+          .eq('job_id', jobId)
+          .eq('invoice_no', invoiceNoNum);
+      }
+    } catch (e2) {
+      console.warn('DB cleanup warn:', e2?.message || e2);
     }
-  }
-
-  // 2) Чистим запись в БД (если есть)
-  try {
-    if (item?.db_id) {
-      await supabase.from('invoices').delete().eq('id', item.db_id);
-    } else if (invoiceNo) {
-      await supabase.from('invoices')
-        .delete()
-        .eq('job_id', jobId)
-        .eq('invoice_no', Number(invoiceNo));
-    }
-  } catch (e) {
-    console.warn('DB cleanup warn:', e?.message || e);
   }
 
   await loadInvoices();
-
-  if (!storageOk) {
-    alert('PDF не удалён из хранилища. Проверь права/функцию. Смотри консоль для деталей.');
-  }
 };
 
   const createInvoice = () => {
@@ -1518,5 +1507,6 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
