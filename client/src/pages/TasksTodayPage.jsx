@@ -9,7 +9,7 @@ dayjs.extend(utc); dayjs.extend(tz);
 
 const NY = 'America/New_York';
 
-/* ---------------- UI ---------------- */
+/* ---------- UI ---------- */
 const PAGE = { padding: 16, display: 'grid', gap: 12, maxWidth: 1100, margin: '0 auto' };
 const ROW = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 };
 const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
@@ -41,7 +41,7 @@ export default function TasksTodayPage() {
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
-  /* AUTH + PROFILE */
+  /* ----- AUTH + PROFILE ----- */
   useEffect(() => {
     let unsub = null;
     (async () => {
@@ -65,7 +65,7 @@ export default function TasksTodayPage() {
     return () => unsub?.unsubscribe?.();
   }, []);
 
-  /* LOAD (без .or()) */
+  /* ----- LOAD (без .or()) ----- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
@@ -89,6 +89,7 @@ export default function TasksTodayPage() {
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
+      // комментарии
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -97,6 +98,7 @@ export default function TasksTodayPage() {
           .select('id,task_id,body,is_active,author_id,created_at, profiles:author_id (full_name, role)')
           .in('task_id', ids)
           .order('created_at', { ascending: false });
+
         (cs || []).forEach(c => {
           (map[c.task_id] ||= []).push({
             id: c.id,
@@ -122,7 +124,7 @@ export default function TasksTodayPage() {
 
   useEffect(() => { if (me) load(); }, [me]);
 
-  /* REALTIME */
+  /* ----- REALTIME ----- */
   useEffect(() => {
     if (!me) return;
     const ch = supabase
@@ -134,10 +136,16 @@ export default function TasksTodayPage() {
   }, [me, load]);
 
   const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
-  const doneToday = useMemo(() => (tasks || []).filter(t => t.status === 'done' && t.due_date === nyToday()), [tasks]);
-  const isManagerMe = useMemo(() => ['admin','manager'].includes(String(myProfile?.role || '').toLowerCase()), [myProfile?.role]);
+  const doneToday = useMemo(
+    () => (tasks || []).filter(t => t.status === 'done' && t.due_date === nyToday()),
+    [tasks]
+  );
+  const isManagerMe = useMemo(
+    () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
+    [myProfile?.role]
+  );
 
-  /* ACTIONS */
+  /* ----- ACTIONS ----- */
   const toggleStatus = async (t) => {
     const next = t.status === 'active' ? 'done' : 'active';
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, status: next } : x));
@@ -159,7 +167,7 @@ export default function TasksTodayPage() {
     if (!text?.trim() || !me) return;
     const body = text.trim();
 
-    // optimistic
+    // optimistic UI
     const temp = {
       id: `tmp_${Math.random().toString(36).slice(2)}`,
       task_id: task.id, body, is_active: false,
@@ -172,6 +180,7 @@ export default function TasksTodayPage() {
 
     await supabase.from('task_comments').insert({ task_id: task.id, body, author_id: me.id, is_active: false });
 
+    // автозакрытие неоплаты по комменту менеджера/админа
     if (isUnpaidTask(task) && isManagerMe && task.status === 'active') {
       await supabase.from('tasks')
         .update({ status: 'done', updated_at: new Date().toISOString(), due_date: nyToday() })
@@ -185,17 +194,14 @@ export default function TasksTodayPage() {
       <div style={ROW}>
         <h2 style={H}>Задачи ({dayjs().tz(NY).format('DD.MM.YYYY')})</h2>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            style={BTN_L}
-            onClick={async () => { await supabase.rpc('ensure_unpaid_tasks_from_view').catch(()=>{}); load(); }}
-            disabled={loading}
-          >
+          <button style={BTN_L} onClick={() => load()} disabled={loading}>
             {loading ? 'Обновляю…' : 'Обновить'}
           </button>
           <button style={BTN} onClick={() => setShowCreate(true)}>+ Новая задача</button>
         </div>
       </div>
 
+      {/* Активные */}
       <div style={BOX}>
         <div style={{ ...H, margin: 0 }}>Активные</div>
         <div style={{ display: 'grid', gap: 10 }}>
@@ -214,6 +220,7 @@ export default function TasksTodayPage() {
         </div>
       </div>
 
+      {/* Завершённые сегодня */}
       <div style={BOX}>
         <div style={{ ...H, margin: 0 }}>Завершённые (сегодня)</div>
         <div style={{ display: 'grid', gap: 10 }}>
@@ -243,7 +250,7 @@ export default function TasksTodayPage() {
   );
 }
 
-/* ---------- parts ---------- */
+/* ---------- helpers ---------- */
 
 const PriBadge = ({ p }) => {
   const map = { low: '#d1fae5', normal: '#e5e7eb', high: '#fee2e2' };
@@ -296,7 +303,9 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
             </div>
           )}
         </div>
-        <button style={BTN_L} onClick={onToggle}>{task.status === 'active' ? 'Завершить' : 'В активные'}</button>
+        <button style={BTN_L} onClick={onToggle}>
+          {task.status === 'active' ? 'Завершить' : 'В активные'}
+        </button>
       </div>
 
       <div style={{ display: 'grid', gap: 8 }}>
@@ -328,7 +337,7 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
   );
 }
 
-/* ================== Create Modal ================== */
+/* ================== Create Modal (FRONT-ONLY) ================== */
 function CreateTaskModal({ me, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
@@ -339,37 +348,57 @@ function CreateTaskModal({ me, onClose, onCreated }) {
   const [dateStr, setDateStr] = useState(nyToday());
   const [saving, setSaving] = useState(false);
 
-  // robust: сначала RPC (security definer), потом фоллбек
+  /**
+   * ФРОНТ-ЗАГРУЗКА АКТИВНЫХ ЗАЯВОК:
+   * 1) jobs (только активные) -> берём client_id
+   * 2) clients по списку id -> получаем имена
+   * 3) мержим на фронте
+   */
   useEffect(() => {
     (async () => {
-      let list = [];
       try {
-        const { data, error } = await supabase.rpc('jobs_for_task_dropdown');
-        if (error) throw error;
-        list = (data || []).map(j => ({
-          id: j.id,
-          job_number: j.job_number ?? null,
-          status: j.status ?? '',
-          client_name: j.client_name || '',
-          updated_at: j.updated_at,
-        }));
-      } catch {
-        // fallback без связей
-        const r = await supabase
+        const finishedList = '("Completed","Завершено","completed","Отказ","Canceled","Cancelled")';
+
+        // 1) только активные работы
+        const { data: jobs, error: jErr } = await supabase
           .from('jobs')
-          .select('id, job_number, status, updated_at')
+          .select('id, job_number, status, client_id, updated_at')
+          .not('status', 'in', finishedList)
           .order('updated_at', { ascending: false })
-          .limit(300);
-        list = (r.data || []).map(j => ({
+          .limit(400);
+        if (jErr) throw jErr;
+
+        // 2) тянем клиентов (если RLS позволит)
+        const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean)));
+        let clientsMap = {};
+        if (clientIds.length) {
+          const { data: cli, error: cErr } = await supabase
+            .from('clients')
+            .select('id, full_name, name')
+            .in('id', clientIds);
+          if (!cErr && Array.isArray(cli)) {
+            cli.forEach(c => { clientsMap[c.id] = c.full_name || c.name || ''; });
+          } else {
+            console.warn('clients read blocked by RLS or error:', cErr?.message || cErr);
+          }
+        }
+
+        // 3) мержим
+        const list = (jobs || []).map(j => ({
           id: j.id,
           job_number: j.job_number ?? null,
           status: j.status ?? '',
-          client_name: '',
+          client_name: clientsMap[j.client_id] || '',
           updated_at: j.updated_at,
-        }));
+        }))
+        // упорядочим по номеру, если он есть
+        .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+
+        setJobsList(list);
+      } catch (e) {
+        console.error('Active jobs dropdown load error:', e?.message || e);
+        setJobsList([]);
       }
-      list.sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
-      setJobsList(list);
     })();
   }, []);
 
@@ -437,7 +466,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
             <select style={INPUT} value={jobId} onChange={e => setJobId(e.target.value)}>
               <option value="">Без заявки</option>
               {jobsList.length === 0
-                ? <option disabled>Заявок не найдено</option>
+                ? <option disabled>Активных заявок нет</option>
                 : jobsList.map(j => (
                     <option key={j.id} value={j.id}>
                       #{j.job_number ?? '—'} • {j.client_name || 'Без клиента'} • {j.status || '—'}
