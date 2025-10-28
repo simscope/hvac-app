@@ -844,46 +844,60 @@ export default function JobDetailsPage() {
     URL.revokeObjectURL(url);
   };
 
+// --- replace whole deleteInvoice with this version ---
 const deleteInvoice = async (item) => {
-  // определяем номер инвойса и ключ файла
+  // 0) sanity
+  if (!item) return;
+
+  // 1) определяем номер инвойса и имя файла
   const invoiceNoStr = item?.invoice_no != null ? String(item.invoice_no) : null;
   const invoiceNoNum = invoiceNoStr ? Number(invoiceNoStr) : null;
   const fileName = item?.name || (invoiceNoStr ? `invoice_${invoiceNoStr}.pdf` : null);
-  const key = fileName ? `${jobId}/${fileName}` : null;
 
   if (!window.confirm(`Delete invoice${invoiceNoStr ? ' #' + invoiceNoStr : ''}?`)) return;
 
+  // 2) пробуем удалить через Edge (она сама чистит Storage + БД)
+  let edgeOk = false;
   try {
-    const fileName = inv?.name || `invoice_${invoiceNo}.pdf`;
-await callEdgeAuth('admin-delete-invoice', {
-  bucket: INVOICES_BUCKET,
-  job_id: jobId,
-  invoice_no: Number(invoiceNo),
-  file_name: fileName, // <-- достаточно; функция сама соберёт key
-});
+    await callEdgeAuth('admin-delete-invoice', {
+      bucket: INVOICES_BUCKET,
+      job_id: jobId,
+      invoice_no: invoiceNoStr,   // строкой — как ждёт Edge
+      file_name: fileName,        // опционально; Edge сама соберёт путь <jobId>/<file_name>
+    });
+    edgeOk = true;
   } catch (e) {
     console.warn('Edge delete failed:', e?.message || e);
+  }
 
-    // 2) Фоллбек: удаляем файл из Storage
-    try { if (key) await invStorage().remove([key]); } catch {}
-
-    // 3) Фоллбек: чистим записи из БД
+  // 3) Фоллбек: чистим руками, если Edge не смогла
+  if (!edgeOk) {
+    // 3a) PDF в Storage
+    try {
+      if (fileName) await invStorage().remove([`${jobId}/${fileName}`]);
+    } catch (e) {
+      console.warn('Storage fallback delete warn:', e?.message || e);
+    }
+    // 3b) запись в БД
     try {
       if (item?.db_id) {
         await supabase.from('invoices').delete().eq('id', item.db_id);
       } else if (invoiceNoNum != null) {
-        await supabase.from('invoices')
+        await supabase
+          .from('invoices')
           .delete()
           .eq('job_id', jobId)
           .eq('invoice_no', invoiceNoNum);
       }
-    } catch (e2) {
-      console.warn('DB cleanup warn:', e2?.message || e2);
+    } catch (e) {
+      console.warn('DB cleanup warn:', e?.message || e);
     }
   }
 
+  // 4) обновить список
   await loadInvoices();
 };
+
 
   const createInvoice = () => {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
@@ -1507,6 +1521,7 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
 
 
