@@ -145,7 +145,6 @@ export default function TasksTodayPage() {
     () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
     [myProfile?.role]
   );
-  // Только админ
   const isAdminMe = useMemo(
     () => String(myProfile?.role || '').toLowerCase() === 'admin',
     [myProfile?.role]
@@ -159,6 +158,30 @@ export default function TasksTodayPage() {
       .update({ status: next, updated_at: new Date().toISOString(), due_date: nyToday() })
       .eq('id', t.id);
     await load();
+  };
+
+  // удалить целую задачу (только админ)
+  const deleteTask = async (t) => {
+    if (!isAdminMe || !t?.id) return;
+    if (!window.confirm(`Удалить задачу «${t.title || ''}»? Это действие необратимо.`)) return;
+
+    try {
+      // сначала удалим комментарии (если нет CASCADE)
+      await supabase.from('task_comments').delete().eq('task_id', t.id);
+      // затем саму задачу
+      const { error } = await supabase.from('tasks').delete().eq('id', t.id);
+      if (error) throw error;
+
+      // локально убираем без полной перезагрузки
+      setTasks(prev => prev.filter(x => x.id !== t.id));
+      setCommentsByTask(prev => {
+        const map = { ...prev };
+        delete map[t.id];
+        return map;
+      });
+    } catch (e) {
+      alert('Не удалось удалить задачу: ' + (e?.message || 'error'));
+    }
   };
 
   const addComment = async (task, text) => {
@@ -187,25 +210,6 @@ export default function TasksTodayPage() {
     await load();
   };
 
-  // Удаление комментария (только админ)
-  const deleteComment = async (comment) => {
-    if (!isAdminMe || !comment?.id) return;
-    if (!window.confirm('Удалить комментарий?')) return;
-
-    try {
-      const { error } = await supabase.from('task_comments').delete().eq('id', comment.id);
-      if (error) throw error;
-
-      // локально уберём без повторной загрузки
-      setCommentsByTask(prev => {
-        const list = (prev[comment.task_id] || []).filter(c => c.id !== comment.id);
-        return { ...prev, [comment.task_id]: list };
-      });
-    } catch (e) {
-      alert('Не удалось удалить: ' + (e?.message || 'error'));
-    }
-  };
-
   return (
     <div style={PAGE}>
       <div style={ROW}>
@@ -232,7 +236,7 @@ export default function TasksTodayPage() {
                 isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onDeleteComment={deleteComment}
+                onDeleteTask={() => deleteTask(t)}
               />
             ))}
         </div>
@@ -252,7 +256,7 @@ export default function TasksTodayPage() {
                 isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onDeleteComment={deleteComment}
+                onDeleteTask={() => deleteTask(t)}
               />
             ))}
         </div>
@@ -298,7 +302,7 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-function TaskRow({ task, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteComment }) {
+function TaskRow({ task, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteTask }) {
   const [txt, setTxt] = useState('');
 
   return (
@@ -322,35 +326,27 @@ function TaskRow({ task, comments, isManagerMe, isAdminMe, onToggle, onAddCommen
             </div>
           )}
         </div>
+
         <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
           <button style={BTN_L} onClick={onToggle}>
             {task.status === 'active' ? 'Завершить' : 'В активные'}
           </button>
-          {/* Под кнопкой — «Удалить комментарий» НЕ тут; удаление комментов внизу у каждого комментария */}
+          {isAdminMe && (
+            <button style={BTN_DANGER} onClick={onDeleteTask} title="Удалить задачу (только админ)">
+              Удалить
+            </button>
+          )}
         </div>
       </div>
 
       <div style={{ display: 'grid', gap: 8 }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>Комментарии</div>
+
         {(comments || []).map(c => (
-          <div key={c.id} style={{ fontSize: 14, display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 }}>
-            <div>
-              <span style={{ fontWeight: 600 }}>{c.author_name}{c.author_role ? ` (${c.author_role})` : ''}:</span>{' '}
-              {c.body}{' '}
-              <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
-              {c.is_active && <span style={{ marginLeft: 8, fontSize: 12, color: '#2563eb' }}>• активный</span>}
-            </div>
-            <div>
-              {isAdminMe && (
-                <button
-                  style={BTN_DANGER}
-                  onClick={() => onDeleteComment(c)}
-                  title="Удалить комментарий (только админ)"
-                >
-                  Удалить
-                </button>
-              )}
-            </div>
+          <div key={c.id} style={{ fontSize: 14 }}>
+            <span style={{ fontWeight: 600 }}>{c.author_name}{c.author_role ? ` (${c.author_role})` : ''}:</span>{' '}
+            {c.body}{' '}
+            <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
           </div>
         ))}
 
