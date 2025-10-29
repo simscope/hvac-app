@@ -10,16 +10,16 @@ dayjs.extend(utc); dayjs.extend(tz);
 const NY = 'America/New_York';
 
 /* ---------- UI ---------- */
-const PAGE = { padding: 16, display: 'grid', gap: 12, maxWidth: 1100, margin: '0 auto' };
-const ROW = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 };
-const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
-const H = { margin: '6px 0 10px', fontWeight: 700, fontSize: 18 };
-const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #111827', background: '#111827', color: '#fff', cursor: 'pointer' };
+const PAGE  = { padding: 16, display: 'grid', gap: 12, maxWidth: 1100, margin: '0 auto' };
+const ROW   = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 };
+const BOX   = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
+const H     = { margin: '6px 0 10px', fontWeight: 700, fontSize: 18 };
+const BTN   = { padding: '8px 12px', borderRadius: 10, border: '1px solid #111827', background: '#111827', color: '#fff', cursor: 'pointer' };
 const BTN_L = { ...BTN, borderColor: '#d1d5db', background: '#fff', color: '#111827' };
-const BTN_DANGER = { ...BTN_L, borderColor: '#ef4444', color: '#ef4444' };
+const BTN_D = { ...BTN_L, borderColor: '#ef4444', color: '#ef4444' };
 const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 10 };
-const TA = { ...INPUT, minHeight: 90 };
-const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, background: '#fff' };
+const TA    = { ...INPUT, minHeight: 90 };
+const CHIP  = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, background: '#fff' };
 
 const nyToday = () => dayjs().tz(NY).format('YYYY-MM-DD');
 
@@ -39,7 +39,6 @@ export default function TasksTodayPage() {
   const [myProfile, setMyProfile] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [commentsByTask, setCommentsByTask] = useState({});
-  const [jobsById, setJobsById] = useState({}); // id -> {job_number, issue, client_company, client_name}
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -72,7 +71,7 @@ export default function TasksTodayPage() {
     [myProfile?.role]
   );
 
-  /* ----- LOAD (без .or()) + догрузка jobs ----- */
+  /* ----- LOAD (без .or()) ----- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
@@ -96,7 +95,7 @@ export default function TasksTodayPage() {
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
-      // комментарии
+      // ---------- комментарии ----------
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -120,33 +119,50 @@ export default function TasksTodayPage() {
         });
       }
 
-      // jobs info (номер, проблема, клиент)
+      // ---------- информация по заявкам ----------
       let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
         const { data: jobs } = await supabase
           .from('jobs')
-          .select('id, job_number, issue, client_id, clients:client_id ( full_name, company )')
+          .select(`
+            id,
+            job_number,
+            issue,
+            problem,
+            description,
+            details,
+            client_id,
+            clients:client_id ( full_name, company )
+          `)
           .in('id', jobIds);
+
+        const pickIssue = (j) => {
+          const candidates = [j?.issue, j?.problem, j?.description, j?.details];
+          const found = candidates.find(v => typeof v === 'string' && v.trim().length > 0);
+          return found ? found.trim() : '';
+        };
 
         (jobs || []).forEach(j => {
           jobsMap[j.id] = {
             job_number: j.job_number ?? null,
-            issue: j.issue ?? '',
+            issue: pickIssue(j),
             client_company: j?.clients?.company || '',
             client_name: j?.clients?.full_name || '',
           };
         });
       }
 
-      if (mounted.current) {
-        setTasks(t);
-        setCommentsByTask(map);
-        setJobsById(jobsMap);
-      }
+      // приклеим job-info к задачам (для удобства рендера)
+      const withJob = t.map(item => ({
+        ...item,
+        _job_info: item.job_id ? (jobsMap[item.job_id] || null) : null,
+      }));
+
+      if (mounted.current) { setTasks(withJob); setCommentsByTask(map); }
     } catch (e) {
       console.error('[TasksToday] load error:', e?.message || e);
-      if (mounted.current) { setTasks([]); setCommentsByTask({}); setJobsById({}); }
+      if (mounted.current) { setTasks([]); setCommentsByTask({}); }
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -165,7 +181,7 @@ export default function TasksTodayPage() {
     return () => supabase.removeChannel(ch);
   }, [me, load]);
 
-  const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
+  const active    = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
   const doneToday = useMemo(
     () => (tasks || []).filter(t => t.status === 'done' && t.due_date === nyToday()),
     [tasks]
@@ -183,27 +199,15 @@ export default function TasksTodayPage() {
 
   const deleteTask = async (t) => {
     if (!isManagerMe) return;
-    const title = (t?.title || '').trim();
-    const jb = jobsById[t.job_id] || {};
-    const head =
-      `Удалить задачу?\n` +
-      `${title ? `• ${title}\n` : ''}` +
-      `${t.job_number ? `• Заявка #${t.job_number}\n` : ''}` +
-      `${jb.client_company || jb.client_name ? `• ${jb.client_company || ''}${jb.client_company && jb.client_name ? ' • ' : ''}${jb.client_name || ''}\n` : ''}` +
-      `${jb.issue ? `• Проблема: ${jb.issue}\n` : ''}`;
-
-    if (!window.confirm(head)) return;
-
+    const title = t?.title ? ` «${t.title}»` : '';
+    if (!window.confirm(`Удалить задачу${title}? Это действие необратимо.`)) return;
     try {
-      // 1) комментарии
-      await supabase.from('task_comments').delete().eq('task_id', t.id);
-      // 2) сам таск
       await supabase.from('tasks').delete().eq('id', t.id);
     } catch (e) {
-      console.error('delete task failed:', e?.message || e);
-      alert('Не удалось удалить задачу');
+      console.error('delete task error:', e?.message || e);
+    } finally {
+      await load();
     }
-    await load();
   };
 
   const pinComment = async (comment) => {
@@ -261,7 +265,6 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
-                jobInfo={jobsById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
                 onToggle={() => toggleStatus(t)}
@@ -282,7 +285,6 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
-                jobInfo={jobsById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
                 onToggle={() => toggleStatus(t)}
@@ -334,17 +336,18 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-function JobInfoLine({ task, jobInfo }) {
-  if (!task?.job_id && !task?.job_number) return null;
-  const parts = [];
-  if (task.job_id) parts.push(<JobLink key="lnk" id={task.job_id} number={task.job_number} />);
-  if (jobInfo?.client_company) parts.push(<span key="comp"> • {jobInfo.client_company}</span>);
-  if (jobInfo?.client_name) parts.push(<span key="name"> • {jobInfo.client_name}</span>);
-  if (jobInfo?.issue) parts.push(<span key="iss"> • {jobInfo.issue}</span>);
-  return <div style={{ fontSize: 13 }}>{parts}</div>;
-}
+const JobInfoLine = ({ jobId, info }) => {
+  if (!jobId || !info) return null;
+  const pieces = [
+    <JobLink key="lnk" id={jobId} number={info.job_number} />,
+    info.client_company ? ` • ${info.client_company}` : '',
+    info.client_name ? ` • ${info.client_name}` : '',
+    info.issue ? ` • ${info.issue}` : '',
+  ];
+  return <div style={{ fontSize: 13 }}>{pieces}</div>;
+};
 
-function TaskRow({ task, comments, jobInfo, isManagerMe, onToggle, onDelete, onAddComment, onPinComment }) {
+function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment, onPinComment }) {
   const [txt, setTxt] = useState('');
 
   return (
@@ -360,10 +363,9 @@ function TaskRow({ task, comments, jobInfo, isManagerMe, onToggle, onDelete, onA
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
+          {/* Детали / заявка / проблема */}
           {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
-
-          <JobInfoLine task={task} jobInfo={jobInfo} />
-
+          <JobInfoLine jobId={task.job_id} info={task._job_info} />
           <TagList tags={task.tags} />
           {isUnpaidTask(task) && task.status === 'active' && (
             <div style={{ fontSize: 12, color: '#92400e' }}>
@@ -377,9 +379,7 @@ function TaskRow({ task, comments, jobInfo, isManagerMe, onToggle, onDelete, onA
             {task.status === 'active' ? 'Завершить' : 'В активные'}
           </button>
           {isManagerMe && (
-            <button style={BTN_DANGER} onClick={onDelete}>
-              Удалить
-            </button>
+            <button style={BTN_D} onClick={onDelete}>Удалить</button>
           )}
         </div>
       </div>
@@ -434,7 +434,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
     const comp = cli.company ? ` (${cli.company})` : '';
     const label = (nm + comp).trim();
     return label || 'Без клиента';
-  };
+    };
 
   // Загружаем ТОЛЬКО активные и НЕархивные заявки + клиент
   useEffect(() => {
@@ -457,7 +457,6 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         let rows = withClient;
         if (error) throw error;
 
-        // Если пусто (например, из-за RLS на clients), берём без связи
         if (!rows || rows.length === 0) {
           const { data: plain, error: e2 } = await supabase
             .from('jobs')
