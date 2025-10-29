@@ -23,26 +23,14 @@ const CHIP  = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 
 
 const nyToday = () => dayjs().tz(NY).format('YYYY-MM-DD');
 
-/* «Неоплата?» — расширенные правила под RU/EN */
+/* неоплата? — RU/EN */
 const isUnpaidTask = (t) => {
   const title = String(t?.title || '').toLowerCase();
   const type  = String(t?.type  || '').toLowerCase();
   const tags  = Array.isArray(t?.tags) ? t.tags.map(x => String(x).toLowerCase()) : [];
-
   const ruSet = ['неоплата','неоплачено','не оплачено'];
-  const enSet = ['unpaid','payment due'];
-
-  const inTags = tags.some(s =>
-    enSet.includes(s) || ruSet.includes(s) || s.includes('unpaid') || s.includes('оплат')
-  );
-
-  return (
-    type.includes('unpaid') ||
-    inTags ||
-    title.includes('unpaid') ||
-    title.includes('неоплат') || // «неоплата», «неоплачено»
-    (title.includes('оплат') && !title.includes('закрыт')) // «оплата …»
-  );
+  const inTags = tags.some(s => ruSet.includes(s) || s.includes('unpaid') || s.includes('оплат'));
+  return type.includes('unpaid') || inTags || title.includes('unpaid') || title.includes('неоплат') || (title.includes('оплат') && !title.includes('закрыт'));
 };
 
 export default function TasksTodayPage() {
@@ -91,27 +79,21 @@ export default function TasksTodayPage() {
     setLoading(true);
     try {
       const today = nyToday();
-
-      // 1) tasks: активные + сегодняшние завершённые
       const selectCols = 'id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at';
+
       const { data: activeRows, error: aErr } = await supabase
-        .from('tasks')
-        .select(selectCols)
-        .eq('status', 'active')
+        .from('tasks').select(selectCols).eq('status', 'active')
         .order('updated_at', { ascending: false });
       if (aErr) throw aErr;
 
       const { data: doneRows, error: dErr } = await supabase
-        .from('tasks')
-        .select(selectCols)
-        .eq('status', 'done')
-        .eq('due_date', today)
+        .from('tasks').select(selectCols).eq('status', 'done').eq('due_date', today)
         .order('updated_at', { ascending: false });
       if (dErr) throw dErr;
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
-      // 2) comments
+      // comments
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -120,7 +102,6 @@ export default function TasksTodayPage() {
           .select('id,task_id,body,is_active,author_id,created_at, profiles:author_id (full_name, role)')
           .in('task_id', ids)
           .order('created_at', { ascending: false });
-
         (cs || []).forEach(c => {
           (map[c.task_id] ||= []).push({
             id: c.id,
@@ -135,7 +116,7 @@ export default function TasksTodayPage() {
         });
       }
 
-      // 3) jobs + clients (без server-join'ов)
+      // jobs + clients (без join на сервере)
       let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
@@ -151,7 +132,6 @@ export default function TasksTodayPage() {
             .from('clients')
             .select('id, full_name, name, first_name, last_name, company, company_name')
             .in('id', clientIds);
-
           (clients || []).forEach(c => {
             const nm =
               (c.full_name && c.full_name.trim()) ||
@@ -167,9 +147,7 @@ export default function TasksTodayPage() {
         }
 
         const pickIssue = (j) => {
-          const candidates = [
-            j?.issue, j?.problem, j?.description, j?.details, j?.notes, j?.diagnosis, j?.title
-          ];
+          const candidates = [j?.issue, j?.problem, j?.description, j?.details, j?.notes, j?.diagnosis, j?.title];
           const found = candidates.find(v => typeof v === 'string' && v.trim().length > 0);
           return found ? found.trim() : '';
         };
@@ -266,7 +244,7 @@ export default function TasksTodayPage() {
 
     await supabase.from('task_comments').insert({ task_id: task.id, body, author_id: me.id, is_active: false });
 
-    // автозакрытие НЕОПЛАТЫ по комменту менеджера/админа
+    // автозакрытие неоплаты по комменту менеджера/админа
     if (isUnpaidTask(task) && isManagerMe && task.status === 'active') {
       await supabase.from('tasks')
         .update({ status: 'done', updated_at: new Date().toISOString(), due_date: nyToday() })
@@ -358,8 +336,17 @@ const TagList = ({ tags }) => !Array.isArray(tags) || tags.length === 0 ? null :
   </div>
 );
 
-/* Без лишних «• —» — строим куски, которые реально есть */
-const joinInfo = (parts) => parts.filter(Boolean).join(' • ');
+/* РЕНДЕР СО СПЕЙСАМИ И ТОЧКАМИ: без [object Object] */
+const Joined = ({ parts }) => (
+  <span style={{ fontSize: 13 }}>
+    {parts.filter(Boolean).map((part, i) => (
+      <React.Fragment key={i}>
+        {i > 0 && ' • '}
+        {part}
+      </React.Fragment>
+    ))}
+  </span>
+);
 
 const JobLink = ({ id, number }) => {
   if (!id && !number) return <span style={{ fontSize: 12 }}>Заявка #—</span>;
@@ -378,14 +365,14 @@ const JobInfoLine = ({ jobId, info, taskDetails, fallbackNumber }) => {
   const issue    = (info?.issue || '').trim() || (taskDetails || '').trim();
 
   return (
-    <div style={{ fontSize: 13 }}>
-      {joinInfo([
+    <Joined
+      parts={[
         <JobLink key="lnk" id={jobId || null} number={jobNum} />,
         company || null,
         person  || null,
         issue   || null
-      ])}
-    </div>
+      ]}
+    />
   );
 };
 
@@ -405,7 +392,7 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
-          {/* заявка — компания — имя — проблема (с умными fallback’ами) */}
+          {/* заявка — компания — имя — проблема */}
           <JobInfoLine
             jobId={task.job_id}
             info={task._job_info}
@@ -471,9 +458,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
   const [dateStr, setDateStr] = useState(nyToday());
   const [saving, setSaving] = useState(false);
 
-  const INACTIVE = new Set([
-    'completed', 'завершено', 'canceled', 'cancelled', 'cancel', 'closed', 'отказ'
-  ]);
+  const INACTIVE = new Set(['completed','завершено','canceled','cancelled','cancel','closed','отказ']);
 
   const buildClientLabel = (cli) => {
     if (!cli) return 'Без клиента';
@@ -528,31 +513,8 @@ function CreateTaskModal({ me, onClose, onCreated }) {
           .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
 
         setJobsList(list);
-      } catch (e) {
-        console.error('Active non-archived jobs load error:', e?.message || e);
-        try {
-          const { data: plain } = await supabase
-            .from('jobs')
-            .select('id, job_number, status, archived_at, updated_at')
-            .is('archived_at', null)
-            .order('updated_at', { ascending: false })
-            .limit(600);
-
-          const list = (plain || [])
-            .filter(j => !INACTIVE.has(String(j.status || '').toLowerCase()))
-            .map(j => ({
-              id: j.id,
-              job_number: j.job_number ?? 0,
-              status: j.status ?? '',
-              client_name: 'Без клиента',
-              updated_at: j.updated_at,
-            }))
-            .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
-
-          setJobsList(list);
-        } catch {
-          setJobsList([]);
-        }
+      } catch {
+        setJobsList([]);
       }
     })();
   }, []);
