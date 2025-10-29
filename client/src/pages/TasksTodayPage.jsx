@@ -39,6 +39,7 @@ export default function TasksTodayPage() {
   const [myProfile, setMyProfile] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [commentsByTask, setCommentsByTask] = useState({});
+  const [jobInfoById, setJobInfoById] = useState({}); // {job_id: {job_number, company, full_name, issue}}
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -114,10 +115,45 @@ export default function TasksTodayPage() {
         });
       }
 
-      if (mounted.current) { setTasks(t); setCommentsByTask(map); }
+      // подтягиваем подробности по заявкам для всех tasks с job_id
+      let jobMap = {};
+      const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
+      if (jobIds.length) {
+        // пробуем с join на clients
+        const { data: jobsJoined, error: jErr } = await supabase
+          .from('jobs')
+          .select(`
+            id, job_number, issue,
+            clients:client_id ( company, full_name )
+          `)
+          .in('id', jobIds);
+        let rows = jobsJoined || [];
+        if (jErr) {
+          // если RLS мешает clients — берём без join
+          const { data: jobsPlain } = await supabase
+            .from('jobs')
+            .select('id, job_number, issue')
+            .in('id', jobIds);
+          rows = (jobsPlain || []).map(j => ({ ...j, clients: null }));
+        }
+        rows.forEach(j => {
+          jobMap[j.id] = {
+            job_number: j.job_number ?? null,
+            issue: j.issue || '',
+            company: j?.clients?.company || '',
+            full_name: j?.clients?.full_name || '',
+          };
+        });
+      }
+
+      if (mounted.current) {
+        setTasks(t);
+        setCommentsByTask(map);
+        setJobInfoById(jobMap);
+      }
     } catch (e) {
       console.error('[TasksToday] load error:', e?.message || e);
-      if (mounted.current) { setTasks([]); setCommentsByTask({}); }
+      if (mounted.current) { setTasks([]); setCommentsByTask({}); setJobInfoById({}); }
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -231,6 +267,7 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
+                jobInfo={jobInfoById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
                 isAdminMe={isAdminMe}
@@ -251,6 +288,7 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
+                jobInfo={jobInfoById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
                 isAdminMe={isAdminMe}
@@ -302,7 +340,22 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-function TaskRow({ task, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteTask }) {
+function JobLine({ task, jobInfo }) {
+  if (!task?.job_id && !task?.job_number) return null;
+  const jn = jobInfo?.job_number ?? task.job_number ?? null;
+  const parts = [];
+  if (jn != null) parts.push(`Заявка #${jn}`);
+  const comp = (jobInfo?.company || '').trim();
+  if (comp) parts.push(comp);
+  const nm = (jobInfo?.full_name || '').trim();
+  if (nm) parts.push(nm);
+  const issue = (jobInfo?.issue || '').trim();
+  if (issue) parts.push(issue);
+  if (!parts.length) return null;
+  return <div style={{ color: '#6b7280', fontSize: 14 }}>{parts.join(' • ')}</div>;
+}
+
+function TaskRow({ task, jobInfo, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteTask }) {
   const [txt, setTxt] = useState('');
 
   return (
@@ -317,9 +370,17 @@ function TaskRow({ task, comments, isManagerMe, isAdminMe, onToggle, onAddCommen
             <PriBadge p={task.priority} />
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
+
+          {/* подробная строка: номер — компания — имя — проблема */}
+          <JobLine task={task} jobInfo={jobInfo} />
+
+          {(task.job_number || task.job_id) && (
+            <div><JobLink id={task.job_id} number={jobInfo?.job_number ?? task.job_number} /></div>
+          )}
+
           {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
-          {(task.job_number || task.job_id) && <div><JobLink id={task.job_id} number={task.job_number} /></div>}
           <TagList tags={task.tags} />
+
           {isUnpaidTask(task) && task.status === 'active' && (
             <div style={{ fontSize: 12, color: '#92400e' }}>
               ⏳ Неоплата закроется автоматически после комментария <b>менеджера/админа</b>.
