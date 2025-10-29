@@ -267,7 +267,7 @@ export default function TasksTodayPage() {
     await supabase.from('task_comments').insert({ task_id: task.id, body, author_id: me.id, is_active: false });
 
     // автозакрытие НЕОПЛАТЫ по комменту менеджера/админа
-    if (isUnpaidTask(task) && isManagerMe && task.status === 'active')) {
+    if (isUnpaidTask(task) && isManagerMe && task.status === 'active') {
       await supabase.from('tasks')
         .update({ status: 'done', updated_at: new Date().toISOString(), due_date: nyToday() })
         .eq('id', task.id);
