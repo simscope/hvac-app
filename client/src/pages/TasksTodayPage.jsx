@@ -30,7 +30,13 @@ const isUnpaidTask = (t) => {
   const tags  = Array.isArray(t?.tags) ? t.tags.map(x => String(x).toLowerCase()) : [];
   const ruSet = ['неоплата','неоплачено','не оплачено'];
   const inTags = tags.some(s => ruSet.includes(s) || s.includes('unpaid') || s.includes('оплат'));
-  return type.includes('unpaid') || inTags || title.includes('unpaid') || title.includes('неоплат') || (title.includes('оплат') && !title.includes('закрыт'));
+  return (
+    type.includes('unpaid') ||
+    inTags ||
+    title.includes('unpaid') ||
+    title.includes('неоплат') ||
+    (title.includes('оплат') && !title.includes('закрыт'))
+  );
 };
 
 export default function TasksTodayPage() {
@@ -81,6 +87,7 @@ export default function TasksTodayPage() {
       const today = nyToday();
       const selectCols = 'id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at';
 
+      // 1) tasks: активные + сегодняшние завершённые
       const { data: activeRows, error: aErr } = await supabase
         .from('tasks').select(selectCols).eq('status', 'active')
         .order('updated_at', { ascending: false });
@@ -93,7 +100,7 @@ export default function TasksTodayPage() {
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
-      // comments
+      // 2) comments
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -116,15 +123,22 @@ export default function TasksTodayPage() {
         });
       }
 
-      // jobs + clients (без join на сервере)
+      // 3) jobs + clients (двумя запросами; с fallback’ами в самих jobs)
       let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
+        // возможные поля клиента внутри jobs
         const { data: jobs } = await supabase
           .from('jobs')
-          .select('id, job_number, client_id, title, issue, problem, description, details, notes, diagnosis')
+          .select(`
+            id, job_number, client_id,
+            title, issue, problem, description, details, notes, diagnosis,
+            client_name, customer_name, contact_name,
+            company, company_name
+          `)
           .in('id', jobIds);
 
+        // читаем клиентов, если есть client_id
         const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean)));
         let clientsMap = {};
         if (clientIds.length) {
@@ -132,6 +146,7 @@ export default function TasksTodayPage() {
             .from('clients')
             .select('id, full_name, name, first_name, last_name, company, company_name')
             .in('id', clientIds);
+
           (clients || []).forEach(c => {
             const nm =
               (c.full_name && c.full_name.trim()) ||
@@ -152,13 +167,28 @@ export default function TasksTodayPage() {
           return found ? found.trim() : '';
         };
 
+        const pickNameFromJob = (j) => {
+          const v = [j.client_name, j.customer_name, j.contact_name]
+            .find(s => typeof s === 'string' && s.trim());
+          return v ? v.trim() : '';
+        };
+
+        const pickCompanyFromJob = (j) => {
+          const v = [j.company, j.company_name]
+            .find(s => typeof s === 'string' && s.trim());
+          return v ? v.trim() : '';
+        };
+
         (jobs || []).forEach(j => {
-          const cli = clientsMap[j.client_id] || {};
+          const cli = (j.client_id && clientsMap[j.client_id]) || {};
+          const name    = cli.full_name || pickNameFromJob(j) || '';
+          const company = cli.company    || pickCompanyFromJob(j) || '';
+
           jobsMap[j.id] = {
             job_number: j.job_number ?? null,
             issue: pickIssue(j),
-            client_company: cli.company || '',
-            client_name: cli.full_name || '',
+            client_company: company,
+            client_name: name,
           };
         });
       }
