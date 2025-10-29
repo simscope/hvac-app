@@ -23,12 +23,26 @@ const CHIP  = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 
 
 const nyToday = () => dayjs().tz(NY).format('YYYY-MM-DD');
 
-/* неоплата? */
+/* «Неоплата?» — расширенные правила под RU/EN */
 const isUnpaidTask = (t) => {
-  const tp = String(t?.type || '').toLowerCase();
-  if (tp.includes('unpaid')) return true;
-  const tags = Array.isArray(t?.tags) ? t.tags : [];
-  return tags.some((s) => String(s).toLowerCase() === 'unpaid');
+  const title = String(t?.title || '').toLowerCase();
+  const type  = String(t?.type  || '').toLowerCase();
+  const tags  = Array.isArray(t?.tags) ? t.tags.map(x => String(x).toLowerCase()) : [];
+
+  const ruSet = ['неоплата','неоплачено','не оплачено'];
+  const enSet = ['unpaid','payment due'];
+
+  const inTags = tags.some(s =>
+    enSet.includes(s) || ruSet.includes(s) || s.includes('unpaid') || s.includes('оплат')
+  );
+
+  return (
+    type.includes('unpaid') ||
+    inTags ||
+    title.includes('unpaid') ||
+    title.includes('неоплат') || // «неоплата», «неоплачено»
+    (title.includes('оплат') && !title.includes('закрыт')) // «оплата …»
+  );
 };
 
 export default function TasksTodayPage() {
@@ -79,16 +93,17 @@ export default function TasksTodayPage() {
       const today = nyToday();
 
       // 1) tasks: активные + сегодняшние завершённые
+      const selectCols = 'id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at';
       const { data: activeRows, error: aErr } = await supabase
         .from('tasks')
-        .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
+        .select(selectCols)
         .eq('status', 'active')
         .order('updated_at', { ascending: false });
       if (aErr) throw aErr;
 
       const { data: doneRows, error: dErr } = await supabase
         .from('tasks')
-        .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
+        .select(selectCols)
         .eq('status', 'done')
         .eq('due_date', today)
         .order('updated_at', { ascending: false });
@@ -120,13 +135,13 @@ export default function TasksTodayPage() {
         });
       }
 
-      // 3) jobs + clients (двумя запросами, без join — чтобы не упасть на RLS)
+      // 3) jobs + clients (без server-join'ов)
       let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
         const { data: jobs } = await supabase
           .from('jobs')
-          .select('id, job_number, client_id, issue, problem, description, details')
+          .select('id, job_number, client_id, title, issue, problem, description, details, notes, diagnosis')
           .in('id', jobIds);
 
         const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean)));
@@ -134,15 +149,27 @@ export default function TasksTodayPage() {
         if (clientIds.length) {
           const { data: clients } = await supabase
             .from('clients')
-            .select('id, full_name, company')
+            .select('id, full_name, name, first_name, last_name, company, company_name')
             .in('id', clientIds);
+
           (clients || []).forEach(c => {
-            clientsMap[c.id] = { full_name: c.full_name || '', company: c.company || '' };
+            const nm =
+              (c.full_name && c.full_name.trim()) ||
+              (c.name && c.name.trim()) ||
+              ([c.first_name, c.last_name].filter(Boolean).join(' ').trim()) ||
+              '';
+            const comp =
+              (c.company && c.company.trim()) ||
+              (c.company_name && c.company_name.trim()) ||
+              '';
+            clientsMap[c.id] = { full_name: nm, company: comp };
           });
         }
 
         const pickIssue = (j) => {
-          const candidates = [j?.issue, j?.problem, j?.description, j?.details];
+          const candidates = [
+            j?.issue, j?.problem, j?.description, j?.details, j?.notes, j?.diagnosis, j?.title
+          ];
           const found = candidates.find(v => typeof v === 'string' && v.trim().length > 0);
           return found ? found.trim() : '';
         };
@@ -239,8 +266,8 @@ export default function TasksTodayPage() {
 
     await supabase.from('task_comments').insert({ task_id: task.id, body, author_id: me.id, is_active: false });
 
-    // автозакрытие неоплаты по комменту менеджера/админа
-    if (isUnpaidTask(task) && isManagerMe && task.status === 'active') {
+    // автозакрытие НЕОПЛАТЫ по комменту менеджера/админа
+    if (isUnpaidTask(task) && isManagerMe && task.status === 'active')) {
       await supabase.from('tasks')
         .update({ status: 'done', updated_at: new Date().toISOString(), due_date: nyToday() })
         .eq('id', task.id);
@@ -331,6 +358,9 @@ const TagList = ({ tags }) => !Array.isArray(tags) || tags.length === 0 ? null :
   </div>
 );
 
+/* Без лишних «• —» — строим куски, которые реально есть */
+const joinInfo = (parts) => parts.filter(Boolean).join(' • ');
+
 const JobLink = ({ id, number }) => {
   if (!id && !number) return <span style={{ fontSize: 12 }}>Заявка #—</span>;
   if (!id) return <span style={{ fontSize: 12 }}>Заявка #{number}</span>;
@@ -343,14 +373,18 @@ const JobLink = ({ id, number }) => {
 
 const JobInfoLine = ({ jobId, info, taskDetails, fallbackNumber }) => {
   const jobNum   = info?.job_number ?? fallbackNumber ?? null;
-  const company  = (info?.client_company || '').trim() || '—';
-  const person   = (info?.client_name || '').trim() || '—';
-  const issue    = (info?.issue || '').trim() || (taskDetails || '').trim() || '—';
+  const company  = (info?.client_company || '').trim();
+  const person   = (info?.client_name || '').trim();
+  const issue    = (info?.issue || '').trim() || (taskDetails || '').trim();
 
   return (
     <div style={{ fontSize: 13 }}>
-      <JobLink id={jobId || null} number={jobNum} />
-      {' '}• {company} • {person} • {issue}
+      {joinInfo([
+        <JobLink key="lnk" id={jobId || null} number={jobNum} />,
+        company || null,
+        person  || null,
+        issue   || null
+      ])}
     </div>
   );
 };
@@ -371,7 +405,7 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
-          {/* единственная строка с подробностями: заявка — компания — имя — проблема */}
+          {/* заявка — компания — имя — проблема (с умными fallback’ами) */}
           <JobInfoLine
             jobId={task.job_id}
             info={task._job_info}
@@ -443,10 +477,12 @@ function CreateTaskModal({ me, onClose, onCreated }) {
 
   const buildClientLabel = (cli) => {
     if (!cli) return 'Без клиента';
-    const nm = cli.full_name || '';
-    const comp = cli.company ? ` (${cli.company})` : '';
-    const label = (nm + comp).trim();
-    return label || 'Без клиента';
+    const nm = (cli.full_name && cli.full_name.trim())
+      || (cli.name && cli.name.trim())
+      || ([cli.first_name, cli.last_name].filter(Boolean).join(' ').trim());
+    const comp = (cli.company && cli.company.trim()) || (cli.company_name && cli.company_name.trim());
+    const both = [nm || null, comp ? `(${comp})` : null].filter(Boolean).join(' ');
+    return both || 'Без клиента';
   };
 
   useEffect(() => {
@@ -460,7 +496,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
             status,
             archived_at,
             updated_at,
-            clients:client_id ( full_name, company )
+            clients:client_id ( full_name, name, first_name, last_name, company, company_name )
           `)
           .is('archived_at', null)
           .order('updated_at', { ascending: false })
