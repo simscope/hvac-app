@@ -71,7 +71,7 @@ export default function TasksTodayPage() {
     [myProfile?.role]
   );
 
-  /* ----- LOAD (без .or()) ----- */
+  /* ----- LOAD ----- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
@@ -95,7 +95,7 @@ export default function TasksTodayPage() {
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
-      // ---------- комментарии ----------
+      // комментарии
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -119,7 +119,7 @@ export default function TasksTodayPage() {
         });
       }
 
-      // ---------- информация по заявкам ----------
+      // Информация по заявкам
       let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
@@ -146,14 +146,13 @@ export default function TasksTodayPage() {
         (jobs || []).forEach(j => {
           jobsMap[j.id] = {
             job_number: j.job_number ?? null,
-            issue: pickIssue(j),
+            issue: pickIssue(j),               // может быть пусто — обработаем при рендере
             client_company: j?.clients?.company || '',
             client_name: j?.clients?.full_name || '',
           };
         });
       }
 
-      // приклеим job-info к задачам (для удобства рендера)
       const withJob = t.map(item => ({
         ...item,
         _job_info: item.job_id ? (jobsMap[item.job_id] || null) : null,
@@ -328,7 +327,8 @@ const TagList = ({ tags }) => !Array.isArray(tags) || tags.length === 0 ? null :
 );
 
 const JobLink = ({ id, number }) => {
-  if (!id) return null;
+  if (!id && !number) return <span style={{ fontSize: 12 }}>Заявка #—</span>;
+  if (!id) return <span style={{ fontSize: 12 }}>Заявка #{number}</span>;
   return (
     <a href={`#/jobs/${id}`} style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}>
       Заявка #{number || String(id).slice(0, 8)}
@@ -336,15 +336,19 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-const JobInfoLine = ({ jobId, info }) => {
-  if (!jobId || !info) return null;
-  const pieces = [
-    <JobLink key="lnk" id={jobId} number={info.job_number} />,
-    info.client_company ? ` • ${info.client_company}` : '',
-    info.client_name ? ` • ${info.client_name}` : '',
-    info.issue ? ` • ${info.issue}` : '',
-  ];
-  return <div style={{ fontSize: 13 }}>{pieces}</div>;
+const JobInfoLine = ({ jobId, info, taskDetails, fallbackNumber }) => {
+  // собираем строку всегда, даже если info пустой
+  const jobNum   = info?.job_number ?? fallbackNumber ?? null;
+  const company  = (info?.client_company || '').trim() || '—';
+  const person   = (info?.client_name || '').trim() || '—';
+  const issue    = (info?.issue || '').trim() || (taskDetails || '').trim() || '—';
+
+  return (
+    <div style={{ fontSize: 13 }}>
+      <JobLink id={jobId || null} number={jobNum} />
+      {' '}• {company} • {person} • {issue}
+    </div>
+  );
 };
 
 function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment, onPinComment }) {
@@ -363,9 +367,15 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
-          {/* Детали / заявка / проблема */}
+          {/* Детали + Строка Заявка # • Компания • Имя • Проблема */}
           {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
-          <JobInfoLine jobId={task.job_id} info={task._job_info} />
+          <JobInfoLine
+            jobId={task.job_id}
+            info={task._job_info}
+            taskDetails={task.details}
+            fallbackNumber={task.job_number}
+          />
+
           <TagList tags={task.tags} />
           {isUnpaidTask(task) && task.status === 'active' && (
             <div style={{ fontSize: 12, color: '#92400e' }}>
@@ -417,6 +427,7 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
 function CreateTaskModal({ me, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
+  the job
   const [jobId, setJobId] = useState('');
   const [jobsList, setJobsList] = useState([]);
   const [priority, setPriority] = useState('normal');
@@ -434,9 +445,8 @@ function CreateTaskModal({ me, onClose, onCreated }) {
     const comp = cli.company ? ` (${cli.company})` : '';
     const label = (nm + comp).trim();
     return label || 'Без клиента';
-    };
+  };
 
-  // Загружаем ТОЛЬКО активные и НЕархивные заявки + клиент
   useEffect(() => {
     (async () => {
       try {
@@ -494,7 +504,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
             .filter(j => !INACTIVE.has(String(j.status || '').toLowerCase()))
             .map(j => ({
               id: j.id,
-              job_number: j.job_number ?? null,
+              job_number: j.job_number ?? 0,
               status: j.status ?? '',
               client_name: 'Без клиента',
               updated_at: j.updated_at,
