@@ -10,33 +10,25 @@ dayjs.extend(utc); dayjs.extend(tz);
 const NY = 'America/New_York';
 
 /* ---------- UI ---------- */
-const PAGE  = { padding: 16, display: 'grid', gap: 12, maxWidth: 1100, margin: '0 auto' };
-const ROW   = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 };
-const BOX   = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
-const H     = { margin: '6px 0 10px', fontWeight: 700, fontSize: 18 };
-const BTN   = { padding: '8px 12px', borderRadius: 10, border: '1px solid #111827', background: '#111827', color: '#fff', cursor: 'pointer' };
+const PAGE = { padding: 16, display: 'grid', gap: 12, maxWidth: 1100, margin: '0 auto' };
+const ROW = { display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 };
+const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: 14 };
+const H = { margin: '6px 0 10px', fontWeight: 700, fontSize: 18 };
+const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #111827', background: '#111827', color: '#fff', cursor: 'pointer' };
 const BTN_L = { ...BTN, borderColor: '#d1d5db', background: '#fff', color: '#111827' };
-const BTN_D = { ...BTN_L, borderColor: '#ef4444', color: '#ef4444' };
+const BTN_DANGER = { ...BTN_L, borderColor: '#ef4444', color: '#ef4444' };
 const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 10 };
-const TA    = { ...INPUT, minHeight: 90 };
-const CHIP  = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, background: '#fff' };
+const TA = { ...INPUT, minHeight: 90 };
+const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, background: '#fff' };
 
 const nyToday = () => dayjs().tz(NY).format('YYYY-MM-DD');
 
-/* неоплата? — RU/EN */
+/* неоплата? */
 const isUnpaidTask = (t) => {
-  const title = String(t?.title || '').toLowerCase();
-  const type  = String(t?.type  || '').toLowerCase();
-  const tags  = Array.isArray(t?.tags) ? t.tags.map(x => String(x).toLowerCase()) : [];
-  const ruSet = ['неоплата','неоплачено','не оплачено'];
-  const inTags = tags.some(s => ruSet.includes(s) || s.includes('unpaid') || s.includes('оплат'));
-  return (
-    type.includes('unpaid') ||
-    inTags ||
-    title.includes('unpaid') ||
-    title.includes('неоплат') ||
-    (title.includes('оплат') && !title.includes('закрыт'))
-  );
+  const tp = String(t?.type || '').toLowerCase();
+  if (tp.includes('unpaid')) return true;
+  const tags = Array.isArray(t?.tags) ? t.tags : [];
+  return tags.some((s) => String(s).toLowerCase() === 'unpaid');
 };
 
 export default function TasksTodayPage() {
@@ -47,6 +39,7 @@ export default function TasksTodayPage() {
   const [myProfile, setMyProfile] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [commentsByTask, setCommentsByTask] = useState({});
+  const [jobInfoById, setJobInfoById] = useState({}); // {job_id: {job_number, company, full_name, issue}}
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -74,33 +67,31 @@ export default function TasksTodayPage() {
     return () => unsub?.unsubscribe?.();
   }, []);
 
-  const isManagerMe = useMemo(
-    () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
-    [myProfile?.role]
-  );
-
-  /* ----- LOAD ----- */
+  /* ----- LOAD (без .or()) ----- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
     try {
       const today = nyToday();
-      const selectCols = 'id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at';
 
-      // 1) tasks: активные + сегодняшние завершённые
       const { data: activeRows, error: aErr } = await supabase
-        .from('tasks').select(selectCols).eq('status', 'active')
+        .from('tasks')
+        .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
+        .eq('status', 'active')
         .order('updated_at', { ascending: false });
       if (aErr) throw aErr;
 
       const { data: doneRows, error: dErr } = await supabase
-        .from('tasks').select(selectCols).eq('status', 'done').eq('due_date', today)
+        .from('tasks')
+        .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
+        .eq('status', 'done')
+        .eq('due_date', today)
         .order('updated_at', { ascending: false });
       if (dErr) throw dErr;
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
-      // 2) comments
+      // комментарии
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -109,6 +100,7 @@ export default function TasksTodayPage() {
           .select('id,task_id,body,is_active,author_id,created_at, profiles:author_id (full_name, role)')
           .in('task_id', ids)
           .order('created_at', { ascending: false });
+
         (cs || []).forEach(c => {
           (map[c.task_id] ||= []).push({
             id: c.id,
@@ -123,85 +115,45 @@ export default function TasksTodayPage() {
         });
       }
 
-      // 3) jobs + clients (двумя запросами; с fallback’ами в самих jobs)
-      let jobsMap = {};
+      // подтягиваем подробности по заявкам для всех tasks с job_id
+      let jobMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
-        // возможные поля клиента внутри jobs
-        const { data: jobs } = await supabase
+        // пробуем с join на clients
+        const { data: jobsJoined, error: jErr } = await supabase
           .from('jobs')
           .select(`
-            id, job_number, client_id,
-            title, issue, problem, description, details, notes, diagnosis,
-            client_name, customer_name, contact_name,
-            company, company_name
+            id, job_number, issue,
+            clients:client_id ( company, full_name )
           `)
           .in('id', jobIds);
-
-        // читаем клиентов, если есть client_id
-        const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean)));
-        let clientsMap = {};
-        if (clientIds.length) {
-          const { data: clients } = await supabase
-            .from('clients')
-            .select('id, full_name, name, first_name, last_name, company, company_name')
-            .in('id', clientIds);
-
-          (clients || []).forEach(c => {
-            const nm =
-              (c.full_name && c.full_name.trim()) ||
-              (c.name && c.name.trim()) ||
-              ([c.first_name, c.last_name].filter(Boolean).join(' ').trim()) ||
-              '';
-            const comp =
-              (c.company && c.company.trim()) ||
-              (c.company_name && c.company_name.trim()) ||
-              '';
-            clientsMap[c.id] = { full_name: nm, company: comp };
-          });
+        let rows = jobsJoined || [];
+        if (jErr) {
+          // если RLS мешает clients — берём без join
+          const { data: jobsPlain } = await supabase
+            .from('jobs')
+            .select('id, job_number, issue')
+            .in('id', jobIds);
+          rows = (jobsPlain || []).map(j => ({ ...j, clients: null }));
         }
-
-        const pickIssue = (j) => {
-          const candidates = [j?.issue, j?.problem, j?.description, j?.details, j?.notes, j?.diagnosis, j?.title];
-          const found = candidates.find(v => typeof v === 'string' && v.trim().length > 0);
-          return found ? found.trim() : '';
-        };
-
-        const pickNameFromJob = (j) => {
-          const v = [j.client_name, j.customer_name, j.contact_name]
-            .find(s => typeof s === 'string' && s.trim());
-          return v ? v.trim() : '';
-        };
-
-        const pickCompanyFromJob = (j) => {
-          const v = [j.company, j.company_name]
-            .find(s => typeof s === 'string' && s.trim());
-          return v ? v.trim() : '';
-        };
-
-        (jobs || []).forEach(j => {
-          const cli = (j.client_id && clientsMap[j.client_id]) || {};
-          const name    = cli.full_name || pickNameFromJob(j) || '';
-          const company = cli.company    || pickCompanyFromJob(j) || '';
-
-          jobsMap[j.id] = {
+        rows.forEach(j => {
+          jobMap[j.id] = {
             job_number: j.job_number ?? null,
-            issue: pickIssue(j),
-            client_company: company,
-            client_name: name,
+            issue: j.issue || '',
+            company: j?.clients?.company || '',
+            full_name: j?.clients?.full_name || '',
           };
         });
       }
 
-      const withJob = t.map(item => ({
-        ...item,
-        _job_info: item.job_id ? (jobsMap[item.job_id] || null) : null,
-      }));
-
-      if (mounted.current) { setTasks(withJob); setCommentsByTask(map); }
+      if (mounted.current) {
+        setTasks(t);
+        setCommentsByTask(map);
+        setJobInfoById(jobMap);
+      }
     } catch (e) {
       console.error('[TasksToday] load error:', e?.message || e);
-      if (mounted.current) { setTasks([]); setCommentsByTask({}); }
+      if (mounted.current) { setTasks([]); setCommentsByTask({}); setJobInfoById({}); }
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -220,10 +172,18 @@ export default function TasksTodayPage() {
     return () => supabase.removeChannel(ch);
   }, [me, load]);
 
-  const active    = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
+  const active = useMemo(() => (tasks || []).filter(t => t.status === 'active'), [tasks]);
   const doneToday = useMemo(
     () => (tasks || []).filter(t => t.status === 'done' && t.due_date === nyToday()),
     [tasks]
+  );
+  const isManagerMe = useMemo(
+    () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
+    [myProfile?.role]
+  );
+  const isAdminMe = useMemo(
+    () => String(myProfile?.role || '').toLowerCase() === 'admin',
+    [myProfile?.role]
   );
 
   /* ----- ACTIONS ----- */
@@ -236,25 +196,28 @@ export default function TasksTodayPage() {
     await load();
   };
 
+  // удалить целую задачу (только админ)
   const deleteTask = async (t) => {
-    if (!isManagerMe) return;
-    const title = t?.title ? ` «${t.title}»` : '';
-    if (!window.confirm(`Удалить задачу${title}? Это действие необратимо.`)) return;
-    try {
-      await supabase.from('tasks').delete().eq('id', t.id);
-    } catch (e) {
-      console.error('delete task error:', e?.message || e);
-    } finally {
-      await load();
-    }
-  };
+    if (!isAdminMe || !t?.id) return;
+    if (!window.confirm(`Удалить задачу «${t.title || ''}»? Это действие необратимо.`)) return;
 
-  const pinComment = async (comment) => {
-    if (!comment?.id) return;
-    const taskId = comment.task_id;
-    await supabase.from('task_comments').update({ is_active: false }).eq('task_id', taskId);
-    await supabase.from('task_comments').update({ is_active: true }).eq('id', comment.id);
-    await load();
+    try {
+      // сначала удалим комментарии (если нет CASCADE)
+      await supabase.from('task_comments').delete().eq('task_id', t.id);
+      // затем саму задачу
+      const { error } = await supabase.from('tasks').delete().eq('id', t.id);
+      if (error) throw error;
+
+      // локально убираем без полной перезагрузки
+      setTasks(prev => prev.filter(x => x.id !== t.id));
+      setCommentsByTask(prev => {
+        const map = { ...prev };
+        delete map[t.id];
+        return map;
+      });
+    } catch (e) {
+      alert('Не удалось удалить задачу: ' + (e?.message || 'error'));
+    }
   };
 
   const addComment = async (task, text) => {
@@ -304,12 +267,13 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
+                jobInfo={jobInfoById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
+                isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
-                onDelete={() => deleteTask(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onPinComment={pinComment}
+                onDeleteTask={() => deleteTask(t)}
               />
             ))}
         </div>
@@ -324,12 +288,13 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
+                jobInfo={jobInfoById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
+                isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
-                onDelete={() => deleteTask(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onPinComment={pinComment}
+                onDeleteTask={() => deleteTask(t)}
               />
             ))}
         </div>
@@ -366,21 +331,8 @@ const TagList = ({ tags }) => !Array.isArray(tags) || tags.length === 0 ? null :
   </div>
 );
 
-/* РЕНДЕР СО СПЕЙСАМИ И ТОЧКАМИ: без [object Object] */
-const Joined = ({ parts }) => (
-  <span style={{ fontSize: 13 }}>
-    {parts.filter(Boolean).map((part, i) => (
-      <React.Fragment key={i}>
-        {i > 0 && ' • '}
-        {part}
-      </React.Fragment>
-    ))}
-  </span>
-);
-
 const JobLink = ({ id, number }) => {
-  if (!id && !number) return <span style={{ fontSize: 12 }}>Заявка #—</span>;
-  if (!id) return <span style={{ fontSize: 12 }}>Заявка #{number}</span>;
+  if (!id) return null;
   return (
     <a href={`#/jobs/${id}`} style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}>
       Заявка #{number || String(id).slice(0, 8)}
@@ -388,25 +340,22 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-const JobInfoLine = ({ jobId, info, taskDetails, fallbackNumber }) => {
-  const jobNum   = info?.job_number ?? fallbackNumber ?? null;
-  const company  = (info?.client_company || '').trim();
-  const person   = (info?.client_name || '').trim();
-  const issue    = (info?.issue || '').trim() || (taskDetails || '').trim();
+function JobLine({ task, jobInfo }) {
+  if (!task?.job_id && !task?.job_number) return null;
+  const jn = jobInfo?.job_number ?? task.job_number ?? null;
+  const parts = [];
+  if (jn != null) parts.push(`Заявка #${jn}`);
+  const comp = (jobInfo?.company || '').trim();
+  if (comp) parts.push(comp);
+  const nm = (jobInfo?.full_name || '').trim();
+  if (nm) parts.push(nm);
+  const issue = (jobInfo?.issue || '').trim();
+  if (issue) parts.push(issue);
+  if (!parts.length) return null;
+  return <div style={{ color: '#6b7280', fontSize: 14 }}>{parts.join(' • ')}</div>;
+}
 
-  return (
-    <Joined
-      parts={[
-        <JobLink key="lnk" id={jobId || null} number={jobNum} />,
-        company || null,
-        person  || null,
-        issue   || null
-      ]}
-    />
-  );
-};
-
-function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment, onPinComment }) {
+function TaskRow({ task, jobInfo, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteTask }) {
   const [txt, setTxt] = useState('');
 
   return (
@@ -422,15 +371,16 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
-          {/* заявка — компания — имя — проблема */}
-          <JobInfoLine
-            jobId={task.job_id}
-            info={task._job_info}
-            taskDetails={task.details}
-            fallbackNumber={task.job_number}
-          />
+          {/* подробная строка: номер — компания — имя — проблема */}
+          <JobLine task={task} jobInfo={jobInfo} />
 
+          {(task.job_number || task.job_id) && (
+            <div><JobLink id={task.job_id} number={jobInfo?.job_number ?? task.job_number} /></div>
+          )}
+
+          {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
           <TagList tags={task.tags} />
+
           {isUnpaidTask(task) && task.status === 'active' && (
             <div style={{ fontSize: 12, color: '#92400e' }}>
               ⏳ Неоплата закроется автоматически после комментария <b>менеджера/админа</b>.
@@ -438,27 +388,26 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
           <button style={BTN_L} onClick={onToggle}>
             {task.status === 'active' ? 'Завершить' : 'В активные'}
           </button>
-          {isManagerMe && (
-            <button style={BTN_D} onClick={onDelete}>Удалить</button>
+          {isAdminMe && (
+            <button style={BTN_DANGER} onClick={onDeleteTask} title="Удалить задачу (только админ)">
+              Удалить
+            </button>
           )}
         </div>
       </div>
 
       <div style={{ display: 'grid', gap: 8 }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>Комментарии</div>
+
         {(comments || []).map(c => (
-          <div key={c.id} style={{ fontSize: 14, display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 }}>
-            <div>
-              <span style={{ fontWeight: 600 }}>{c.author_name}{c.author_role ? ` (${c.author_role})` : ''}:</span>{' '}
-              {c.body}{' '}
-              <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
-              {c.is_active && <span style={{ marginLeft: 8, fontSize: 12, color: '#2563eb' }}>• активный</span>}
-            </div>
-            <div><button style={BTN_L} onClick={() => onPinComment(c)}>Сделать активным</button></div>
+          <div key={c.id} style={{ fontSize: 14 }}>
+            <span style={{ fontWeight: 600 }}>{c.author_name}{c.author_role ? ` (${c.author_role})` : ''}:</span>{' '}
+            {c.body}{' '}
+            <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
           </div>
         ))}
 
@@ -479,27 +428,28 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
 
 /* ================== Create Modal ================== */
 function CreateTaskModal({ me, onClose, onCreated }) {
-  const [title, setTitle]   = useState('');
+  const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
-  const [jobId, setJobId]   = useState('');
+  const [jobId, setJobId] = useState('');
   const [jobsList, setJobsList] = useState([]);
   const [priority, setPriority] = useState('normal');
   const [type, setType] = useState('general'); // general | unpaid
   const [dateStr, setDateStr] = useState(nyToday());
   const [saving, setSaving] = useState(false);
 
-  const INACTIVE = new Set(['completed','завершено','canceled','cancelled','cancel','closed','отказ']);
+  const INACTIVE = new Set([
+    'completed', 'завершено', 'canceled', 'cancelled', 'cancel', 'closed', 'отказ'
+  ]);
 
   const buildClientLabel = (cli) => {
     if (!cli) return 'Без клиента';
-    const nm = (cli.full_name && cli.full_name.trim())
-      || (cli.name && cli.name.trim())
-      || ([cli.first_name, cli.last_name].filter(Boolean).join(' ').trim());
-    const comp = (cli.company && cli.company.trim()) || (cli.company_name && cli.company_name.trim());
-    const both = [nm || null, comp ? `(${comp})` : null].filter(Boolean).join(' ');
-    return both || 'Без клиента';
+    const nm = cli.full_name || '';
+    const comp = cli.company ? ` (${cli.company})` : '';
+    const label = (nm + comp).trim();
+    return label || 'Без клиента';
   };
 
+  // Загружаем ТОЛЬКО активные и НЕархивные заявки + клиент
   useEffect(() => {
     (async () => {
       try {
@@ -511,7 +461,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
             status,
             archived_at,
             updated_at,
-            clients:client_id ( full_name, name, first_name, last_name, company, company_name )
+            clients:client_id ( full_name, company )
           `)
           .is('archived_at', null)
           .order('updated_at', { ascending: false })
@@ -520,6 +470,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         let rows = withClient;
         if (error) throw error;
 
+        // Если пусто (например, из-за RLS на clients), берём без связи
         if (!rows || rows.length === 0) {
           const { data: plain, error: e2 } = await supabase
             .from('jobs')
@@ -543,8 +494,31 @@ function CreateTaskModal({ me, onClose, onCreated }) {
           .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
 
         setJobsList(list);
-      } catch {
-        setJobsList([]);
+      } catch (e) {
+        console.error('Active non-archived jobs load error:', e?.message || e);
+        try {
+          const { data: plain } = await supabase
+            .from('jobs')
+            .select('id, job_number, status, archived_at, updated_at')
+            .is('archived_at', null)
+            .order('updated_at', { ascending: false })
+            .limit(600);
+
+          const list = (plain || [])
+            .filter(j => !INACTIVE.has(String(j.status || '').toLowerCase()))
+            .map(j => ({
+              id: j.id,
+              job_number: j.job_number ?? null,
+              status: j.status ?? '',
+              client_name: 'Без клиента',
+              updated_at: j.updated_at,
+            }))
+            .sort((a, b) => (b.job_number ?? 0) - (a.job_number ?? 0));
+
+          setJobsList(list);
+        } catch {
+          setJobsList([]);
+        }
       }
     })();
   }, []);
