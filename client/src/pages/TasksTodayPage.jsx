@@ -427,7 +427,6 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
 function CreateTaskModal({ me, onClose, onCreated }) {
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
-  the job
   const [jobId, setJobId] = useState('');
   const [jobsList, setJobsList] = useState([]);
   const [priority, setPriority] = useState('normal');
