@@ -31,15 +31,6 @@ const isUnpaidTask = (t) => {
   return tags.some((s) => String(s).toLowerCase() === 'unpaid');
 };
 
-// первый непустой текст
-const firstText = (...vals) => {
-  for (const v of vals) {
-    const s = (v ?? '').toString().trim();
-    if (s) return s;
-  }
-  return '';
-};
-
 export default function TasksTodayPage() {
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -48,8 +39,7 @@ export default function TasksTodayPage() {
   const [myProfile, setMyProfile] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [commentsByTask, setCommentsByTask] = useState({});
-  const [jobInfoById, setJobInfoById] = useState({});
-  const [jobInfoByNumber, setJobInfoByNumber] = useState({});
+  const [jobsById, setJobsById] = useState({}); // id -> {job_number, issue, client_company, client_name}
   const [loading, setLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -77,7 +67,12 @@ export default function TasksTodayPage() {
     return () => unsub?.unsubscribe?.();
   }, []);
 
-  /* ----- LOAD (без .or()) + fallback по job_number ----- */
+  const isManagerMe = useMemo(
+    () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
+    [myProfile?.role]
+  );
+
+  /* ----- LOAD (без .or()) + догрузка jobs ----- */
   const load = useCallback(async () => {
     if (!me) return;
     setLoading(true);
@@ -125,92 +120,33 @@ export default function TasksTodayPage() {
         });
       }
 
-      // подробности по заявкам: по job_id
-      let mapById = {};
-      let mapByNumber = {};
-
+      // jobs info (номер, проблема, клиент)
+      let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
-        const { data: rows1, error: jErr } = await supabase
+        const { data: jobs } = await supabase
           .from('jobs')
-          .select(`
-            id,
-            job_number,
-            issue,
-            problem,
-            description,
-            details,
-            complaint,
-            clients:client_id ( company, full_name )
-          `)
+          .select('id, job_number, issue, client_id, clients:client_id ( full_name, company )')
           .in('id', jobIds);
 
-        let rows = rows1 || [];
-        if (jErr) {
-          const { data: plain } = await supabase
-            .from('jobs')
-            .select('id, job_number, issue, problem, description, details, complaint')
-            .in('id', jobIds);
-          rows = (plain || []).map(j => ({ ...j, clients: null }));
-        }
-
-        rows.forEach(j => {
-          const info = {
+        (jobs || []).forEach(j => {
+          jobsMap[j.id] = {
             job_number: j.job_number ?? null,
-            issue: firstText(j.issue, j.problem, j.description, j.details, j.complaint),
-            company: j?.clients?.company || '',
-            full_name: j?.clients?.full_name || '',
+            issue: j.issue ?? '',
+            client_company: j?.clients?.company || '',
+            client_name: j?.clients?.full_name || '',
           };
-          mapById[j.id] = info;
-          if (info.job_number != null) mapByNumber[String(info.job_number)] = info;
-        });
-      }
-
-      // …и fallback по job_number (для задач без job_id)
-      const needNumbers = Array.from(
-        new Set(
-          t.filter(x => !x.job_id && x.job_number != null).map(x => String(x.job_number))
-        )
-      ).filter(Boolean);
-
-      if (needNumbers.length) {
-        const { data: rows2 } = await supabase
-          .from('jobs')
-          .select(`
-            id,
-            job_number,
-            issue,
-            problem,
-            description,
-            details,
-            complaint,
-            clients:client_id ( company, full_name )
-          `)
-          .in('job_number', needNumbers);
-
-        (rows2 || []).forEach(j => {
-          const info = {
-            job_number: j.job_number ?? null,
-            issue: firstText(j.issue, j.problem, j.description, j.details, j.complaint),
-            company: j?.clients?.company || '',
-            full_name: j?.clients?.full_name || '',
-          };
-          mapById[j.id] ||= info;
-          if (info.job_number != null) mapByNumber[String(info.job_number)] = info;
         });
       }
 
       if (mounted.current) {
         setTasks(t);
         setCommentsByTask(map);
-        setJobInfoById(mapById);
-        setJobInfoByNumber(mapByNumber);
+        setJobsById(jobsMap);
       }
     } catch (e) {
       console.error('[TasksToday] load error:', e?.message || e);
-      if (mounted.current) {
-        setTasks([]); setCommentsByTask({}); setJobInfoById({}); setJobInfoByNumber({});
-      }
+      if (mounted.current) { setTasks([]); setCommentsByTask({}); setJobsById({}); }
     } finally {
       if (mounted.current) setLoading(false);
     }
@@ -234,14 +170,6 @@ export default function TasksTodayPage() {
     () => (tasks || []).filter(t => t.status === 'done' && t.due_date === nyToday()),
     [tasks]
   );
-  const isManagerMe = useMemo(
-    () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
-    [myProfile?.role]
-  );
-  const isAdminMe = useMemo(
-    () => String(myProfile?.role || '').toLowerCase() === 'admin',
-    [myProfile?.role]
-  );
 
   /* ----- ACTIONS ----- */
   const toggleStatus = async (t) => {
@@ -253,23 +181,37 @@ export default function TasksTodayPage() {
     await load();
   };
 
-  // удалить целую задачу (только админ)
   const deleteTask = async (t) => {
-    if (!isAdminMe || !t?.id) return;
-    if (!window.confirm(`Удалить задачу «${t.title || ''}»? Это действие необратимо.`)) return;
+    if (!isManagerMe) return;
+    const title = (t?.title || '').trim();
+    const jb = jobsById[t.job_id] || {};
+    const head =
+      `Удалить задачу?\n` +
+      `${title ? `• ${title}\n` : ''}` +
+      `${t.job_number ? `• Заявка #${t.job_number}\n` : ''}` +
+      `${jb.client_company || jb.client_name ? `• ${jb.client_company || ''}${jb.client_company && jb.client_name ? ' • ' : ''}${jb.client_name || ''}\n` : ''}` +
+      `${jb.issue ? `• Проблема: ${jb.issue}\n` : ''}`;
+
+    if (!window.confirm(head)) return;
 
     try {
-      await supabase.from('task_comments').delete().eq('task_id', t.id); // на случай отсутствия CASCADE
-      const { error } = await supabase.from('tasks').delete().eq('id', t.id);
-      if (error) throw error;
-
-      setTasks(prev => prev.filter(x => x.id !== t.id));
-      setCommentsByTask(prev => {
-        const next = { ...prev }; delete next[t.id]; return next;
-      });
+      // 1) комментарии
+      await supabase.from('task_comments').delete().eq('task_id', t.id);
+      // 2) сам таск
+      await supabase.from('tasks').delete().eq('id', t.id);
     } catch (e) {
-      alert('Не удалось удалить задачу: ' + (e?.message || 'error'));
+      console.error('delete task failed:', e?.message || e);
+      alert('Не удалось удалить задачу');
     }
+    await load();
+  };
+
+  const pinComment = async (comment) => {
+    if (!comment?.id) return;
+    const taskId = comment.task_id;
+    await supabase.from('task_comments').update({ is_active: false }).eq('task_id', taskId);
+    await supabase.from('task_comments').update({ is_active: true }).eq('id', comment.id);
+    await load();
   };
 
   const addComment = async (task, text) => {
@@ -289,6 +231,7 @@ export default function TasksTodayPage() {
 
     await supabase.from('task_comments').insert({ task_id: task.id, body, author_id: me.id, is_active: false });
 
+    // автозакрытие неоплаты по комменту менеджера/админа
     if (isUnpaidTask(task) && isManagerMe && task.status === 'active') {
       await supabase.from('tasks')
         .update({ status: 'done', updated_at: new Date().toISOString(), due_date: nyToday() })
@@ -296,12 +239,6 @@ export default function TasksTodayPage() {
     }
     await load();
   };
-
-  // помощник — получить jobInfo по id или номеру
-  const resolveJobInfo = (t) =>
-    (t?.job_id ? jobInfoById[t.job_id] : null) ||
-    (t?.job_number != null ? jobInfoByNumber[String(t.job_number)] : null) ||
-    null;
 
   return (
     <div style={PAGE}>
@@ -324,13 +261,13 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
-                jobInfo={resolveJobInfo(t)}
+                jobInfo={jobsById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
-                isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
+                onDelete={() => deleteTask(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onDeleteTask={() => deleteTask(t)}
+                onPinComment={pinComment}
               />
             ))}
         </div>
@@ -345,13 +282,13 @@ export default function TasksTodayPage() {
               <TaskRow
                 key={t.id}
                 task={t}
-                jobInfo={resolveJobInfo(t)}
+                jobInfo={jobsById[t.job_id] || null}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
-                isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
+                onDelete={() => deleteTask(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onDeleteTask={() => deleteTask(t)}
+                onPinComment={pinComment}
               />
             ))}
         </div>
@@ -397,21 +334,17 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-function JobLine({ task, jobInfo }) {
-  const jn = jobInfo?.job_number ?? task?.job_number ?? null;
+function JobInfoLine({ task, jobInfo }) {
+  if (!task?.job_id && !task?.job_number) return null;
   const parts = [];
-  if (jn != null) parts.push(`Заявка #${jn}`);
-  const comp = (jobInfo?.company || '').trim();
-  if (comp) parts.push(comp);
-  const nm = (jobInfo?.full_name || '').trim();
-  if (nm) parts.push(nm);
-  const issue = (jobInfo?.issue || '').trim();
-  if (issue) parts.push(issue);
-  if (!parts.length) return null;
-  return <div style={{ color: '#6b7280', fontSize: 14 }}>{parts.join(' • ')}</div>;
+  if (task.job_id) parts.push(<JobLink key="lnk" id={task.job_id} number={task.job_number} />);
+  if (jobInfo?.client_company) parts.push(<span key="comp"> • {jobInfo.client_company}</span>);
+  if (jobInfo?.client_name) parts.push(<span key="name"> • {jobInfo.client_name}</span>);
+  if (jobInfo?.issue) parts.push(<span key="iss"> • {jobInfo.issue}</span>);
+  return <div style={{ fontSize: 13 }}>{parts}</div>;
 }
 
-function TaskRow({ task, jobInfo, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteTask }) {
+function TaskRow({ task, comments, jobInfo, isManagerMe, onToggle, onDelete, onAddComment, onPinComment }) {
   const [txt, setTxt] = useState('');
 
   return (
@@ -427,16 +360,11 @@ function TaskRow({ task, jobInfo, comments, isManagerMe, isAdminMe, onToggle, on
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
-          {/* подробная строка: номер — компания — имя — проблема */}
-          <JobLine task={task} jobInfo={jobInfo} />
-
-          {(task.job_number || task.job_id) && (
-            <div><JobLink id={task.job_id} number={jobInfo?.job_number ?? task.job_number} /></div>
-          )}
-
           {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
-          <TagList tags={task.tags} />
 
+          <JobInfoLine task={task} jobInfo={jobInfo} />
+
+          <TagList tags={task.tags} />
           {isUnpaidTask(task) && task.status === 'active' && (
             <div style={{ fontSize: 12, color: '#92400e' }}>
               ⏳ Неоплата закроется автоматически после комментария <b>менеджера/админа</b>.
@@ -444,12 +372,12 @@ function TaskRow({ task, jobInfo, comments, isManagerMe, isAdminMe, onToggle, on
           )}
         </div>
 
-        <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
+        <div style={{ display: 'flex', gap: 8 }}>
           <button style={BTN_L} onClick={onToggle}>
             {task.status === 'active' ? 'Завершить' : 'В активные'}
           </button>
-          {isAdminMe && (
-            <button style={BTN_DANGER} onClick={onDeleteTask} title="Удалить задачу (только админ)">
+          {isManagerMe && (
+            <button style={BTN_DANGER} onClick={onDelete}>
               Удалить
             </button>
           )}
@@ -458,12 +386,15 @@ function TaskRow({ task, jobInfo, comments, isManagerMe, isAdminMe, onToggle, on
 
       <div style={{ display: 'grid', gap: 8 }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>Комментарии</div>
-
         {(comments || []).map(c => (
-          <div key={c.id} style={{ fontSize: 14 }}>
-            <span style={{ fontWeight: 600 }}>{c.author_name}{c.author_role ? ` (${c.author_role})` : ''}:</span>{' '}
-            {c.body}{' '}
-            <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
+          <div key={c.id} style={{ fontSize: 14, display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 }}>
+            <div>
+              <span style={{ fontWeight: 600 }}>{c.author_name}{c.author_role ? ` (${c.author_role})` : ''}:</span>{' '}
+              {c.body}{' '}
+              <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
+              {c.is_active && <span style={{ marginLeft: 8, fontSize: 12, color: '#2563eb' }}>• активный</span>}
+            </div>
+            <div><button style={BTN_L} onClick={() => onPinComment(c)}>Сделать активным</button></div>
           </div>
         ))}
 
@@ -505,6 +436,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
     return label || 'Без клиента';
   };
 
+  // Загружаем ТОЛЬКО активные и НЕархивные заявки + клиент
   useEffect(() => {
     (async () => {
       try {
@@ -525,6 +457,7 @@ function CreateTaskModal({ me, onClose, onCreated }) {
         let rows = withClient;
         if (error) throw error;
 
+        // Если пусто (например, из-за RLS на clients), берём без связи
         if (!rows || rows.length === 0) {
           const { data: plain, error: e2 } = await supabase
             .from('jobs')
@@ -627,4 +560,60 @@ function CreateTaskModal({ me, onClose, onCreated }) {
 
         <div>
           <div style={{ fontSize: 12, color: '#6b7280' }}>Что нужно сделать</div>
-          <input style={INPUT} value={title} onChange={e => setTitle(e.target.value)} placeholder="Например: связаться с
+          <input style={INPUT} value={title} onChange={e => setTitle(e.target.value)} placeholder="Например: связаться с клиентом" />
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Детали</div>
+          <textarea style={TA} value={details} onChange={e => setDetails(e.target.value)} placeholder="Описание задачи..." />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>Номер заявки</div>
+            <select style={INPUT} value={jobId} onChange={e => setJobId(e.target.value)}>
+              <option value="">Без заявки</option>
+              {jobsList.length === 0
+                ? <option disabled>Активных заявок нет</option>
+                : jobsList.map(j => (
+                    <option key={j.id} value={j.id}>
+                      #{j.job_number ?? '—'} • {j.client_name} • {j.status || '—'}
+                    </option>
+                  ))
+              }
+            </select>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>Тип</div>
+            <select style={INPUT} value={type} onChange={e => setType(e.target.value)}>
+              <option value="general">Обычная</option>
+              <option value="unpaid">Неоплата</option>
+            </select>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>Приоритет</div>
+            <select style={INPUT} value={priority} onChange={e => setPriority(e.target.value)}>
+              <option value="low">low</option>
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Дата (NY)</div>
+          <input type="date" style={INPUT} value={dateStr} onChange={e => setDateStr(e.target.value)} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12 }}>
+          <div />
+          <button style={BTN} onClick={save} disabled={saving || !title.trim()}>
+            {saving ? 'Сохраняю…' : 'Создать'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
