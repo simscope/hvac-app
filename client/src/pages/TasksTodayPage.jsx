@@ -16,6 +16,7 @@ const BOX = { border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff',
 const H = { margin: '6px 0 10px', fontWeight: 700, fontSize: 18 };
 const BTN = { padding: '8px 12px', borderRadius: 10, border: '1px solid #111827', background: '#111827', color: '#fff', cursor: 'pointer' };
 const BTN_L = { ...BTN, borderColor: '#d1d5db', background: '#fff', color: '#111827' };
+const BTN_DANGER = { ...BTN_L, borderColor: '#ef4444', color: '#ef4444' };
 const INPUT = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 10 };
 const TA = { ...INPUT, minHeight: 90 };
 const CHIP = { padding: '6px 10px', border: '1px solid #d1d5db', borderRadius: 999, background: '#fff' };
@@ -144,6 +145,11 @@ export default function TasksTodayPage() {
     () => ['admin', 'manager'].includes(String(myProfile?.role || '').toLowerCase()),
     [myProfile?.role]
   );
+  // Только админ
+  const isAdminMe = useMemo(
+    () => String(myProfile?.role || '').toLowerCase() === 'admin',
+    [myProfile?.role]
+  );
 
   /* ----- ACTIONS ----- */
   const toggleStatus = async (t) => {
@@ -152,14 +158,6 @@ export default function TasksTodayPage() {
     await supabase.from('tasks')
       .update({ status: next, updated_at: new Date().toISOString(), due_date: nyToday() })
       .eq('id', t.id);
-    await load();
-  };
-
-  const pinComment = async (comment) => {
-    if (!comment?.id) return;
-    const taskId = comment.task_id;
-    await supabase.from('task_comments').update({ is_active: false }).eq('task_id', taskId);
-    await supabase.from('task_comments').update({ is_active: true }).eq('id', comment.id);
     await load();
   };
 
@@ -189,6 +187,25 @@ export default function TasksTodayPage() {
     await load();
   };
 
+  // Удаление комментария (только админ)
+  const deleteComment = async (comment) => {
+    if (!isAdminMe || !comment?.id) return;
+    if (!window.confirm('Удалить комментарий?')) return;
+
+    try {
+      const { error } = await supabase.from('task_comments').delete().eq('id', comment.id);
+      if (error) throw error;
+
+      // локально уберём без повторной загрузки
+      setCommentsByTask(prev => {
+        const list = (prev[comment.task_id] || []).filter(c => c.id !== comment.id);
+        return { ...prev, [comment.task_id]: list };
+      });
+    } catch (e) {
+      alert('Не удалось удалить: ' + (e?.message || 'error'));
+    }
+  };
+
   return (
     <div style={PAGE}>
       <div style={ROW}>
@@ -212,9 +229,10 @@ export default function TasksTodayPage() {
                 task={t}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
+                isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onPinComment={pinComment}
+                onDeleteComment={deleteComment}
               />
             ))}
         </div>
@@ -231,9 +249,10 @@ export default function TasksTodayPage() {
                 task={t}
                 comments={commentsByTask[t.id] || []}
                 isManagerMe={isManagerMe}
+                isAdminMe={isAdminMe}
                 onToggle={() => toggleStatus(t)}
                 onAddComment={(taskObj, txt) => addComment(taskObj, txt)}
-                onPinComment={pinComment}
+                onDeleteComment={deleteComment}
               />
             ))}
         </div>
@@ -279,7 +298,7 @@ const JobLink = ({ id, number }) => {
   );
 };
 
-function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinComment }) {
+function TaskRow({ task, comments, isManagerMe, isAdminMe, onToggle, onAddComment, onDeleteComment }) {
   const [txt, setTxt] = useState('');
 
   return (
@@ -303,9 +322,12 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
             </div>
           )}
         </div>
-        <button style={BTN_L} onClick={onToggle}>
-          {task.status === 'active' ? 'Завершить' : 'В активные'}
-        </button>
+        <div style={{ display: 'grid', gap: 8, justifyItems: 'end' }}>
+          <button style={BTN_L} onClick={onToggle}>
+            {task.status === 'active' ? 'Завершить' : 'В активные'}
+          </button>
+          {/* Под кнопкой — «Удалить комментарий» НЕ тут; удаление комментов внизу у каждого комментария */}
+        </div>
       </div>
 
       <div style={{ display: 'grid', gap: 8 }}>
@@ -318,7 +340,17 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onAddComment, onPinCom
               <span style={{ color: '#6b7280', fontSize: 12 }}>{dayjs(c.created_at).tz(NY).format('DD.MM HH:mm')}</span>
               {c.is_active && <span style={{ marginLeft: 8, fontSize: 12, color: '#2563eb' }}>• активный</span>}
             </div>
-            <div><button style={BTN_L} onClick={() => onPinComment(c)}>Сделать активным</button></div>
+            <div>
+              {isAdminMe && (
+                <button
+                  style={BTN_DANGER}
+                  onClick={() => onDeleteComment(c)}
+                  title="Удалить комментарий (только админ)"
+                >
+                  Удалить
+                </button>
+              )}
+            </div>
           </div>
         ))}
 
