@@ -78,6 +78,7 @@ export default function TasksTodayPage() {
     try {
       const today = nyToday();
 
+      // 1) tasks: активные + сегодняшние завершённые
       const { data: activeRows, error: aErr } = await supabase
         .from('tasks')
         .select('id,title,details,status,type,job_id,job_number,due_date,assignee_id,priority,tags,reminder_at,remind_every_minutes,created_at,updated_at')
@@ -95,7 +96,7 @@ export default function TasksTodayPage() {
 
       const t = [...(activeRows || []), ...(doneRows || [])];
 
-      // комментарии
+      // 2) comments
       let map = {};
       if (t.length) {
         const ids = t.map(x => x.id);
@@ -119,23 +120,26 @@ export default function TasksTodayPage() {
         });
       }
 
-      // Информация по заявкам
+      // 3) jobs + clients (двумя запросами, без join — чтобы не упасть на RLS)
       let jobsMap = {};
       const jobIds = Array.from(new Set(t.map(x => x.job_id).filter(Boolean)));
       if (jobIds.length) {
         const { data: jobs } = await supabase
           .from('jobs')
-          .select(`
-            id,
-            job_number,
-            issue,
-            problem,
-            description,
-            details,
-            client_id,
-            clients:client_id ( full_name, company )
-          `)
+          .select('id, job_number, client_id, issue, problem, description, details')
           .in('id', jobIds);
+
+        const clientIds = Array.from(new Set((jobs || []).map(j => j.client_id).filter(Boolean)));
+        let clientsMap = {};
+        if (clientIds.length) {
+          const { data: clients } = await supabase
+            .from('clients')
+            .select('id, full_name, company')
+            .in('id', clientIds);
+          (clients || []).forEach(c => {
+            clientsMap[c.id] = { full_name: c.full_name || '', company: c.company || '' };
+          });
+        }
 
         const pickIssue = (j) => {
           const candidates = [j?.issue, j?.problem, j?.description, j?.details];
@@ -144,11 +148,12 @@ export default function TasksTodayPage() {
         };
 
         (jobs || []).forEach(j => {
+          const cli = clientsMap[j.client_id] || {};
           jobsMap[j.id] = {
             job_number: j.job_number ?? null,
-            issue: pickIssue(j),               // может быть пусто — обработаем при рендере
-            client_company: j?.clients?.company || '',
-            client_name: j?.clients?.full_name || '',
+            issue: pickIssue(j),
+            client_company: cli.company || '',
+            client_name: cli.full_name || '',
           };
         });
       }
@@ -337,7 +342,6 @@ const JobLink = ({ id, number }) => {
 };
 
 const JobInfoLine = ({ jobId, info, taskDetails, fallbackNumber }) => {
-  // собираем строку всегда, даже если info пустой
   const jobNum   = info?.job_number ?? fallbackNumber ?? null;
   const company  = (info?.client_company || '').trim() || '—';
   const person   = (info?.client_name || '').trim() || '—';
@@ -367,8 +371,7 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
             <RemBadge at={task.reminder_at} every={task.remind_every_minutes} />
           </div>
 
-          {/* Детали + Строка Заявка # • Компания • Имя • Проблема */}
-          {task.details && <div style={{ color: '#6b7280', fontSize: 14 }}>{task.details}</div>}
+          {/* единственная строка с подробностями: заявка — компания — имя — проблема */}
           <JobInfoLine
             jobId={task.job_id}
             info={task._job_info}
@@ -425,9 +428,9 @@ function TaskRow({ task, comments, isManagerMe, onToggle, onDelete, onAddComment
 
 /* ================== Create Modal ================== */
 function CreateTaskModal({ me, onClose, onCreated }) {
-  const [title, setTitle] = useState('');
+  const [title, setTitle]   = useState('');
   const [details, setDetails] = useState('');
-  const [jobId, setJobId] = useState('');
+  const [jobId, setJobId]   = useState('');
   const [jobsList, setJobsList] = useState([]);
   const [priority, setPriority] = useState('normal');
   const [type, setType] = useState('general'); // general | unpaid
