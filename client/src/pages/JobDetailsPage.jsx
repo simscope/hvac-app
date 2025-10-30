@@ -917,7 +917,7 @@ export default function JobDetailsPage() {
     const message =
 `Hello${client?.full_name ? ' ' + client.full_name : ''},
 
-Please find your invoice ${invoiceNo ? '#' + invoiceNo : ''} ${jobNo ? 'for job ' + jobNo : ''} attached as a PDF.
+Please find your invoice ${invoiceNo ? '#' + invoiceNo : ''} attached as a PDF.
 
 If you have any questions, just reply to this email.
 
@@ -1595,4 +1595,5 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
 
