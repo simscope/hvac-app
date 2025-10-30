@@ -90,6 +90,26 @@ const ARCHIVE_BANNER = {
   alignItems: 'center',
 };
 
+/* --- Email modal styles --- */
+const MODAL_BACKDROP = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,0.35)',
+  display: 'grid',
+  placeItems: 'center',
+  zIndex: 1000,
+};
+const MODAL_BOX = {
+  width: 'min(760px, 96vw)',
+  background: '#fff',
+  borderRadius: 12,
+  border: '1px solid #e5e7eb',
+  boxShadow: '0 10px 30px rgba(0,0,0,0.12)',
+  padding: 14,
+  display: 'grid',
+  gap: 10,
+};
+
 /* ---------- Storage ---------- */
 const PHOTOS_BUCKET = 'job-photos';
 const INVOICES_BUCKET = 'invoices';
@@ -185,39 +205,9 @@ const isDone = (s) => DONE_STATUSES.has(String(s || '').toLowerCase().trim());
 
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = {
-  а: 'a',
-  б: 'b',
-  в: 'v',
-  г: 'g',
-  д: 'd',
-  е: 'e',
-  ё: 'e',
-  ж: 'zh',
-  з: 'z',
-  и: 'i',
-  й: 'y',
-  к: 'k',
-  л: 'l',
-  м: 'm',
-  н: 'n',
-  о: 'o',
-  п: 'p',
-  р: 'r',
-  с: 's',
-  т: 't',
-  у: 'u',
-  ф: 'f',
-  х: 'h',
-  ц: 'c',
-  ч: 'ch',
-  ш: 'sh',
-  щ: 'sch',
-  ъ: '',
-  ы: 'y',
-  ь: '',
-  э: 'e',
-  ю: 'yu',
-  я: 'ya',
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
+  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
+  х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
 };
 function slugifyFileName(name) {
   const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : 'bin';
@@ -298,6 +288,11 @@ export default function JobDetailsPage() {
 
   // to avoid auto-archive loop
   const autoArchivedOnce = useRef(false);
+
+  // email modal state
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', message: '' });
+  const [emailInvSelected, setEmailInvSelected] = useState(null);
 
   /* ---------- load ---------- */
   useEffect(() => {
@@ -726,21 +721,20 @@ export default function JobDetailsPage() {
 
   // Delete file (edge auth + fallback)
   const delPhoto = async (name) => {
-  if (!window.confirm('Delete file?')) return;
-  try {
-    await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
-    await loadPhotos();
-  } catch (e) {
-    // fallback: прямое удаление из Storage (если есть права RLS)
-    const { error } = await storage().remove([`${jobId}/${name}`]);
-    if (error) {
-      alert(`Failed to delete file: ${e.message || error.message || 'error'}`);
-      return;
+    if (!window.confirm('Delete file?')) return;
+    try {
+      await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
+      await loadPhotos();
+    } catch (e) {
+      // fallback: прямое удаление из Storage (если есть права RLS)
+      const { error } = await storage().remove([`${jobId}/${name}`]);
+      if (error) {
+        alert(`Failed to delete file: ${e.message || error.message || 'error'}`);
+        return;
+      }
+      await loadPhotos();
     }
-    await loadPhotos();
-  }
-};
-
+  };
 
   const toggleAllPhotos = (checkedAll) => {
     setChecked(checkedAll ? Object.fromEntries(photos.map((p) => [p.name, true])) : {});
@@ -844,86 +838,83 @@ export default function JobDetailsPage() {
     URL.revokeObjectURL(url);
   };
 
-// --- replace whole deleteInvoice with this version ---
-const deleteInvoice = async (item) => {
-  // 0) sanity
-  if (!item) return;
+  // --- replace whole deleteInvoice with this version ---
+  const deleteInvoice = async (item) => {
+    // 0) sanity
+    if (!item) return;
 
-  // 1) определяем номер инвойса и имя файла
-  const invoiceNoStr = item?.invoice_no != null ? String(item.invoice_no) : null;
-  const invoiceNoNum = invoiceNoStr ? Number(invoiceNoStr) : null;
-  const fileName = item?.name || (invoiceNoStr ? `invoice_${invoiceNoStr}.pdf` : null);
+    // 1) определяем номер инвойса и имя файла
+    const invoiceNoStr = item?.invoice_no != null ? String(item.invoice_no) : null;
+    const invoiceNoNum = invoiceNoStr ? Number(invoiceNoStr) : null;
+    const fileName = item?.name || (invoiceNoStr ? `invoice_${invoiceNoStr}.pdf` : null);
 
-  if (!window.confirm(`Delete invoice${invoiceNoStr ? ' #' + invoiceNoStr : ''}?`)) return;
+    if (!window.confirm(`Delete invoice${invoiceNoStr ? ' #' + invoiceNoStr : ''}?`)) return;
 
-  // 2) пробуем удалить через Edge (она сама чистит Storage + БД)
-  let edgeOk = false;
-  try {
-    await callEdgeAuth('admin-delete-invoice', {
-      bucket: INVOICES_BUCKET,
-      job_id: jobId,
-      invoice_no: invoiceNoStr,   // строкой — как ждёт Edge
-      file_name: fileName,        // опционально; Edge сама соберёт путь <jobId>/<file_name>
-    });
-    edgeOk = true;
-  } catch (e) {
-    console.warn('Edge delete failed:', e?.message || e);
-  }
-
-  // 3) Фоллбек: чистим руками, если Edge не смогла
-  if (!edgeOk) {
-    // 3a) PDF в Storage
+    // 2) пробуем удалить через Edge (она сама чистит Storage + БД)
+    let edgeOk = false;
     try {
-      if (fileName) await invStorage().remove([`${jobId}/${fileName}`]);
+      await callEdgeAuth('admin-delete-invoice', {
+        bucket: INVOICES_BUCKET,
+        job_id: jobId,
+        invoice_no: invoiceNoStr,   // строкой — как ждёт Edge
+        file_name: fileName,        // опционально; Edge сама соберёт путь <jobId>/<file_name>
+      });
+      edgeOk = true;
     } catch (e) {
-      console.warn('Storage fallback delete warn:', e?.message || e);
+      console.warn('Edge delete failed:', e?.message || e);
     }
-    // 3b) запись в БД
-    try {
-      if (item?.db_id) {
-        await supabase.from('invoices').delete().eq('id', item.db_id);
-      } else if (invoiceNoNum != null) {
-        await supabase
-          .from('invoices')
-          .delete()
-          .eq('job_id', jobId)
-          .eq('invoice_no', invoiceNoNum);
+
+    // 3) Фоллбек: чистим руками, если Edge не смогла
+    if (!edgeOk) {
+      // 3a) PDF в Storage
+      try {
+        if (fileName) await invStorage().remove([`${jobId}/${fileName}`]);
+      } catch (e) {
+        console.warn('Storage fallback delete warn:', e?.message || e);
       }
-    } catch (e) {
-      console.warn('DB cleanup warn:', e?.message || e);
+      // 3b) запись в БД
+      try {
+        if (item?.db_id) {
+          await supabase.from('invoices').delete().eq('id', item.db_id);
+        } else if (invoiceNoNum != null) {
+          await supabase
+            .from('invoices')
+            .delete()
+            .eq('job_id', jobId)
+            .eq('invoice_no', invoiceNoNum);
+        }
+      } catch (e) {
+        console.warn('DB cleanup warn:', e?.message || e);
+      }
     }
-  }
 
-  // 4) обновить список
-  await loadInvoices();
-};
-
+    // 4) обновить список
+    await loadInvoices();
+  };
 
   const createInvoice = () => {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
-  // NEW: send invoice email via Edge Function
-  const sendInvoiceEmail = async (inv) => {
-    if (!inv?.hasFile) {
-      alert('Invoice PDF is not in storage yet. Open the invoice and save it first, then press Refresh.');
-      return;
-    }
-    const to = normalizeEmail(client?.email);
-    if (!to) {
-      alert('Client email is empty. Please fill in the email in the Client section and save.');
-      return;
-    }
+  // util for html (function declaration to be safely used above)
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#39;');
+  }
 
+  const nl2brHtml = (s) => `<p>${escapeHtml(String(s || '').trim()).replace(/\n{2,}/g, '\n\n').split('\n').join('<br/>')}</p>`;
+
+  // Build default email draft for an invoice
+  const buildDefaultEmailDraft = (inv) => {
+    const to = normalizeEmail(client?.email) || '';
     const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
-    const fileName = inv?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : null);
-    const key = fileName ? `${jobId}/${fileName}` : null;
-
     const jobNo = job?.job_number ? `#${job.job_number}` : '';
-    const subj = `Invoice ${invoiceNo ? '#' + invoiceNo : ''} — Sim Scope Inc.`;
-
-    // Plain text body (fallback)
-    const text =
+    const subject = `Invoice ${invoiceNo ? '#' + invoiceNo : ''} — Sim Scope Inc.`;
+    const message =
 `Hello${client?.full_name ? ' ' + client.full_name : ''},
 
 Please find your invoice ${invoiceNo ? '#' + invoiceNo : ''} ${jobNo ? 'for job ' + jobNo : ''} attached as a PDF.
@@ -937,13 +928,30 @@ Phone: (929) 412-9042 Zelle
 Website: https://appliance-hvac-repair.com
 HVAC • Appliance Repair
 Services Licensed & Insured | Serving NYC and NJ`;
+    return { to, subject, message };
+  };
 
-    // Simple HTML body
-    const html = `
-<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
-  <p>Hello${client?.full_name ? ' ' + escapeHtml(client.full_name) : ''},</p>
-  <p>Please find your invoice ${invoiceNo ? '<strong>#' + invoiceNo + '</strong>' : ''}${jobNo ? ' for job <strong>' + escapeHtml(jobNo) + '</strong>' : ''} attached as a PDF.</p>
-  <p>If you have any questions, just reply to this email.</p>
+  // NEW: send invoice email via Edge Function (now supports overrides from modal)
+  const sendInvoiceEmail = async (inv, overrides = {}) => {
+    if (!inv?.hasFile) {
+      alert('Invoice PDF is not in storage yet. Open the invoice and save it first, then press Refresh.');
+      return;
+    }
+    const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
+    const fileName = inv?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : null);
+    const key = fileName ? `${jobId}/${fileName}` : null;
+
+    const draft = buildDefaultEmailDraft(inv);
+    const to = normalizeEmail(overrides.to ?? draft.to);
+    if (!to) {
+      alert('Client email is empty. Please fill it in.');
+      return;
+    }
+    const subject = String(overrides.subject ?? draft.subject);
+    const text = String(overrides.message ?? draft.message);
+    const html =
+`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
+  ${nl2brHtml(text)}
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
   <div style="font-size:12px;color:#334155">
     <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
@@ -957,10 +965,9 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
     try {
       setSendingInvId(`${inv.source}-${inv.invoice_no || inv.name}`);
-      // Edge Function must fetch the file from Storage and send the email with attachment
       await callEdgeAuth('send-invoice-email', {
         to,
-        subject: subj,
+        subject,
         text,
         html,
         bucket: INVOICES_BUCKET,
@@ -979,13 +986,26 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // util for html
-  const escapeHtml = (s) => String(s ?? '')
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;')
-    .replace(/'/g,'&#39;');
+  // Modal open/close + send
+  const openEmailModal = (inv) => {
+    const draft = buildDefaultEmailDraft(inv);
+    setEmailDraft(draft);
+    setEmailInvSelected(inv);
+    setEmailModalOpen(true);
+  };
+  const closeEmailModal = () => {
+    setEmailModalOpen(false);
+    setEmailInvSelected(null);
+  };
+  const confirmSendEmailFromModal = async () => {
+    if (!emailInvSelected) return;
+    await sendInvoiceEmail(emailInvSelected, {
+      to: emailDraft.to,
+      subject: emailDraft.subject,
+      message: emailDraft.message,
+    });
+    closeEmailModal();
+  };
 
   /* ---------- display ---------- */
   const jobNumTitle = useMemo(() => (job?.job_number ? `#${job.job_number}` : '#—'), [job]);
@@ -1214,7 +1234,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
           {/* Invoices */}
           <div style={BOX}>
-            <div style={{ display: 'flex,', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Invoices (PDF)</div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
@@ -1291,7 +1311,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                             cursor: canSend ? 'pointer' : 'not-allowed',
                             minWidth: 120,
                           }}
-                          onClick={() => canSend && sendInvoiceEmail(inv)}
+                          onClick={() => canSend && openEmailModal(inv)}
                           disabled={!canSend || sending}
                         >
                           {sending ? 'Sending…' : 'Send email'}
@@ -1496,6 +1516,60 @@ Services Licensed & Insured | Serving NYC and NJ`;
           ))}
         </div>
       </div>
+
+      {/* === Email Compose Modal === */}
+      {emailModalOpen && (
+        <div style={MODAL_BACKDROP} onClick={(e) => { if (e.target === e.currentTarget) closeEmailModal(); }}>
+          <div style={MODAL_BOX}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ ...H2, margin: 0 }}>Send invoice email</div>
+              <button style={BTN} onClick={closeEmailModal}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={ROW}>
+                <div>To</div>
+                <input
+                  style={INPUT}
+                  value={emailDraft.to}
+                  onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))}
+                  placeholder="client@example.com"
+                />
+              </div>
+              <div style={ROW}>
+                <div>Subject</div>
+                <input
+                  style={INPUT}
+                  value={emailDraft.subject}
+                  onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))}
+                />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6, color: '#374151', fontWeight: 600 }}>Message</div>
+                <textarea
+                  style={{ ...TA, minHeight: 180 }}
+                  value={emailDraft.message}
+                  onChange={(e) => setEmailDraft((d) => ({ ...d, message: e.target.value }))}
+                />
+                <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
+                  Attachment: invoice PDF will be attached automatically
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button style={BTN} onClick={closeEmailModal}>Cancel</button>
+              <button
+                style={{ ...PRIMARY, opacity: sendingInvId ? 0.6 : 1, cursor: sendingInvId ? 'not-allowed' : 'pointer' }}
+                disabled={!!sendingInvId}
+                onClick={confirmSendEmailFromModal}
+              >
+                {sendingInvId ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1511,7 +1585,7 @@ function Row({ label, value, onChange }) {
 }
 function Th({ children, center }) {
   return (
-    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 }}>
+    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid '#e5e7eb', background: '#f9fafb', padding: 8 }}>
       {children}
     </th>
   );
@@ -1521,8 +1595,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
-
-
-
