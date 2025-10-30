@@ -6,14 +6,16 @@ import * as XLSX from 'xlsx';
 
 const JoAllJobsPage = () => {
   const [jobs, setJobs] = useState([]);
-  const [origJobs, setOrigJobs] = useState([]); // last snapshot from server
+  const [origJobs, setOrigJobs] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [clients, setClients] = useState([]);
+  const [invoices, setInvoices] = useState([]); // ← тянем инвойсы из БД
+
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTech, setFilterTech] = useState('all');
   const [filterPaid, setFilterPaid] = useState('all'); // all | paid | unpaid
   const [searchText, setSearchText] = useState('');
-  const [invoiceQuery, setInvoiceQuery] = useState(''); // 🔎 поиск по инвойсу/джобу
+  const [invoiceQuery, setInvoiceQuery] = useState(''); // поиск по invoice_no / job_number
   const [sortAsc, setSortAsc] = useState(true);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('active'); // active | warranty | archive
@@ -22,7 +24,6 @@ const JoAllJobsPage = () => {
   const invoiceBoxRef = useRef(null);
   const navigate = useNavigate();
 
-  // Dropdown labels (визуальные). Для сравнения используем canonStatus().
   const statuses = [
     'ReCall',
     'Diagnosis',
@@ -33,12 +34,11 @@ const JoAllJobsPage = () => {
     'Completed',
   ];
 
-  // === Канонизация статуса ===
   const canonStatus = (val) => {
     const raw = String(val ?? '').toLowerCase();
     const v = raw.replace(/[\s\-_]+/g, '');
     if (!v) return '';
-    if (v.startsWith('rec') || v.startsWith('recal')) return 'recall';
+    if (v.startsWith('rec')) return 'recall';
     if (v === 'diagnosis') return 'diagnosis';
     if (v === 'inprogress') return 'in progress';
     if (v === 'partsordered') return 'parts ordered';
@@ -46,15 +46,16 @@ const JoAllJobsPage = () => {
     if (v === 'tofinish') return 'to finish';
     if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
     if (v === 'canceled' || v === 'cancelled') return 'canceled';
-    if ([
-      'recall','diagnosis','in progress','parts ordered','waiting for parts','to finish','completed','canceled'
-    ].includes(raw)) return raw;
+    if (
+      [
+        'recall','diagnosis','in progress','parts ordered',
+        'waiting for parts','to finish','completed','canceled',
+      ].includes(raw)
+    ) return raw;
     return v;
   };
 
-  useEffect(() => {
-    fetchAll();
-  }, []);
+  useEffect(() => { fetchAll(); }, []);
 
   useEffect(() => {
     const onClickOutside = (e) => {
@@ -68,19 +69,22 @@ const JoAllJobsPage = () => {
 
   const fetchAll = async () => {
     setLoading(true);
-    const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
+    const [jobsRes, techRes, clientsRes, invRes] = await Promise.all([
       supabase.from('jobs').select('*'),
       supabase
         .from('technicians')
         .select('id,name,role,is_active')
         .in('role', ['technician', 'tech'])
         .order('name', { ascending: true }),
-      supabase.from('clients').select('*'), // company включена (берём все поля)
+      supabase.from('clients').select('*'),
+      supabase.from('invoices').select('id, job_id, invoice_no, file_key, created_at'),
     ]);
-    setJobs(j || []);
-    setOrigJobs(j || []);
-    setTechnicians(t || []);
-    setClients(c || []);
+
+    setJobs(jobsRes.data || []);
+    setOrigJobs(jobsRes.data || []);
+    setTechnicians(techRes.data || []);
+    setClients(clientsRes.data || []);
+    setInvoices(invRes.data || []);
     setLoading(false);
   };
 
@@ -89,15 +93,8 @@ const JoAllJobsPage = () => {
   const formatAddress = (c) => {
     if (!c) return '';
     const parts = [
-      c.address,
-      c.address_line1,
-      c.address_line2,
-      c.street,
-      c.city,
-      c.state,
-      c.region,
-      c.zip,
-      c.postal_code,
+      c.address, c.address_line1, c.address_line2, c.street,
+      c.city, c.state, c.region, c.zip, c.postal_code,
     ].filter(Boolean);
     return parts.join(', ');
   };
@@ -115,13 +112,12 @@ const JoAllJobsPage = () => {
     return val;
   };
 
-  /* ====== Payment helpers ====== */
+  /* ====== Payments ====== */
   const methodChosen = (raw) => {
     const v = String(raw ?? '').trim().toLowerCase();
     return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
   };
 
-  /* ====== Paid logic ====== */
   const isFullyPaidNow = (j) => {
     const scf = Number(j.scf || 0);
     const labor = Number(j.labor_price || 0);
@@ -130,15 +126,12 @@ const JoAllJobsPage = () => {
     return scfOK && laborOK;
   };
   const isUnpaidNow = (j) => !isFullyPaidNow(j);
-
-  // Highlight selects (amount > 0 but method not chosen)
   const needsScfPayment = (j) => Number(j.scf || 0) > 0 && !methodChosen(j.scf_payment_method);
   const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !methodChosen(j.labor_payment_method);
 
-  /* ====== WARRANTY/ARCHIVE by DB snapshot (origJobs) ====== */
+  /* ====== Warranty / Archive ====== */
   const isDone = (s) => canonStatus(s) === 'completed';
   const isRecall = (s) => canonStatus(s) === 'recall';
-
   const origById = (id) => origJobs.find((x) => x.id === id) || null;
 
   const persistedFullyPaid = (j) => {
@@ -159,10 +152,9 @@ const JoAllJobsPage = () => {
     return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 days
   };
   const now = new Date();
-
   const persistedInWarranty = (j) => {
     const o = origById(j.id) || j;
-    if (isRecall(o.status)) return false; // ReCall is always active
+    if (isRecall(o.status)) return false;
     return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now <= warrantyEnd(j);
   };
   const persistedInArchiveByWarranty = (j) => {
@@ -173,9 +165,7 @@ const JoAllJobsPage = () => {
 
   /* ====== Save ====== */
   const handleSave = async (job) => {
-    const { id } = job;
-
-    const prev = origById(id) || {};
+    const prev = origById(job.id) || {};
     const wasDone = isDone(prev.status);
     const willBeDone = isDone(job.status);
 
@@ -188,22 +178,17 @@ const JoAllJobsPage = () => {
       labor_payment_method: job.labor_payment_method ?? null,
       system_type: job.system_type ?? null,
       issue: job.issue ?? null,
-      // если в БД есть invoice_number и его меняем — можно добавить сюда
-      // invoice_number: job.invoice_number ?? null,
     };
 
-    // on transition to "completed" fix the timestamp
     if (!wasDone && willBeDone) {
       payload.completed_at = new Date().toISOString();
     }
 
-    let { error } = await supabase.from('jobs').update(payload).eq('id', id);
-
+    let { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
     if (error && String(error.message || '').toLowerCase().includes('completed_at')) {
-      const { completed_at, ...withoutCompleted } = payload;
-      ({ error } = await supabase.from('jobs').update(withoutCompleted).eq('id', id));
+      const { completed_at, ...rest } = payload;
+      ({ error } = await supabase.from('jobs').update(rest).eq('id', job.id));
     }
-
     if (error) {
       console.error('Save error (jobs):', error, payload);
       alert('Failed to save');
@@ -223,13 +208,35 @@ const JoAllJobsPage = () => {
     setShowInvoiceList(false);
   };
 
+  /* ====== Maps: invoice by job_id и по номеру ====== */
+  const invByJob = useMemo(() => {
+    const m = new Map();
+    for (const inv of invoices || []) {
+      if (!inv.job_id) continue;
+      // если у работы несколько инвойсов — берём самый новый
+      const old = m.get(inv.job_id);
+      if (!old || new Date(inv.created_at) > new Date(old.created_at)) {
+        m.set(inv.job_id, inv);
+      }
+    }
+    return m;
+  }, [invoices]);
+
+  const jobsById = useMemo(() => {
+    const m = new Map();
+    for (const j of jobs || []) m.set(j.id, j);
+    return m;
+  }, [jobs]);
+
+  /* ====== Export ====== */
   const handleExport = () => {
     const rows = filteredJobs.map((job) => {
       const client = getClient(job.client_id);
       const tech = technicians.find((t) => String(t.id) === String(job.technician_id));
+      const inv = invByJob.get(job.id);
       return {
         Job: job.job_number || job.id,
-        Invoice: job.invoice_number || '', // если есть
+        Invoice: inv?.invoice_no ?? '',
         Company: client?.company || '',
         Client: client?.name || client?.full_name || '',
         Phone: client?.phone || '',
@@ -251,21 +258,11 @@ const JoAllJobsPage = () => {
     XLSX.writeFile(wb, 'jobs.xlsx');
   };
 
-  /* ====== helpers для поиска по инвойсу ====== */
+  /* ====== Search helpers ====== */
   const normalize = (v) => String(v ?? '').trim().toLowerCase();
-  const jobMatchesInvoice = (j, q) => {
-    if (!q) return true;
-    const t = normalize(q);
-    const inv = normalize(j.invoice_number);
-    const jobNo = normalize(j.job_number);
-    const idStr = normalize(j.id);
-    // поддержим разные форматы: "inv-123", "invoice 123", просто "123"
-    return (
-      (inv && inv.includes(t)) ||
-      (jobNo && jobNo.includes(t)) ||
-      (idStr && idStr.includes(t))
-    );
-  };
+
+  // строгая логика для числа: точное совпадение по номеру
+  const isDigits = (s) => /^\d+$/.test(String(s).trim());
 
   /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
@@ -275,16 +272,11 @@ const JoAllJobsPage = () => {
         const recall = isRecall(o.status);
 
         if (viewMode === 'warranty') {
-          // Only warranty, exclude manually archived
           return !recall && !j.archived_at && persistedInWarranty(j);
         }
-
         if (viewMode === 'archive') {
-          // Archive: manually archived OR expired warranty
           return j.archived_at || (!recall && persistedInArchiveByWarranty(j));
         }
-
-        // active: everything NOT in warranty and NOT in archive, + ReCall; exclude manually archived
         return (recall || !(persistedInWarranty(j) || persistedInArchiveByWarranty(j))) && !j.archived_at;
       })
       .filter((j) =>
@@ -295,9 +287,22 @@ const JoAllJobsPage = () => {
           : canonStatus(j.status) === canonStatus(filterStatus)
       )
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
-      // 🔎 Поиск по инвойсу/джобу имеет приоритет: если введён invoiceQuery — применяем этот фильтр
-      .filter((j) => jobMatchesInvoice(j, invoiceQuery))
-      // 🔎 Остальной общий поиск по клиенту/адресу (работает вместе с invoiceQuery)
+      // поиск по invoice_no (если введён)
+      .filter((j) => {
+        const q = invoiceQuery.trim();
+        if (!q) return true;
+        const inv = invByJob.get(j.id);
+        if (isDigits(q)) {
+          const qn = Number(q);
+          const jobNo = Number(j.job_number || NaN);
+          return (inv?.invoice_no === qn) || (jobNo === qn);
+        }
+        const ql = q.toLowerCase();
+        const invTxt = inv?.invoice_no != null ? String(inv.invoice_no).toLowerCase() : '';
+        const jobTxt = j.job_number != null ? String(j.job_number).toLowerCase() : '';
+        return (invTxt.includes(ql) || jobTxt.includes(ql));
+      })
+      // общий поиск по клиенту/адресу
       .filter((j) => {
         if (!searchText) return true;
         const c = getClient(j.client_id);
@@ -314,7 +319,7 @@ const JoAllJobsPage = () => {
       .filter((j) => {
         if (filterPaid === 'paid') return isFullyPaidNow(j);
         if (filterPaid === 'unpaid') return isUnpaidNow(j);
-        return true; // all
+        return true;
       })
       .sort((a, b) => {
         const A = (a.job_number || a.id).toString();
@@ -322,39 +327,67 @@ const JoAllJobsPage = () => {
         return sortAsc ? A.localeCompare(B) : B.localeCompare(A);
       });
   }, [
-    jobs,
-    technicians,
-    clients,
-    filterStatus,
-    filterTech,
-    filterPaid,
-    searchText,
-    invoiceQuery,
-    sortAsc,
-    viewMode,
-    origJobs,
+    jobs, technicians, clients, invoices,
+    filterStatus, filterTech, filterPaid,
+    searchText, invoiceQuery, sortAsc, viewMode, origJobs,
   ]);
 
-  // Список быстрых совпадений для выпадающего окна
+  // Быстрые совпадения для выпадающего окна
   const invoiceMatches = useMemo(() => {
-    const q = normalize(invoiceQuery);
+    const q = invoiceQuery.trim();
     if (!q) return [];
-    const list = (jobs || []).filter((j) => jobMatchesInvoice(j, q));
-    // Отсортируем: сначала точные совпадения по invoice_number, затем по job_number
-    list.sort((a, b) => {
-      const aInv = normalize(a.invoice_number);
-      const bInv = normalize(b.invoice_number);
-      const exactA = aInv === q || normalize(a.job_number) === q;
-      const exactB = bInv === q || normalize(b.job_number) === q;
-      if (exactA && !exactB) return -1;
-      if (!exactA && exactB) return 1;
-      // затем по job_number по возрастанию
-      const A = (a.job_number || a.id).toString();
-      const B = (b.job_number || b.id).toString();
-      return A.localeCompare(B);
+    const list = [];
+
+    if (isDigits(q)) {
+      const qn = Number(q);
+      // точные совпадения по номеру инвойса
+      for (const inv of invoices || []) {
+        if (inv.invoice_no === qn) {
+          const job = jobsById.get(inv.job_id);
+          if (job) list.push({ job, inv });
+        }
+      }
+      // точные совпадения по job_number
+      for (const job of jobs || []) {
+        const jobNo = Number(job.job_number || NaN);
+        if (jobNo === qn) {
+          list.push({ job, inv: invByJob.get(job.id) || null });
+        }
+      }
+    } else {
+      const ql = q.toLowerCase();
+      for (const inv of invoices || []) {
+        const invTxt = inv.invoice_no != null ? String(inv.invoice_no).toLowerCase() : '';
+        if (invTxt.includes(ql)) {
+          const job = jobsById.get(inv.job_id);
+          if (job) list.push({ job, inv });
+        }
+      }
+      for (const job of jobs || []) {
+        const jobTxt = job.job_number != null ? String(job.job_number).toLowerCase() : '';
+        if (jobTxt.includes(ql)) {
+          list.push({ job, inv: invByJob.get(job.id) || null });
+        }
+      }
+    }
+
+    // Уберём дубли по паре job.id + inv?.id
+    const seen = new Set();
+    const uniq = [];
+    for (const item of list) {
+      const key = `${item.job.id}:${item.inv?.id || 'noinv'}`;
+      if (!seen.has(key)) { seen.add(key); uniq.push(item); }
+    }
+
+    // Сначала те, у кого точное совпадение по inv/job номеру
+    uniq.sort((a, b) => {
+      const aKey = String(a.inv?.invoice_no ?? a.job.job_number ?? '');
+      const bKey = String(b.inv?.invoice_no ?? b.job.job_number ?? '');
+      return aKey.localeCompare(bKey, undefined, { numeric: true });
     });
-    return list.slice(0, 10);
-  }, [invoiceQuery, jobs]);
+
+    return uniq.slice(0, 10);
+  }, [invoiceQuery, invoices, jobs, invByJob, jobsById]);
 
   const grouped = useMemo(() => {
     const g = {};
@@ -367,14 +400,17 @@ const JoAllJobsPage = () => {
   }, [filteredJobs]);
 
   const openSingleMatchOnEnter = (e) => {
-    if (e.key === 'Enter') {
-      if (invoiceMatches.length === 1) {
-        navigate(`/job/${invoiceMatches[0].id}`);
-      } else if (invoiceMatches.length > 0) {
-        // если много — откроем первое
-        navigate(`/job/${invoiceMatches[0].id}`);
-      }
+    if (e.key === 'Enter' && invoiceMatches.length > 0) {
+      const { job, inv } = invoiceMatches[0];
+      if (inv) navigate(`/invoice/${job.id}?invoice=${inv.id}`);
+      else navigate(`/invoice/new?job=${job.id}`);
     }
+  };
+
+  const openInvoiceForJob = (job) => {
+    const inv = invByJob.get(job.id);
+    if (inv) navigate(`/invoice/${job.id}?invoice=${inv.id}`); // открыть существующий
+    else navigate(`/invoice/new?job=${job.id}`);                // создать новый
   };
 
   return (
@@ -388,9 +424,8 @@ const JoAllJobsPage = () => {
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
         .jobs-table .center { text-align:center; }
         .jobs-table tr.warranty { background:#dcfce7; }
-        .jobs-table tr.unpaid { background:#fee2e2; }           /* 🔴 unpaid (only completed) */
+        .jobs-table tr.unpaid { background:#fee2e2; }
         .jobs-table tr.unpaid:hover { background:#fecaca; }
-
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
 
         .filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; align-items:center; }
@@ -413,15 +448,12 @@ const JoAllJobsPage = () => {
         .inv-item:hover { background:#f8fafc; }
         .inv-item .meta { font-size:12px; color:#6b7280; }
         .inv-actions { display:flex; gap:6px; }
-        .btn-link {
-          background:#2563eb; color:#fff; border:none; border-radius:6px; height:28px; padding:0 10px; cursor:pointer;
-        }
+        .btn-link { background:#2563eb; color:#fff; border:none; border-radius:6px; height:28px; padding:0 10px; cursor:pointer; }
         .btn-link.secondary { background:#0ea5e9; }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
 
-      {/* Legend for the active list */}
       {viewMode === 'active' && (
         <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
@@ -438,20 +470,12 @@ const JoAllJobsPage = () => {
       <div className="filters">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All statuses</option>
-          {statuses.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
+          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
 
         <select value={filterTech} onChange={(e) => setFilterTech(e.target.value)}>
           <option value="all">All technicians</option>
-          {technicians.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
+          {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
 
         <select value={filterPaid} onChange={(e) => setFilterPaid(e.target.value)}>
@@ -466,21 +490,18 @@ const JoAllJobsPage = () => {
           <option value="archive">Archive</option>
         </select>
 
-        {/* 🔎 Поиск по клиенту/адресу */}
+        {/* Общий поиск */}
         <input
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Company, name, phone or address"
         />
 
-        {/* 🔎 Поиск по инвойсу/джобу */}
+        {/* Поиск по инвойсу/джобу */}
         <div className="inv-search-wrap" ref={invoiceBoxRef}>
           <input
             value={invoiceQuery}
-            onChange={(e) => {
-              setInvoiceQuery(e.target.value);
-              setShowInvoiceList(true);
-            }}
+            onChange={(e) => { setInvoiceQuery(e.target.value); setShowInvoiceList(true); }}
             onFocus={() => setShowInvoiceList(true)}
             onKeyDown={openSingleMatchOnEnter}
             placeholder="Invoice # or Job #"
@@ -489,31 +510,31 @@ const JoAllJobsPage = () => {
           />
           {invoiceQuery && showInvoiceList && invoiceMatches.length > 0 && (
             <div className="inv-dropdown">
-              {invoiceMatches.map((j) => {
-                const client = getClient(j.client_id);
+              {invoiceMatches.map(({ job, inv }) => {
+                const client = getClient(job.client_id);
                 return (
-                  <div key={j.id} className="inv-item">
+                  <div key={`${job.id}:${inv?.id || 'noinv'}`} className="inv-item">
                     <div>
                       <div style={{ fontWeight: 600 }}>
-                        {j.invoice_number ? `Invoice: ${j.invoice_number}` : 'Invoice: —'} · Job: {j.job_number || j.id}
+                        {inv ? `Invoice: ${inv.invoice_no}` : 'Invoice: —'} · Job: {job.job_number || job.id}
                       </div>
                       <div className="meta">
                         {client?.company ? `${client.company} — ` : ''}
-                        {(client?.full_name || client?.name || '—')} • {j.status || '—'}
+                        {(client?.full_name || client?.name || '—')} • {job.status || '—'}
                       </div>
                     </div>
                     <div className="inv-actions">
-                      <button
-                        className="btn-link"
-                        onClick={() => navigate(`/job/${j.id}`)}
-                      >
+                      <button className="btn-link" onClick={() => navigate(`/job/${job.id}`)}>
                         Открыть работу
                       </button>
                       <button
                         className="btn-link secondary"
-                        onClick={() => navigate(`/invoice/${j.id}`)}
+                        onClick={() => inv
+                          ? navigate(`/invoice/${job.id}?invoice=${inv.id}`)
+                          : navigate(`/invoice/new?job=${job.id}`)
+                        }
                       >
-                        Инвойс
+                        {inv ? 'Инвойс' : 'Создать'}
                       </button>
                     </div>
                   </div>
@@ -583,8 +604,6 @@ const JoAllJobsPage = () => {
               <tbody>
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
-
-                  // 🔴 highlight in red ONLY if completed AND unpaid
                   const rowClass = job.archived_at
                     ? ''
                     : (persistedInWarranty(job)
@@ -592,7 +611,6 @@ const JoAllJobsPage = () => {
                         : (isDone(job.status) && isUnpaidNow(job))
                         ? 'unpaid'
                         : '');
-
                   const scfError = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
 
@@ -620,18 +638,11 @@ const JoAllJobsPage = () => {
                       style={{ cursor: 'pointer' }}
                     >
                       <td>
-                        <div
-                          className="cell-wrap"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/job/${job.id}`);
-                          }}
-                        >
+                        <div className="cell-wrap" onClick={(e) => { e.stopPropagation(); navigate(`/job/${job.id}`); }}>
                           <span className="num-link">{job.job_number || job.id}</span>
                         </div>
                       </td>
 
-                      {/* Client with Company */}
                       <td>
                         <div className="cell-wrap">
                           {client?.company ? (
@@ -647,18 +658,10 @@ const JoAllJobsPage = () => {
                         </div>
                       </td>
 
-                      <td>
-                        <div className="cell-wrap">{client?.phone || '—'}</div>
-                      </td>
-                      <td>
-                        <div className="cell-wrap">{formatAddress(client) || '—'}</div>
-                      </td>
-                      <td>
-                        <div className="cell-wrap">{job.system_type || '—'}</div>
-                      </td>
-                      <td>
-                        <div className="cell-wrap">{job.issue || '—'}</div>
-                      </td>
+                      <td><div className="cell-wrap">{client?.phone || '—'}</div></td>
+                      <td><div className="cell-wrap">{formatAddress(client) || '—'}</div></td>
+                      <td><div className="cell-wrap">{job.system_type || '—'}</div></td>
+                      <td><div className="cell-wrap">{job.issue || '—'}</div></td>
 
                       <td>
                         <input
@@ -672,10 +675,8 @@ const JoAllJobsPage = () => {
                       <td>
                         <select
                           className={scfError ? 'error' : ''}
-                          value={job.scf_payment_method || ''} // SCF
-                          onChange={(e) =>
-                            handleChange(job.id, 'scf_payment_method', e.target.value || null)
-                          }
+                          value={job.scf_payment_method || ''}
+                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value || null)}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -700,9 +701,7 @@ const JoAllJobsPage = () => {
                         <select
                           className={laborError ? 'error' : ''}
                           value={job.labor_payment_method || ''}
-                          onChange={(e) =>
-                            handleChange(job.id, 'labor_payment_method', e.target.value || null)
-                          }
+                          onChange={(e) => handleChange(job.id, 'labor_payment_method', e.target.value || null)}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -721,46 +720,24 @@ const JoAllJobsPage = () => {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
-                          {statuses.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
+                          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </td>
 
                       <td className="center">{isFullyPaidNow(job) ? '✔️' : ''}</td>
 
                       <td className="center">
-                        <button
-                          title="Save"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSave(job);
-                          }}
-                        >
+                        <button title="Save" onClick={(e) => { e.stopPropagation(); handleSave(job); }}>
                           💾
                         </button>
                       </td>
                       <td className="center">
-                        <button
-                          title="Edit"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/job/${job.id}`);
-                          }}
-                        >
+                        <button title="Edit" onClick={(e) => { e.stopPropagation(); navigate(`/job/${job.id}`); }}>
                           ✏️
                         </button>
                       </td>
                       <td className="center">
-                        <button
-                          title="Invoice"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/invoice/${job.id}`);
-                          }}
-                        >
+                        <button title="Invoice" onClick={(e) => { e.stopPropagation(); openInvoiceForJob(job); }}>
                           📄
                         </button>
                       </td>
