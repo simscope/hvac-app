@@ -1,5 +1,5 @@
 // client/src/pages/JoAllJobsPage.jsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
@@ -13,10 +13,13 @@ const JoAllJobsPage = () => {
   const [filterTech, setFilterTech] = useState('all');
   const [filterPaid, setFilterPaid] = useState('all'); // all | paid | unpaid
   const [searchText, setSearchText] = useState('');
+  const [invoiceQuery, setInvoiceQuery] = useState(''); // 🔎 поиск по инвойсу/джобу
   const [sortAsc, setSortAsc] = useState(true);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('active'); // active | warranty | archive
 
+  const [showInvoiceList, setShowInvoiceList] = useState(true);
+  const invoiceBoxRef = useRef(null);
   const navigate = useNavigate();
 
   // Dropdown labels (визуальные). Для сравнения используем canonStatus().
@@ -51,6 +54,16 @@ const JoAllJobsPage = () => {
 
   useEffect(() => {
     fetchAll();
+  }, []);
+
+  useEffect(() => {
+    const onClickOutside = (e) => {
+      if (invoiceBoxRef.current && !invoiceBoxRef.current.contains(e.target)) {
+        setShowInvoiceList(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
   const fetchAll = async () => {
@@ -175,6 +188,8 @@ const JoAllJobsPage = () => {
       labor_payment_method: job.labor_payment_method ?? null,
       system_type: job.system_type ?? null,
       issue: job.issue ?? null,
+      // если в БД есть invoice_number и его меняем — можно добавить сюда
+      // invoice_number: job.invoice_number ?? null,
     };
 
     // on transition to "completed" fix the timestamp
@@ -203,7 +218,9 @@ const JoAllJobsPage = () => {
     setFilterTech('all');
     setFilterPaid('all');
     setSearchText('');
+    setInvoiceQuery('');
     setViewMode('active');
+    setShowInvoiceList(false);
   };
 
   const handleExport = () => {
@@ -212,6 +229,7 @@ const JoAllJobsPage = () => {
       const tech = technicians.find((t) => String(t.id) === String(job.technician_id));
       return {
         Job: job.job_number || job.id,
+        Invoice: job.invoice_number || '', // если есть
         Company: client?.company || '',
         Client: client?.name || client?.full_name || '',
         Phone: client?.phone || '',
@@ -231,6 +249,22 @@ const JoAllJobsPage = () => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Jobs');
     XLSX.writeFile(wb, 'jobs.xlsx');
+  };
+
+  /* ====== helpers для поиска по инвойсу ====== */
+  const normalize = (v) => String(v ?? '').trim().toLowerCase();
+  const jobMatchesInvoice = (j, q) => {
+    if (!q) return true;
+    const t = normalize(q);
+    const inv = normalize(j.invoice_number);
+    const jobNo = normalize(j.job_number);
+    const idStr = normalize(j.id);
+    // поддержим разные форматы: "inv-123", "invoice 123", просто "123"
+    return (
+      (inv && inv.includes(t)) ||
+      (jobNo && jobNo.includes(t)) ||
+      (idStr && idStr.includes(t))
+    );
   };
 
   /* ====== Filter / group ====== */
@@ -261,13 +295,16 @@ const JoAllJobsPage = () => {
           : canonStatus(j.status) === canonStatus(filterStatus)
       )
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
+      // 🔎 Поиск по инвойсу/джобу имеет приоритет: если введён invoiceQuery — применяем этот фильтр
+      .filter((j) => jobMatchesInvoice(j, invoiceQuery))
+      // 🔎 Остальной общий поиск по клиенту/адресу (работает вместе с invoiceQuery)
       .filter((j) => {
         if (!searchText) return true;
         const c = getClient(j.client_id);
         const t = searchText.toLowerCase();
         const addr = formatAddress(c).toLowerCase();
         return (
-          c?.company?.toLowerCase().includes(t) ||   // ← поиск по компании
+          c?.company?.toLowerCase().includes(t) ||
           c?.name?.toLowerCase().includes(t) ||
           c?.full_name?.toLowerCase().includes(t) ||
           c?.phone?.toLowerCase().includes(t) ||
@@ -292,10 +329,32 @@ const JoAllJobsPage = () => {
     filterTech,
     filterPaid,
     searchText,
+    invoiceQuery,
     sortAsc,
     viewMode,
     origJobs,
   ]);
+
+  // Список быстрых совпадений для выпадающего окна
+  const invoiceMatches = useMemo(() => {
+    const q = normalize(invoiceQuery);
+    if (!q) return [];
+    const list = (jobs || []).filter((j) => jobMatchesInvoice(j, q));
+    // Отсортируем: сначала точные совпадения по invoice_number, затем по job_number
+    list.sort((a, b) => {
+      const aInv = normalize(a.invoice_number);
+      const bInv = normalize(b.invoice_number);
+      const exactA = aInv === q || normalize(a.job_number) === q;
+      const exactB = bInv === q || normalize(b.job_number) === q;
+      if (exactA && !exactB) return -1;
+      if (!exactA && exactB) return 1;
+      // затем по job_number по возрастанию
+      const A = (a.job_number || a.id).toString();
+      const B = (b.job_number || b.id).toString();
+      return A.localeCompare(B);
+    });
+    return list.slice(0, 10);
+  }, [invoiceQuery, jobs]);
 
   const grouped = useMemo(() => {
     const g = {};
@@ -306,6 +365,17 @@ const JoAllJobsPage = () => {
     });
     return g;
   }, [filteredJobs]);
+
+  const openSingleMatchOnEnter = (e) => {
+    if (e.key === 'Enter') {
+      if (invoiceMatches.length === 1) {
+        navigate(`/job/${invoiceMatches[0].id}`);
+      } else if (invoiceMatches.length > 0) {
+        // если много — откроем первое
+        navigate(`/job/${invoiceMatches[0].id}`);
+      }
+    }
+  };
 
   return (
     <div className="p-4">
@@ -320,7 +390,33 @@ const JoAllJobsPage = () => {
         .jobs-table tr.warranty { background:#dcfce7; }
         .jobs-table tr.unpaid { background:#fee2e2; }           /* 🔴 unpaid (only completed) */
         .jobs-table tr.unpaid:hover { background:#fecaca; }
+
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
+
+        .filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; align-items:center; }
+        .inv-search-wrap { position: relative; display:inline-block; }
+        .inv-dropdown {
+          position: absolute;
+          top: 34px;
+          left: 0;
+          z-index: 20;
+          min-width: 520px;
+          background: #fff;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+          max-height: 320px;
+          overflow: auto;
+        }
+        .inv-item { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; display:flex; justify-content:space-between; gap:10px; align-items:center; }
+        .inv-item:last-child { border-bottom: none; }
+        .inv-item:hover { background:#f8fafc; }
+        .inv-item .meta { font-size:12px; color:#6b7280; }
+        .inv-actions { display:flex; gap:6px; }
+        .btn-link {
+          background:#2563eb; color:#fff; border:none; border-radius:6px; height:28px; padding:0 10px; cursor:pointer;
+        }
+        .btn-link.secondary { background:#0ea5e9; }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
@@ -339,7 +435,7 @@ const JoAllJobsPage = () => {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="filters">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All statuses</option>
           {statuses.map((s) => (
@@ -370,11 +466,63 @@ const JoAllJobsPage = () => {
           <option value="archive">Archive</option>
         </select>
 
+        {/* 🔎 Поиск по клиенту/адресу */}
         <input
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Company, name, phone or address"
         />
+
+        {/* 🔎 Поиск по инвойсу/джобу */}
+        <div className="inv-search-wrap" ref={invoiceBoxRef}>
+          <input
+            value={invoiceQuery}
+            onChange={(e) => {
+              setInvoiceQuery(e.target.value);
+              setShowInvoiceList(true);
+            }}
+            onFocus={() => setShowInvoiceList(true)}
+            onKeyDown={openSingleMatchOnEnter}
+            placeholder="Invoice # or Job #"
+            title="Введите номер инвойса или номер работы"
+            style={{ width: 220 }}
+          />
+          {invoiceQuery && showInvoiceList && invoiceMatches.length > 0 && (
+            <div className="inv-dropdown">
+              {invoiceMatches.map((j) => {
+                const client = getClient(j.client_id);
+                return (
+                  <div key={j.id} className="inv-item">
+                    <div>
+                      <div style={{ fontWeight: 600 }}>
+                        {j.invoice_number ? `Invoice: ${j.invoice_number}` : 'Invoice: —'} · Job: {j.job_number || j.id}
+                      </div>
+                      <div className="meta">
+                        {client?.company ? `${client.company} — ` : ''}
+                        {(client?.full_name || client?.name || '—')} • {j.status || '—'}
+                      </div>
+                    </div>
+                    <div className="inv-actions">
+                      <button
+                        className="btn-link"
+                        onClick={() => navigate(`/job/${j.id}`)}
+                      >
+                        Открыть работу
+                      </button>
+                      <button
+                        className="btn-link secondary"
+                        onClick={() => navigate(`/invoice/${j.id}`)}
+                      >
+                        Инвойс
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <button onClick={resetFilters}>🔄 Reset</button>
         <button onClick={handleExport}>📤 Export to Excel</button>
         <button onClick={() => setSortAsc(!sortAsc)}>
