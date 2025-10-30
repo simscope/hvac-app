@@ -1585,7 +1585,7 @@ function Row({ label, value, onChange }) {
 }
 function Th({ children, center }) {
   return (
-    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid '#e5e7eb', background: '#f9fafb', padding: 8 }}>
+    <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 }}>
       {children}
     </th>
   );
@@ -1595,3 +1595,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
