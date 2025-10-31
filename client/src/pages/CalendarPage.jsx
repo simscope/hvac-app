@@ -41,6 +41,16 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
+// нормализуем "00:00" → рабочее время (по умолчанию 09:00 локально), пишем в БД как ISO UTC
+const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
+  if (!date) return null;
+  const d = new Date(date);
+  if (d.getHours() === 0 && d.getMinutes() === 0) {
+    d.setHours(fallbackHour, 0, 0, 0); // локально 09:00
+  }
+  return d.toISOString();
+};
+
 // компактный alert
 const toast = (msg) => window.alert(msg);
 
@@ -212,7 +222,7 @@ export default function CalendarPage() {
   /* ---------- DnD/click handlers ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // write UTC for timestamptz
+    const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null; // write UTC for timestamptz
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -230,7 +240,7 @@ export default function CalendarPage() {
       toast('Select a specific technician tab first, then drop the job onto the calendar.');
       return;
     }
-    const newStart = info.event.start ? info.event.start.toISOString() : null; // UTC
+    const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null; // UTC
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
