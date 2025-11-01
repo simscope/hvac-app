@@ -8,14 +8,13 @@ import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
 /* ========== helpers ========== */
-// ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// ==== day cell date fix (для кнопки "Маршрут") ====
+// для кнопки "Маршрут"
 const localStartOfCellDay = (utcDateObj) => {
   return new Date(
     utcDateObj.getUTCFullYear(),
@@ -37,7 +36,7 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// нормализация "00:00" → рабочее время (09:00 локально), в БД сохраняем как ISO (UTC)
+// «00:00» → 09:00 локально, запись в БД — ISO/UTC
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
@@ -48,7 +47,6 @@ const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
 };
 
 const toast = (msg) => window.alert(msg);
-const pad2 = (n) => String(n).padStart(2, '0');
 
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
@@ -62,9 +60,10 @@ export default function CalendarPage() {
   // Состояние модалки выбора времени
   const [timeModal, setTimeModal] = useState({
     open: false,
-    event: null,     // экземпляр FullCalendar Event (временный)
-    baseDate: null,  // Date дня, куда бросили карточку (полуночь локально)
-    defaultTime: '09:00',
+    baseDate: null,       // Date целевого дня (локально)
+    defaultTime: '09:00', // стартовое значение
+    onConfirm: null,      // (hhmm) => Promise|void
+    onCancel: null,       // () => void
   });
 
   const extRef = useRef(null);
@@ -224,7 +223,56 @@ export default function CalendarPage() {
   );
 
   /* ---------- DnD/click handlers ---------- */
+
+  // 1) Перенос существующего события
   const handleEventDrop = async (info) => {
+    const api = calRef.current?.getApi?.();
+    const viewType = api?.view?.type;
+
+    // Если Month → спрашиваем время, не пишем сразу
+    if (viewType === 'dayGridMonth') {
+      const event = info.event;               // целевой ивент
+      const newDate = event.start ? new Date(event.start) : null;
+      const revert = info.revert;             // функция возврата
+
+      setTimeModal({
+        open: true,
+        baseDate: newDate,
+        defaultTime: '09:00',
+        onCancel: () => {
+          try { revert(); } catch {}
+        },
+        onConfirm: async (hhmm) => {
+          try {
+            if (!newDate) throw new Error('No target date');
+            const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
+            const d = new Date(newDate);
+            d.setHours(hh, mm, 0, 0); // локальное выбранное время
+            const iso = d.toISOString();
+
+            // визуально сразу
+            try { event.setStart(d); } catch {}
+
+            const { error } = await supabase
+              .from('jobs')
+              .update({ appointment_time: iso })
+              .eq('id', event.id);
+            if (error) throw error;
+
+            setJobs((prev) => prev.map((j) =>
+              String(j.id) === String(event.id) ? { ...j, appointment_time: iso } : j
+            ));
+          } catch (e) {
+            console.error(e);
+            toast('Failed to save selected time');
+            try { revert(); } catch {}
+          }
+        },
+      });
+      return;
+    }
+
+    // Week/Day — сохраняем сразу
     const id = info.event.id;
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
@@ -237,6 +285,7 @@ export default function CalendarPage() {
     setJobs((prev) => prev.map((j) => (String(j.id) === id ? { ...j, appointment_time: newStart } : j)));
   };
 
+  // 2) Дроп из Unassigned
   const handleEventReceive = async (info) => {
     const id = info.event.id;
     if (activeTech === 'all') {
@@ -248,18 +297,46 @@ export default function CalendarPage() {
     const api = calRef.current?.getApi?.();
     const viewType = api?.view?.type;
 
-    // Если Month → показываем модалку для выбора времени
     if (viewType === 'dayGridMonth') {
+      const event = info.event;
+      const baseDate = event.start ? new Date(event.start) : null;
       setTimeModal({
         open: true,
-        event: info.event,
-        baseDate: info.event.start ? new Date(info.event.start) : null,
+        baseDate,
         defaultTime: '09:00',
+        onCancel: () => {
+          try { event.remove(); } catch {}
+        },
+        onConfirm: async (hhmm) => {
+          try {
+            if (!baseDate) throw new Error('No base date');
+            const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
+            const d = new Date(baseDate);
+            d.setHours(hh, mm, 0, 0);
+            const iso = d.toISOString();
+
+            try { event.setStart(d); } catch {}
+
+            const payload = { appointment_time: iso, technician_id: normalizeId(activeTech) };
+            const { error } = await supabase.from('jobs').update(payload).eq('id', id);
+            if (error) throw error;
+
+            setJobs((prev) =>
+              prev.map((j) =>
+                String(j.id) === id ? { ...j, appointment_time: iso, technician_id: normalizeId(activeTech) } : j
+              )
+            );
+          } catch (e) {
+            console.error(e);
+            toast('Failed to save selected time');
+            try { event.remove(); } catch {}
+          }
+        },
       });
-      return; // не сохраняем в БД до подтверждения
+      return;
     }
 
-    // Week/Day — сохраняем сразу, подстраховываясь от 00:00
+    // Week/Day — сразу сохраняем
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null; // UTC
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
@@ -324,10 +401,11 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE BUILDER (no day shift) ---------- */
+  /* ---------- ROUTE BUILDER ---------- */
   const openRouteForDate = (cellUtcDate) => {
     const api = calRef.current?.getApi?.();
     if (!api) return;
+
     const dayEvents = api.getEvents()
       .filter((e) => e.start && inLocalCellDay(e.start, cellUtcDate))
       .sort((a, b) => (a.start?.getTime() || 0) - (b.start?.getTime() || 0));
@@ -361,7 +439,6 @@ export default function CalendarPage() {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // заголовок дня + кнопка «Маршрут»
   const dayHeaderContent = (arg) => {
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
@@ -583,48 +660,20 @@ export default function CalendarPage() {
 
       <Legend />
 
-      {/* ===== MODAL: выбрать время при дропе в Month ===== */}
+      {/* ===== MODAL: выбор времени (работает и для drop, и для receive) ===== */}
       {timeModal.open && (
         <TimePickerModal
           defaultTime={timeModal.defaultTime}
           onCancel={() => {
-            try { timeModal.event?.remove(); } catch {}
-            setTimeModal({ open: false, event: null, baseDate: null, defaultTime: '09:00' });
+            try { timeModal.onCancel && timeModal.onCancel(); } catch {}
+            setTimeModal({ open: false, baseDate: null, defaultTime: '09:00', onConfirm: null, onCancel: null });
           }}
           onConfirm={async (hhmm) => {
             try {
-              const id = timeModal.event?.id;
-              if (!id || !timeModal.baseDate) throw new Error('No event/baseDate');
-
-              const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
-              const d = new Date(timeModal.baseDate);
-              d.setHours(hh, mm, 0, 0); // локально выбранное время
-              const iso = d.toISOString();
-
-              // Проставляем время в самом ивенте, чтобы не мигало до refetch
-              try { timeModal.event?.setStart(d); } catch {}
-
-              const payload = {
-                appointment_time: iso,
-                technician_id: normalizeId(activeTech),
-              };
-              const { error } = await supabase.from('jobs').update(payload).eq('id', id);
-              if (error) throw error;
-
-              // локально обновим стейт
-              setJobs((prev) =>
-                prev.map((j) =>
-                  String(j.id) === String(id)
-                    ? { ...j, appointment_time: iso, technician_id: normalizeId(activeTech) }
-                    : j
-                )
-              );
-            } catch (e) {
-              console.error(e);
-              toast('Failed to save selected time');
-              try { timeModal.event?.remove(); } catch {}
+              if (!timeModal.baseDate) throw new Error('No base date');
+              await (timeModal.onConfirm && timeModal.onConfirm(hhmm));
             } finally {
-              setTimeModal({ open: false, event: null, baseDate: null, defaultTime: '09:00' });
+              setTimeModal({ open: false, baseDate: null, defaultTime: '09:00', onConfirm: null, onCancel: null });
             }
           }}
         />
@@ -714,7 +763,7 @@ function TimePickerModal({ defaultTime = '09:00', onConfirm, onCancel }) {
       }}>
         <div style={{ fontSize: 18, fontWeight: 800 }}>Выбери время апойтмента</div>
         <div style={{ color: '#6b7280', fontSize: 13 }}>
-          Это день из Month-вида. Укажи точное время визита.
+          Month-вид: укажи точное время визита.
         </div>
         <input
           type="time"
@@ -741,7 +790,7 @@ function TimePickerModal({ defaultTime = '09:00', onConfirm, onCancel }) {
             Отмена
           </button>
           <button
-            onClick={() => onConfirm(val)}
+            onClick={() => onConfirm && onConfirm(val)}
             style={{
               padding: '8px 12px',
               borderRadius: 10,
