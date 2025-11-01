@@ -15,15 +15,12 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// ==== day cell date fix ====
-// FullCalendar в dayHeaderContent отдаёт arg.date как UTC-полночь.
-// Чтобы не уехать на предыдущий день в America/New_York, интерпретируем
-// Y-M-D из UTC-компонент и строим ЛОКАЛЬНУЮ дату этого дня.
+// ==== day cell date fix (для кнопки "Маршрут") ====
 const localStartOfCellDay = (utcDateObj) => {
   return new Date(
     utcDateObj.getUTCFullYear(),
     utcDateObj.getUTCMonth(),
-    utcDateObj.getUTCDate(), // это локальная 00:00 нужного дня
+    utcDateObj.getUTCDate(),
     0, 0, 0, 0
   );
 };
@@ -31,9 +28,8 @@ const localRangeOfCellDay = (utcDateObj) => {
   const start = localStartOfCellDay(utcDateObj);
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
-  return [start, end]; // [00:00; 24:00) локально
+  return [start, end];
 };
-// попадает ли дата события в сутки выбранной ячейки (локально)
 const inLocalCellDay = (eventDate, cellUtcDate) => {
   if (!eventDate || !cellUtcDate) return false;
   const [start, end] = localRangeOfCellDay(cellUtcDate);
@@ -41,18 +37,18 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// нормализуем "00:00" → рабочее время (по умолчанию 09:00 локально), пишем в БД как ISO UTC
+// нормализация "00:00" → рабочее время (09:00 локально), в БД сохраняем как ISO (UTC)
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
   if (d.getHours() === 0 && d.getMinutes() === 0) {
-    d.setHours(fallbackHour, 0, 0, 0); // локально 09:00
+    d.setHours(fallbackHour, 0, 0, 0);
   }
   return d.toISOString();
 };
 
-// компактный alert
 const toast = (msg) => window.alert(msg);
+const pad2 = (n) => String(n).padStart(2, '0');
 
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
@@ -62,6 +58,14 @@ export default function CalendarPage() {
   const [activeTech, setActiveTech] = useState('all'); // 'all' | technician_id
   const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
+
+  // Состояние модалки выбора времени
+  const [timeModal, setTimeModal] = useState({
+    open: false,
+    event: null,     // экземпляр FullCalendar Event (временный)
+    baseDate: null,  // Date дня, куда бросили карточку (полуночь локально)
+    defaultTime: '09:00',
+  });
 
   const extRef = useRef(null);
   const calRef = useRef(null);
@@ -222,7 +226,7 @@ export default function CalendarPage() {
   /* ---------- DnD/click handlers ---------- */
   const handleEventDrop = async (info) => {
     const id = info.event.id;
-    const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null; // write UTC for timestamptz
+    const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
       info.revert();
@@ -240,6 +244,22 @@ export default function CalendarPage() {
       toast('Select a specific technician tab first, then drop the job onto the calendar.');
       return;
     }
+
+    const api = calRef.current?.getApi?.();
+    const viewType = api?.view?.type;
+
+    // Если Month → показываем модалку для выбора времени
+    if (viewType === 'dayGridMonth') {
+      setTimeModal({
+        open: true,
+        event: info.event,
+        baseDate: info.event.start ? new Date(info.event.start) : null,
+        defaultTime: '09:00',
+      });
+      return; // не сохраняем в БД до подтверждения
+    }
+
+    // Week/Day — сохраняем сразу, подстраховываясь от 00:00
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null; // UTC
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
@@ -308,8 +328,6 @@ export default function CalendarPage() {
   const openRouteForDate = (cellUtcDate) => {
     const api = calRef.current?.getApi?.();
     if (!api) return;
-
-    // События, попадающие в ЛОКАЛЬНЫЕ сутки выбранной ячейки (исправляет "вчера")
     const dayEvents = api.getEvents()
       .filter((e) => e.start && inLocalCellDay(e.start, cellUtcDate))
       .sort((a, b) => (a.start?.getTime() || 0) - (b.start?.getTime() || 0));
@@ -343,7 +361,7 @@ export default function CalendarPage() {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // кнопка «Маршрут» над каждым днём
+  // заголовок дня + кнопка «Маршрут»
   const dayHeaderContent = (arg) => {
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
@@ -366,7 +384,7 @@ export default function CalendarPage() {
     btn.style.cursor = 'pointer';
     btn.style.fontSize = '12px';
     btn.style.boxShadow = '0 6px 16px rgba(29,78,216,0.25)';
-    btn.addEventListener('click', () => openRouteForDate(arg.date)); // arg.date = UTC-полночь, мы это учли
+    btn.addEventListener('click', () => openRouteForDate(arg.date));
     wrap.appendChild(btn);
 
     return { domNodes: [wrap] };
@@ -564,6 +582,53 @@ export default function CalendarPage() {
       </div>
 
       <Legend />
+
+      {/* ===== MODAL: выбрать время при дропе в Month ===== */}
+      {timeModal.open && (
+        <TimePickerModal
+          defaultTime={timeModal.defaultTime}
+          onCancel={() => {
+            try { timeModal.event?.remove(); } catch {}
+            setTimeModal({ open: false, event: null, baseDate: null, defaultTime: '09:00' });
+          }}
+          onConfirm={async (hhmm) => {
+            try {
+              const id = timeModal.event?.id;
+              if (!id || !timeModal.baseDate) throw new Error('No event/baseDate');
+
+              const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
+              const d = new Date(timeModal.baseDate);
+              d.setHours(hh, mm, 0, 0); // локально выбранное время
+              const iso = d.toISOString();
+
+              // Проставляем время в самом ивенте, чтобы не мигало до refetch
+              try { timeModal.event?.setStart(d); } catch {}
+
+              const payload = {
+                appointment_time: iso,
+                technician_id: normalizeId(activeTech),
+              };
+              const { error } = await supabase.from('jobs').update(payload).eq('id', id);
+              if (error) throw error;
+
+              // локально обновим стейт
+              setJobs((prev) =>
+                prev.map((j) =>
+                  String(j.id) === String(id)
+                    ? { ...j, appointment_time: iso, technician_id: normalizeId(activeTech) }
+                    : j
+                )
+              );
+            } catch (e) {
+              console.error(e);
+              toast('Failed to save selected time');
+              try { timeModal.event?.remove(); } catch {}
+            } finally {
+              setTimeModal({ open: false, event: null, baseDate: null, defaultTime: '09:00' });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -620,6 +685,77 @@ function Legend() {
       {item('#fffbeb', '#92400e', 'To finish')}
       {item('#d1fae5', '#065f46', 'Completed')}
       <span style={{ marginLeft: 12 }}>Unpaid jobs are marked with a dashed border.</span>
+    </div>
+  );
+}
+
+/* ========== TimePicker Modal ========== */
+function TimePickerModal({ defaultTime = '09:00', onConfirm, onCancel }) {
+  const [val, setVal] = useState(defaultTime);
+
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.35)',
+      display: 'grid',
+      placeItems: 'center',
+      zIndex: 9999
+    }}>
+      <div style={{
+        width: 360,
+        background: '#fff',
+        borderRadius: 16,
+        border: '1px solid #e5e7eb',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+        padding: 16,
+        display: 'grid',
+        gap: 12
+      }}>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>Выбери время апойтмента</div>
+        <div style={{ color: '#6b7280', fontSize: 13 }}>
+          Это день из Month-вида. Укажи точное время визита.
+        </div>
+        <input
+          type="time"
+          value={val}
+          onChange={(e) => setVal(e.target.value || defaultTime)}
+          style={{
+            border: '1px solid #e5e7eb',
+            borderRadius: 10,
+            padding: '10px 12px',
+            fontSize: 16
+          }}
+        />
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: '1px solid #e5e7eb',
+              background: '#fff',
+              cursor: 'pointer'
+            }}
+          >
+            Отмена
+          </button>
+          <button
+            onClick={() => onConfirm(val)}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: '1px solid #1d4ed8',
+              background: 'linear-gradient(180deg,#2563eb,#1d4ed8)',
+              color: '#fff',
+              cursor: 'pointer',
+              fontWeight: 700
+            }}
+          >
+            Сохранить
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
