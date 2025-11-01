@@ -8,13 +8,68 @@ import interactionPlugin, { Draggable } from '@fullcalendar/interaction';
 import { supabase } from '../supabaseClient';
 
 /* ========== helpers ========== */
+const APP_TZ = 'America/New_York';
+
+// ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// для кнопки «Маршрут»
+// ----- TZ math without libs (works with DST) -----
+const makeTZFormatter = (timeZone) =>
+  new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+
+/** get offset(ms) of `utcMs` instant in a given IANA zone */
+const tzOffsetMsAt = (utcMs, timeZone) => {
+  const dtf = makeTZFormatter(timeZone);
+  const d = new Date(utcMs);
+  const parts = dtf.formatToParts(d);
+  const year = +parts.find((p) => p.type === 'year').value;
+  const month = +parts.find((p) => p.type === 'month').value;
+  const day = +parts.find((p) => p.type === 'day').value;
+  const hour = +parts.find((p) => p.type === 'hour').value;
+  const minute = +parts.find((p) => p.type === 'minute').value;
+  const second = +parts.find((p) => p.type === 'second').value;
+  const asUTC = Date.UTC(year, month - 1, day, hour, minute, second);
+  return asUTC - utcMs; // positive in winter for NY (UTC-5 -> +5h in ms)
+};
+
+/**
+ * Convert "wall time" in `timeZone` for the date of `baseDate`
+ * to ISO UTC string for DB (timestamptz).
+ */
+const zonedWallTimeToISO = (baseDate, hh = 9, mm = 0, timeZone = APP_TZ) => {
+  if (!baseDate) return null;
+  const dtf = makeTZFormatter(timeZone);
+  // extract Y-M-D of baseDate in target TZ
+  const parts = dtf.formatToParts(baseDate);
+  const year = +parts.find((p) => p.type === 'year').value;
+  const month = +parts.find((p) => p.type === 'month').value;
+  const day = +parts.find((p) => p.type === 'day').value;
+
+  // "Pretend" this local wall time is UTC first:
+  const wallAsUTC = Date.UTC(year, month - 1, day, hh, mm, 0);
+
+  // What is the offset in that zone at that local moment?
+  const offset = tzOffsetMsAt(wallAsUTC, timeZone);
+
+  // Subtract offset to get real UTC instant
+  const utcMs = wallAsUTC - offset;
+  return new Date(utcMs).toISOString();
+};
+
+// ==== day cell date fix (для кнопки "Маршрут") ====
 const localStartOfCellDay = (utcDateObj) => {
   return new Date(
     utcDateObj.getUTCFullYear(),
@@ -36,7 +91,7 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// «00:00» → 09:00 локально; в БД пишем как ISO/UTC
+// Week/Day «00:00» → 09:00 локально; в БД пишем как ISO/UTC
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
@@ -60,7 +115,7 @@ export default function CalendarPage() {
   // модалка выбора времени
   const [timeModal, setTimeModal] = useState({
     open: false,
-    baseDate: null,        // Date целевого дня (локально)
+    baseDate: null,        // Date целевого дня (локально, дата из FC)
     defaultTime: '09:00',
     onConfirm: null,       // async (hhmm) => void
     onCancel: null,        // () => void
@@ -237,21 +292,19 @@ export default function CalendarPage() {
         open: true,
         baseDate: newDate,
         defaultTime: '09:00',
-        onCancel: () => {
-          try { revert(); } catch {}
-        },
+        onCancel: () => { try { revert(); } catch {} },
         onConfirm: async (hhmm) => {
           try {
             if (!newDate) throw new Error('No target date');
             const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
-            const d = new Date(newDate);
-            d.setHours(hh, mm, 0, 0);            // локальное выбранное время
-            const iso = d.toISOString();         // → UTC для БД
 
-            try { event.setStart(d); } catch {}  // сразу обновим на экране
+            // строго строим ISO из стеночного времени в America/New_York
+            const iso = zonedWallTimeToISO(newDate, hh, mm, APP_TZ);
+            const visual = new Date(iso); // покажем тут же
 
+            try { event.setStart(visual); } catch {}
             const { error } = await supabase.from('jobs').update({ appointment_time: iso }).eq('id', event.id);
-            if (error) { console.error(error); throw error; }
+            if (error) throw error;
 
             setJobs((prev) => prev.map((j) =>
               String(j.id) === String(event.id) ? { ...j, appointment_time: iso } : j
@@ -301,22 +354,20 @@ export default function CalendarPage() {
         open: true,
         baseDate,
         defaultTime: '09:00',
-        onCancel: () => {
-          try { event.remove(); } catch {}
-        },
+        onCancel: () => { try { event.remove(); } catch {} },
         onConfirm: async (hhmm) => {
           try {
             if (!baseDate) throw new Error('No base date');
             const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
-            const d = new Date(baseDate);
-            d.setHours(hh, mm, 0, 0);
-            const iso = d.toISOString();
 
-            try { event.setStart(d); } catch {}
+            const iso = zonedWallTimeToISO(baseDate, hh, mm, APP_TZ);
+            const visual = new Date(iso);
+
+            try { event.setStart(visual); } catch {}
 
             const payload = { appointment_time: iso, technician_id: normalizeId(activeTech) };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
-            if (error) { console.error(error); throw error; }
+            if (error) throw error;
 
             setJobs((prev) =>
               prev.map((j) =>
@@ -561,7 +612,7 @@ export default function CalendarPage() {
           locale="en"
 
           /* ===== time settings ===== */
-          timeZone="America/New_York"
+          timeZone={APP_TZ}
           slotMinTime="08:00:00"
           slotMaxTime="20:00:00"
           businessHours={{ daysOfWeek: [0,1,2,3,4,5,6], startTime: '08:00', endTime: '20:00' }}
