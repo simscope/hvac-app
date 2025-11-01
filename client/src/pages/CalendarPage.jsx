@@ -14,7 +14,7 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// для кнопки "Маршрут"
+// для кнопки «Маршрут»
 const localStartOfCellDay = (utcDateObj) => {
   return new Date(
     utcDateObj.getUTCFullYear(),
@@ -36,7 +36,7 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// «00:00» → 09:00 локально, запись в БД — ISO/UTC
+// «00:00» → 09:00 локально; в БД пишем как ISO/UTC
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
@@ -57,13 +57,13 @@ export default function CalendarPage() {
   const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
 
-  // Состояние модалки выбора времени
+  // модалка выбора времени
   const [timeModal, setTimeModal] = useState({
     open: false,
-    baseDate: null,       // Date целевого дня (локально)
-    defaultTime: '09:00', // стартовое значение
-    onConfirm: null,      // (hhmm) => Promise|void
-    onCancel: null,       // () => void
+    baseDate: null,        // Date целевого дня (локально)
+    defaultTime: '09:00',
+    onConfirm: null,       // async (hhmm) => void
+    onCancel: null,        // () => void
   });
 
   const extRef = useRef(null);
@@ -73,15 +73,14 @@ export default function CalendarPage() {
   /* ---------- load data ---------- */
   useEffect(() => {
     (async () => {
-      const [{ data: j }, { data: t }, { data: c }] = await Promise.all([
+      const [{ data: j, error: ej }, { data: t, error: et }, { data: c, error: ec }] = await Promise.all([
         supabase.from('jobs').select('*'),
-        supabase
-          .from('technicians')
-          .select('id, name, role')
-          .in('role', ['technician', 'tech'])
-          .order('name', { ascending: true }),
+        supabase.from('technicians').select('id, name, role').in('role', ['technician', 'tech']).order('name', { ascending: true }),
         supabase.from('clients').select('id, full_name, address, company'),
       ]);
+      if (ej) console.error('jobs select error:', ej);
+      if (et) console.error('tech select error:', et);
+      if (ec) console.error('clients select error:', ec);
       setJobs(j || []);
       setTechs(t || []);
       setClients(c || []);
@@ -224,16 +223,15 @@ export default function CalendarPage() {
 
   /* ---------- DnD/click handlers ---------- */
 
-  // 1) Перенос существующего события
+  // Перенос существующего события
   const handleEventDrop = async (info) => {
     const api = calRef.current?.getApi?.();
     const viewType = api?.view?.type;
 
-    // Если Month → спрашиваем время, не пишем сразу
     if (viewType === 'dayGridMonth') {
-      const event = info.event;               // целевой ивент
+      const event = info.event;
       const newDate = event.start ? new Date(event.start) : null;
-      const revert = info.revert;             // функция возврата
+      const revert = info.revert;
 
       setTimeModal({
         open: true,
@@ -247,23 +245,20 @@ export default function CalendarPage() {
             if (!newDate) throw new Error('No target date');
             const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
             const d = new Date(newDate);
-            d.setHours(hh, mm, 0, 0); // локальное выбранное время
-            const iso = d.toISOString();
+            d.setHours(hh, mm, 0, 0);            // локальное выбранное время
+            const iso = d.toISOString();         // → UTC для БД
 
-            // визуально сразу
-            try { event.setStart(d); } catch {}
+            try { event.setStart(d); } catch {}  // сразу обновим на экране
 
-            const { error } = await supabase
-              .from('jobs')
-              .update({ appointment_time: iso })
-              .eq('id', event.id);
-            if (error) throw error;
+            const { error } = await supabase.from('jobs').update({ appointment_time: iso }).eq('id', event.id);
+            if (error) { console.error(error); throw error; }
 
             setJobs((prev) => prev.map((j) =>
               String(j.id) === String(event.id) ? { ...j, appointment_time: iso } : j
             ));
+            toast('Saved');
           } catch (e) {
-            console.error(e);
+            console.error('eventDrop month save error:', e);
             toast('Failed to save selected time');
             try { revert(); } catch {}
           }
@@ -272,20 +267,21 @@ export default function CalendarPage() {
       return;
     }
 
-    // Week/Day — сохраняем сразу
+    // Week/Day — сразу сохраняем
     const id = info.event.id;
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
     if (error) {
+      console.error('eventDrop save error:', error);
       info.revert();
-      console.error(error);
       toast('Failed to save date/time');
       return;
     }
     setJobs((prev) => prev.map((j) => (String(j.id) === id ? { ...j, appointment_time: newStart } : j)));
+    toast('Saved');
   };
 
-  // 2) Дроп из Unassigned
+  // Дроп из Unassigned
   const handleEventReceive = async (info) => {
     const id = info.event.id;
     if (activeTech === 'all') {
@@ -300,6 +296,7 @@ export default function CalendarPage() {
     if (viewType === 'dayGridMonth') {
       const event = info.event;
       const baseDate = event.start ? new Date(event.start) : null;
+
       setTimeModal({
         open: true,
         baseDate,
@@ -319,15 +316,16 @@ export default function CalendarPage() {
 
             const payload = { appointment_time: iso, technician_id: normalizeId(activeTech) };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
-            if (error) throw error;
+            if (error) { console.error(error); throw error; }
 
             setJobs((prev) =>
               prev.map((j) =>
                 String(j.id) === id ? { ...j, appointment_time: iso, technician_id: normalizeId(activeTech) } : j
               )
             );
+            toast('Saved');
           } catch (e) {
-            console.error(e);
+            console.error('eventReceive month save error:', e);
             toast('Failed to save selected time');
             try { event.remove(); } catch {}
           }
@@ -337,12 +335,12 @@ export default function CalendarPage() {
     }
 
     // Week/Day — сразу сохраняем
-    const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null; // UTC
+    const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
+      console.error('eventReceive save error:', error);
       info.event.remove();
-      console.error(error);
       toast('Failed to assign technician/date');
       return;
     }
@@ -351,6 +349,7 @@ export default function CalendarPage() {
         String(j.id) === id ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech) } : j
       )
     );
+    toast('Saved');
   };
 
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
@@ -469,27 +468,15 @@ export default function CalendarPage() {
 
   /* ---------- UI ---------- */
   return (
-    <div style={{
-      padding: 16,
-      background: 'linear-gradient(180deg, #f7faff 0%, #ffffff 40%)'
-    }}>
+    <div style={{ padding: 16, background: 'linear-gradient(180deg, #f7faff 0%, #ffffff 40%)' }}>
       <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12, letterSpacing: 0.3 }}>🗓 Calendar</h1>
 
       {/* controls */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          alignItems: 'center',
-          marginBottom: 12,
-          flexWrap: 'wrap',
-          background: '#fff',
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
-          padding: 10,
-          boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 6px 16px rgba(0,0,0,0.04)'
-        }}
-      >
+      <div style={{
+        display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap',
+        background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 10,
+        boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 6px 16px rgba(0,0,0,0.04)'
+      }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Tab active={activeTech === 'all'} onClick={() => setActiveTech('all')}>All technicians</Tab>
           {techs.map((t) => (
@@ -505,12 +492,8 @@ export default function CalendarPage() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search: client/company/address/job #"
             style={{
-              border: '1px solid #e5e7eb',
-              borderRadius: 10,
-              padding: '8px 12px',
-              minWidth: 240,
-              outline: 'none',
-              boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03)'
+              border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px',
+              minWidth: 240, outline: 'none', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.03)'
             }}
           />
           <select
@@ -520,13 +503,7 @@ export default function CalendarPage() {
               const api = calRef.current?.getApi?.();
               if (api) api.changeView(e.target.value);
             }}
-            style={{
-              border: '1px solid #e5e7eb',
-              borderRadius: 10,
-              padding: '8px 12px',
-              background: '#fff',
-              outline: 'none'
-            }}
+            style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', background: '#fff', outline: 'none' }}
           >
             <option value="dayGridMonth">Month</option>
             <option value="timeGridWeek">Week</option>
@@ -540,18 +517,7 @@ export default function CalendarPage() {
         <div style={{ marginBottom: 6, fontWeight: 700, color: '#111827' }}>
           Unassigned <span style={{ color: '#6b7280', fontWeight: 500 }}>(drag onto the calendar of a selected technician tab)</span>:
         </div>
-        <div
-          ref={extRef}
-          style={{
-            display: 'flex',
-            gap: 8,
-            flexWrap: 'wrap',
-            padding: 10,
-            border: '1px dashed #e5e7eb',
-            borderRadius: 12,
-            background: '#fafafa'
-          }}
-        >
+        <div ref={extRef} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: 10, border: '1px dashed #e5e7eb', borderRadius: 12, background: '#fafafa' }}>
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
           {unassigned.map((j) => {
             const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
@@ -566,17 +532,9 @@ export default function CalendarPage() {
                 title="Drag onto a technician's calendar"
                 onDoubleClick={() => navigate(`/job/${j.id}`)}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  gap: 6,
-                  minWidth: 280,
-                  maxWidth: 420,
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 12,
-                  background: '#fff',
-                  padding: '8px 10px',
-                  cursor: 'grab',
-                  boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
+                  display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 6, minWidth: 280, maxWidth: 420,
+                  border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: '8px 10px',
+                  cursor: 'grab', boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
                 }}
               >
                 <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
@@ -586,27 +544,15 @@ export default function CalendarPage() {
                     {comp}
                   </div>
                 )}
-                {addr && (
-                  <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
-                )}
-                {j.issue && (
-                  <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>
-                )}
+                {addr && <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>}
+                {j.issue && <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>}
               </div>
             );
           })}
         </div>
       </div>
 
-      <div
-        style={{
-          background: '#fff',
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
-          padding: 8,
-          boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 10px 20px rgba(0,0,0,0.04)'
-        }}
-      >
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 8, boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 10px 20px rgba(0,0,0,0.04)' }}>
         <FullCalendar
           ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
@@ -660,7 +606,7 @@ export default function CalendarPage() {
 
       <Legend />
 
-      {/* ===== MODAL: выбор времени (работает и для drop, и для receive) ===== */}
+      {/* ===== MODAL ===== */}
       {timeModal.open && (
         <TimePickerModal
           defaultTime={timeModal.defaultTime}
@@ -696,7 +642,6 @@ function Tab({ active, onClick, children }) {
         fontWeight: 700,
         cursor: 'pointer',
         boxShadow: active ? '0 6px 16px rgba(29,78,216,0.25)' : '0 1px 0 rgba(0,0,0,0.02)',
-        transition: 'all .15s ease',
       }}
     >
       {children}
@@ -769,23 +714,12 @@ function TimePickerModal({ defaultTime = '09:00', onConfirm, onCancel }) {
           type="time"
           value={val}
           onChange={(e) => setVal(e.target.value || defaultTime)}
-          style={{
-            border: '1px solid #e5e7eb',
-            borderRadius: 10,
-            padding: '10px 12px',
-            fontSize: 16
-          }}
+          style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 12px', fontSize: 16 }}
         />
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
           <button
             onClick={onCancel}
-            style={{
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: '1px solid #e5e7eb',
-              background: '#fff',
-              cursor: 'pointer'
-            }}
+            style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer' }}
           >
             Отмена
           </button>
