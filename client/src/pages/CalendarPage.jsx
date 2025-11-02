@@ -17,16 +17,16 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// ===== Month-only helpers (пишем NY-стеночное время строкой со смещением) =====
+/* ===== Month-only helpers (пишем NY-время строкой с оффсетом; без UTC-конверсий) ===== */
 const nyOffsetStringForDate = (baseDate) => {
-  // вернёт '-04:00' летом и '-05:00' зимой для Нью-Йорка
+  // '-04:00' летом и '-05:00' зимой
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: APP_TZ,
     timeZoneName: 'shortOffset',
   });
   const part = fmt.formatToParts(baseDate).find((p) => p.type === 'timeZoneName');
   const raw = part?.value || 'GMT-05';
-  const m = raw.match(/GMT([+\-]\d{1,2})(?::?(\d{2}))?/); // 'GMT-5', 'GMT-04', 'GMT+03:30'
+  const m = raw.match(/GMT([+\-]\d{1,2})(?::?(\d{2}))?/);
   const sign = (m?.[1] || '-5').startsWith('-') ? '-' : '+';
   const hh = String(Math.abs(parseInt(m?.[1] || '-5', 10))).padStart(2, '0');
   const mm = String(parseInt(m?.[2] || '0', 10)).padStart(2, '0');
@@ -41,10 +41,10 @@ const nyWallToText = (baseDate, hh = 9, mm = 0) => {
   const H = String(hh).padStart(2, '0');
   const M = String(mm).padStart(2, '0');
   const off = nyOffsetStringForDate(new Date(y, baseDate.getMonth(), baseDate.getDate(), hh, mm, 0));
-  return `${y}-${mo}-${d} ${H}:${M}:00${off}`; // именно текст с оффсетом
+  return `${y}-${mo}-${d} ${H}:${M}:00${off}`; // пример: 2025-11-05 13:00:00-05:00
 };
 
-// ==== day cell date fix (для кнопки "Маршрут") ====
+/* ==== вспомогалки для кнопки "Маршрут" ==== */
 const localStartOfCellDay = (utcDateObj) => {
   return new Date(
     utcDateObj.getUTCFullYear(),
@@ -66,7 +66,7 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// Week/Day «00:00» → 09:00 локально; в БД пишем как ISO/UTC
+/* Week/Day — как раньше: если 00:00, ставим 09:00 и пишем ISO/UTC */
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
@@ -87,7 +87,7 @@ export default function CalendarPage() {
   const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
 
-  // модалка выбора времени
+  // модалка выбора времени (Month)
   const [timeModal, setTimeModal] = useState({
     open: false,
     baseDate: null,        // Date целевого дня (локально)
@@ -229,7 +229,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // FullCalendar сам распарсит ISO с оффсетом
+        start: j.appointment_time, // FullCalendar понимает ISO/текст с оффсетом
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -258,6 +258,7 @@ export default function CalendarPage() {
     const api = calRef.current?.getApi?.();
     const viewType = api?.view?.type;
 
+    // Только в Month просим время и пишем текст NY-времени со смещением
     if (viewType === 'dayGridMonth') {
       const event = info.event;
       const newDate = event.start ? new Date(event.start) : null; // локальный день
@@ -273,10 +274,9 @@ export default function CalendarPage() {
             if (!newDate) throw new Error('No target date');
             const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
 
-            // формируем текст NY-стеночного времени со смещением
-            const txt = nyWallToText(newDate, hh, mm);
+            const txt = nyWallToText(newDate, hh, mm); // 'YYYY-MM-DD HH:MM:00-05:00/-04:00'
 
-            // визуально обновим
+            // визуально обновим (не переводим в UTC!)
             try { event.setStart(txt); } catch {}
 
             const { error } = await supabase
@@ -286,7 +286,9 @@ export default function CalendarPage() {
             if (error) throw error;
 
             setJobs((prev) =>
-              prev.map((j) => (String(j.id) === String(event.id) ? { ...j, appointment_time: txt } : j))
+              prev.map((j) =>
+                String(j.id) === String(event.id) ? { ...j, appointment_time: txt } : j
+              )
             );
             toast('Saved');
           } catch (e) {
@@ -299,7 +301,7 @@ export default function CalendarPage() {
       return;
     }
 
-    // Week/Day — как было (UTC ISO)
+    // Week/Day — без изменений (ISO/UTC)
     const id = info.event.id;
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
