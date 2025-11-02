@@ -78,17 +78,26 @@ const styles = {
   date: { textAlign: 'right', color: colors.subtext },
 
   /* MODALS */
-  overlay: {
+  // общий базовый оверлей
+  overlayBase: {
     position: 'fixed',
     inset: 0,
     background: 'rgba(0,0,0,.25)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 50,
-    padding: 24,          // чтобы не прилипало к краям
-    overflow: 'auto',     // если модалка длинная — можно прокрутить фон
+    padding: 24,
+    overflow: 'auto',
   },
+  // Оверлей чтения: ниже по Z
+  readOverlay: {
+    zIndex: 50,
+  },
+  // Оверлей композера: выше по Z
+  composeOverlay: {
+    zIndex: 60,
+  },
+
   composeModal: {
     width: 720, maxWidth: '90vw',
     background: colors.white, borderRadius: 12,
@@ -101,7 +110,7 @@ const styles = {
     padding: 16,
     display: 'flex',
     flexDirection: 'column',
-    maxHeight: '90vh',    // КЛЮЧ: ограничили высоту модалки
+    maxHeight: '90vh',
   },
   readHeader: {
     display: 'flex',
@@ -115,8 +124,8 @@ const styles = {
   readMeta: { color: colors.subtext, margin: '6px 0 8px' },
   readBody: {
     flex: 1,
-    minHeight: 0,       // разрешает overflow работать внутри flex
-    overflow: 'auto',   // КЛЮЧ: прокручиваем тело письма
+    minHeight: 0,
+    overflow: 'auto',
   },
 
   formRow: { marginBottom: 10 },
@@ -144,7 +153,7 @@ function hydrateCidImages(message) {
 
   for (const a of message.attachments) {
     if (!a?.contentId || !a?.dataBase64) continue;
-    const cid = String(a.contentId).replace(/[<>]/g, ''); // убрать угловые скобки
+    const cid = String(a.contentId).replace(/[<>]/g, '');
     try {
       const bin = atob(a.dataBase64);
       const bytes = new Uint8Array(bin.length);
@@ -195,7 +204,6 @@ function parseEmailAddress(display) {
 
 function htmlToText(html) {
   if (!html) return '';
-  // простой html→text, достаточно для цитаты
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
   const text = tmp.innerText || tmp.textContent || '';
@@ -226,7 +234,7 @@ export default function EmailTab() {
 
   // read
   const [readOpen, setReadOpen] = useState(false);
-  const [current, setCurrent] = useState(null);   // {id, from, to, subject, date, text/html, attachments}
+  const [current, setCurrent] = useState(null);
   const [reading, setReading] = useState(false);
 
   const API = useMemo(() => ({
@@ -249,14 +257,18 @@ export default function EmailTab() {
     return fetch(url, { ...options, headers });
   }
 
-  // NEW: открыть композер и проставить значения
+  // открыть композер и проставить значения, предварительно закрыв чтение
   function openComposerWith({ to = '', subject = '', body = '' } = {}) {
-    setComposeOpen(true);
-    // отложим на тик, чтобы refs были готовы
+    // 1) закрываем модалку чтения (если открыта), чтобы она не перекрывала
+    if (readOpen) setReadOpen(false);
+    // 2) в следующем тике открываем композер и заполняем поля
     setTimeout(() => {
-      if (toRef.current)       toRef.current.value = to;
-      if (subjectRef.current)  subjectRef.current.value = subject;
-      if (textRef.current)     textRef.current.value = body;
+      setComposeOpen(true);
+      setTimeout(() => {
+        if (toRef.current)       toRef.current.value = to;
+        if (subjectRef.current)  subjectRef.current.value = subject;
+        if (textRef.current)     textRef.current.value = body;
+      }, 0);
     }, 0);
   }
 
@@ -348,39 +360,28 @@ export default function EmailTab() {
     }
   }
 
-  // NEW: Ответить
+  // Ответить
   function onReply() {
     const m = current;
     if (!m) return;
-
     const to = parseEmailAddress(m.from);
     const subjBase = m.subject || '';
     const subject = subjBase.toLowerCase().startsWith('re:') ? subjBase : `Re: ${subjBase}`;
-
-    const plain = m.text && m.text.trim()
-      ? m.text.trim()
-      : htmlToText(m.html || '');
-
+    const plain = m.text && m.text.trim() ? m.text.trim() : htmlToText(m.html || '');
     const when = m.date ? new Date(m.date).toLocaleString() : '';
     const quoted =
       `\n\n${SIGNATURE}\n\n----\nOn ${when}, ${m.from} wrote:\n` +
       quoteBlock(plain || '(пустое сообщение)');
-
     openComposerWith({ to, subject, body: quoted });
   }
 
-  // NEW: Переслать
+  // Переслать
   function onForward() {
     const m = current;
     if (!m) return;
-
     const subjBase = m.subject || '';
     const subject = subjBase.toLowerCase().startsWith('fwd:') ? subjBase : `Fwd: ${subjBase}`;
-
-    const plain = m.text && m.text.trim()
-      ? m.text.trim()
-      : htmlToText(m.html || '');
-
+    const plain = m.text && m.text.trim() ? m.text.trim() : htmlToText(m.html || '');
     const when = m.date ? new Date(m.date).toLocaleString() : '';
     const header =
       `\n\n${SIGNATURE}\n\n---- Forwarded message ----\n` +
@@ -388,15 +389,11 @@ export default function EmailTab() {
       (m.to ? `To: ${m.to}\n` : '') +
       `Date: ${when}\n` +
       `Subject: ${m.subject || ''}\n\n`;
-
     const body = header + plain;
-
-    // В "Переслать" адресат пустой — пользователь сам укажет
     openComposerWith({ to: '', subject, body });
   }
 
   function closeRead() {
-    // освобождаем blob-URL для inline изображений
     if (current?._blobUrlsToRevoke) {
       current._blobUrlsToRevoke.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
     }
@@ -415,11 +412,8 @@ export default function EmailTab() {
       const shouldAppend = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
       const textForBody = shouldAppend ? `${baseText}${SIGNATURE}` : baseText;
 
-      // HTML-версия с Times New Roman
       const htmlContent = nl2br(textForBody);
       const html = wrapHtmlTimes(`<div>${htmlContent}</div>`);
-
-      // plain-text fallback
       const text = textForBody;
 
       const files = Array.from(filesRef.current?.files || []);
@@ -484,7 +478,7 @@ export default function EmailTab() {
       {/* LEFT */}
       <aside style={styles.left}>
         <div style={styles.account}>{ACCOUNT_EMAIL}</div>
-        <button style={styles.compose} onClick={() => setComposeOpen(true)}>
+        <button style={styles.compose} onClick={() => openComposerWith({})}>
           <span>✉️</span> <span>Написать</span>
         </button>
 
@@ -574,10 +568,16 @@ export default function EmailTab() {
         </div>
       </section>
 
-      {/* COMPOSE MODAL */}
+      {/* COMPOSE MODAL — ВЫШЕ ПО Z-INDEX */}
       {composeOpen && (
-        <div style={styles.overlay} onClick={() => setComposeOpen(false)}>
-          <div style={styles.composeModal} onClick={(e) => e.stopPropagation()}>
+        <div
+          style={{ ...styles.overlayBase, ...styles.composeOverlay }}
+          onClick={() => setComposeOpen(false)}
+        >
+          <div
+            style={styles.composeModal}
+            onClick={(e) => e.stopPropagation()}
+          >
             <h3 style={{ marginTop: 0 }}>Новое письмо</h3>
             <form onSubmit={onSubmit}>
               <div style={styles.formRow}>
@@ -625,9 +625,12 @@ export default function EmailTab() {
         </div>
       )}
 
-      {/* READ MODAL */}
+      {/* READ MODAL — НИЖЕ ПО Z-INDEX */}
       {readOpen && (
-        <div style={styles.overlay} onClick={closeRead}>
+        <div
+          style={{ ...styles.overlayBase, ...styles.readOverlay }}
+          onClick={closeRead}
+        >
           <div style={styles.readModal} onClick={(e) => e.stopPropagation()}>
             <div style={styles.readHeader}>
               <h3 style={{ margin: 0 }}>{current?.subject || '(без темы)'}</h3>
