@@ -186,6 +186,29 @@ function wrapHtmlTimes(contentHtml) {
 </html>`;
 }
 
+/* ====== reply/forward helpers ====== */
+function parseEmailAddress(display) {
+  if (!display) return '';
+  const m = String(display).match(/<([^>]+)>/);
+  return m ? m[1].trim() : String(display).trim();
+}
+
+function htmlToText(html) {
+  if (!html) return '';
+  // простой html→text, достаточно для цитаты
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const text = tmp.innerText || tmp.textContent || '';
+  return text.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function quoteBlock(s) {
+  return String(s)
+    .split('\n')
+    .map(line => (line.trim() ? '> ' + line : '>'))
+    .join('\n');
+}
+
 export default function EmailTab() {
   /* ======= STATE ======= */
   const [folder, setFolder] = useState('inbox');
@@ -224,6 +247,17 @@ export default function EmailTab() {
       ...(options.headers || {}),
     };
     return fetch(url, { ...options, headers });
+  }
+
+  // NEW: открыть композер и проставить значения
+  function openComposerWith({ to = '', subject = '', body = '' } = {}) {
+    setComposeOpen(true);
+    // отложим на тик, чтобы refs были готовы
+    setTimeout(() => {
+      if (toRef.current)       toRef.current.value = to;
+      if (subjectRef.current)  subjectRef.current.value = subject;
+      if (textRef.current)     textRef.current.value = body;
+    }, 0);
   }
 
   const fmtDate = (iso) => {
@@ -312,6 +346,53 @@ export default function EmailTab() {
     } finally {
       setReading(false);
     }
+  }
+
+  // NEW: Ответить
+  function onReply() {
+    const m = current;
+    if (!m) return;
+
+    const to = parseEmailAddress(m.from);
+    const subjBase = m.subject || '';
+    const subject = subjBase.toLowerCase().startsWith('re:') ? subjBase : `Re: ${subjBase}`;
+
+    const plain = m.text && m.text.trim()
+      ? m.text.trim()
+      : htmlToText(m.html || '');
+
+    const when = m.date ? new Date(m.date).toLocaleString() : '';
+    const quoted =
+      `\n\n${SIGNATURE}\n\n----\nOn ${when}, ${m.from} wrote:\n` +
+      quoteBlock(plain || '(пустое сообщение)');
+
+    openComposerWith({ to, subject, body: quoted });
+  }
+
+  // NEW: Переслать
+  function onForward() {
+    const m = current;
+    if (!m) return;
+
+    const subjBase = m.subject || '';
+    const subject = subjBase.toLowerCase().startsWith('fwd:') ? subjBase : `Fwd: ${subjBase}`;
+
+    const plain = m.text && m.text.trim()
+      ? m.text.trim()
+      : htmlToText(m.html || '');
+
+    const when = m.date ? new Date(m.date).toLocaleString() : '';
+    const header =
+      `\n\n${SIGNATURE}\n\n---- Forwarded message ----\n` +
+      `From: ${m.from || ''}\n` +
+      (m.to ? `To: ${m.to}\n` : '') +
+      `Date: ${when}\n` +
+      `Subject: ${m.subject || ''}\n\n`;
+
+    const body = header + plain;
+
+    // В "Переслать" адресат пустой — пользователь сам укажет
+    openComposerWith({ to: '', subject, body });
   }
 
   function closeRead() {
@@ -550,7 +631,11 @@ export default function EmailTab() {
           <div style={styles.readModal} onClick={(e) => e.stopPropagation()}>
             <div style={styles.readHeader}>
               <h3 style={{ margin: 0 }}>{current?.subject || '(без темы)'}</h3>
-              <button style={styles.btn} onClick={closeRead}>Закрыть</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={styles.btn} onClick={onReply} disabled={!current || reading}>Ответить</button>
+                <button style={styles.btn} onClick={onForward} disabled={!current || reading}>Переслать</button>
+                <button style={styles.btn} onClick={closeRead}>Закрыть</button>
+              </div>
             </div>
 
             <div style={styles.readMeta}>
