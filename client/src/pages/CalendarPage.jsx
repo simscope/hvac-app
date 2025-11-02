@@ -17,7 +17,7 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// ----- TZ math (корректно с DST) -----
+// ----- TZ helpers (без глобальных конверсий, только для Month-модалки) -----
 const makeTZFormatter = (timeZone) =>
   new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -30,7 +30,7 @@ const makeTZFormatter = (timeZone) =>
     second: '2-digit',
   });
 
-/** get offset(ms) of `utcMs` instant in a given IANA zone */
+/** offset(ms) зоны для локального момента (через «стеночное» -> UTC трюк) */
 const tzOffsetMsAt = (utcMs, timeZone) => {
   const dtf = makeTZFormatter(timeZone);
   const d = new Date(utcMs);
@@ -42,34 +42,43 @@ const tzOffsetMsAt = (utcMs, timeZone) => {
   const minute = +parts.find((p) => p.type === 'minute').value;
   const second = +parts.find((p) => p.type === 'second').value;
   const asUTC = Date.UTC(year, month - 1, day, hour, minute, second);
-  return asUTC - utcMs; // positive in winter for NY (UTC-5 -> +5h in ms)
+  return asUTC - utcMs; // +5h зимой для NY (UTC-5)
 };
 
 /**
- * Local "wall time" (NY) for the date of `baseDate` -> ISO UTC string (для timestamptz).
- * Это используем ТОЛЬКО из модалки в режиме Month.
+ * СБОР СТРОКИ без конверсии: "YYYY-MM-DDTHH:mm:00±HH:MM"
+ * Для Month-модалки — записываем в БД именно тот час, который выбрал пользователь.
  */
-const zonedWallTimeToISO = (baseDate, hh = 9, mm = 0, timeZone = APP_TZ) => {
+const zonedWallTimeWithOffsetString = (baseDate, hh = 9, mm = 0, timeZone = APP_TZ) => {
   if (!baseDate) return null;
+
+  // 1) Берём Y-M-D выбранного дня в заданной зоне
   const dtf = makeTZFormatter(timeZone);
-  // extract Y-M-D of baseDate in target TZ
   const parts = dtf.formatToParts(baseDate);
   const year = +parts.find((p) => p.type === 'year').value;
   const month = +parts.find((p) => p.type === 'month').value;
   const day = +parts.find((p) => p.type === 'day').value;
 
-  // "Pretend" this local wall time is UTC first:
+  // 2) «Представим», что эта местная стенка — UTC
   const wallAsUTC = Date.UTC(year, month - 1, day, hh, mm, 0);
 
-  // What is the offset in that zone at that local moment?
-  const offset = tzOffsetMsAt(wallAsUTC, timeZone);
+  // 3) Узнаем смещение зоны в этот момент (мс). Для NY зимой это +5h*3600000.
+  const offsetMs = tzOffsetMsAt(wallAsUTC, timeZone);
 
-  // Subtract offset to get real UTC instant
-  const utcMs = wallAsUTC - offset;
-  return new Date(utcMs).toISOString();
+  // 4) Переводим смещение в ±HH:MM строку. Знак инвертируем:
+  // offsetMs=+5h  -> zone "-05:00"
+  const totalMinutes = Math.round(Math.abs(offsetMs) / 60000);
+  const offHours = Math.floor(totalMinutes / 60);
+  const offMinutes = totalMinutes % 60;
+  const sign = offsetMs >= 0 ? '-' : '+'; // инверсия знака
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const offsetStr = `${sign}${pad2(offHours)}:${pad2(offMinutes)}`;
+
+  // 5) Формируем строку без каких-либо toISOString()
+  return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hh)}:${pad2(mm)}:00${offsetStr}`;
 };
 
-// === для кнопки «Маршрут» в заголовке дня (фикс попаданья в локальные сутки) ===
+// ==== day cell date fix (для кнопки "Маршрут") ====
 const localStartOfCellDay = (utcDateObj) => {
   return new Date(
     utcDateObj.getUTCFullYear(),
@@ -91,14 +100,14 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// Week/Day «00:00» → 09:00 локально; в БД пишем как ISO/UTC
+// Для Week/Day — оставляем поведение как было (если 00:00 → 09:00), сохраняем ISO/UTC
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
   if (d.getHours() === 0 && d.getMinutes() === 0) {
     d.setHours(fallbackHour, 0, 0, 0);
   }
-  return d.toISOString(); // пишем UTC (timestamptz)
+  return d.toISOString();
 };
 
 const toast = (msg) => window.alert(msg);
@@ -112,10 +121,10 @@ export default function CalendarPage() {
   const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
 
-  // модалка выбора времени (используется только в Month)
+  // модалка выбора времени
   const [timeModal, setTimeModal] = useState({
     open: false,
-    baseDate: null,        // Date целевого дня (локально, дата из FC)
+    baseDate: null,        // Date целевого дня (локально)
     defaultTime: '09:00',
     onConfirm: null,       // async (hhmm) => void
     onCancel: null,        // () => void
@@ -254,7 +263,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // ISO/UTC из БД (timestamptz) — даём FullCalendar самому конвертировать в APP_TZ
+        start: j.appointment_time, // оставляем как есть (FullCalendar сам покажет по APP_TZ)
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -284,8 +293,6 @@ export default function CalendarPage() {
     const viewType = api?.view?.type;
 
     if (viewType === 'dayGridMonth') {
-      // ТОЛЬКО в месяце — показываем модалку и сохраняем выбранное время,
-      // конвертируя локальную "стенку" → ISO/UTC (timestamptz).
       const event = info.event;
       const newDate = event.start ? new Date(event.start) : null; // локальная дата дня
       const revert = info.revert;
@@ -300,17 +307,17 @@ export default function CalendarPage() {
             if (!newDate) throw new Error('No target date');
             const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
 
-            // локальную стенку (NY) переводим в ISO/UTC для БД
-            const iso = zonedWallTimeToISO(newDate, hh, mm, APP_TZ);
+            // СТРОИМ СТРОКУ с оффсетом зоны без toISOString()
+            const tsWithOffset = zonedWallTimeWithOffsetString(newDate, hh, mm, APP_TZ);
 
-            // визуально сразу переставим (FullCalendar сам отобразит по APP_TZ)
-            try { event.setStart(new Date(iso)); } catch {}
+            // Обновим визуально (FullCalendar поймёт ISO-строку с оффсетом)
+            try { event.setStart(tsWithOffset); } catch {}
 
-            const { error } = await supabase.from('jobs').update({ appointment_time: iso }).eq('id', event.id);
+            const { error } = await supabase.from('jobs').update({ appointment_time: tsWithOffset }).eq('id', event.id);
             if (error) throw error;
 
             setJobs((prev) => prev.map((j) =>
-              String(j.id) === String(event.id) ? { ...j, appointment_time: iso } : j
+              String(j.id) === String(event.id) ? { ...j, appointment_time: tsWithOffset } : j
             ));
             toast('Saved');
           } catch (e) {
@@ -323,7 +330,7 @@ export default function CalendarPage() {
       return;
     }
 
-    // Week/Day — без модалки, пишем ISO/UTC (с автоподстановкой 09:00 если 00:00)
+    // Week/Day — как было
     const id = info.event.id;
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
@@ -350,7 +357,6 @@ export default function CalendarPage() {
     const viewType = api?.view?.type;
 
     if (viewType === 'dayGridMonth') {
-      // Только в месяце — модалка + запись ISO/UTC
       const event = info.event;
       const baseDate = event.start ? new Date(event.start) : null;
 
@@ -364,17 +370,17 @@ export default function CalendarPage() {
             if (!baseDate) throw new Error('No base date');
             const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
 
-            const iso = zonedWallTimeToISO(baseDate, hh, mm, APP_TZ);
+            const tsWithOffset = zonedWallTimeWithOffsetString(baseDate, hh, mm, APP_TZ);
 
-            try { event.setStart(new Date(iso)); } catch {}
+            try { event.setStart(tsWithOffset); } catch {}
 
-            const payload = { appointment_time: iso, technician_id: normalizeId(activeTech) };
+            const payload = { appointment_time: tsWithOffset, technician_id: normalizeId(activeTech) };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
             if (error) throw error;
 
             setJobs((prev) =>
               prev.map((j) =>
-                String(j.id) === id ? { ...j, appointment_time: iso, technician_id: normalizeId(activeTech) } : j
+                String(j.id) === id ? { ...j, appointment_time: tsWithOffset, technician_id: normalizeId(activeTech) } : j
               )
             );
             toast('Saved');
@@ -388,7 +394,7 @@ export default function CalendarPage() {
       return;
     }
 
-    // Week/Day — без модалки, сразу ISO/UTC
+    // Week/Day — как было
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
@@ -454,7 +460,7 @@ export default function CalendarPage() {
     }
   };
 
-  /* ---------- ROUTE BUILDER (no day shift) ---------- */
+  /* ---------- ROUTE BUILDER ---------- */
   const openRouteForDate = (cellUtcDate) => {
     const api = calRef.current?.getApi?.();
     if (!api) return;
@@ -514,7 +520,7 @@ export default function CalendarPage() {
     btn.style.cursor = 'pointer';
     btn.style.fontSize = '12px';
     btn.style.boxShadow = '0 6px 16px rgba(29,78,216,0.25)';
-    btn.addEventListener('click', () => openRouteForDate(arg.date)); // arg.date = UTC-полночь, выше это учли
+    btn.addEventListener('click', () => openRouteForDate(arg.date));
     wrap.appendChild(btn);
 
     return { domNodes: [wrap] };
@@ -571,18 +577,7 @@ export default function CalendarPage() {
         <div style={{ marginBottom: 6, fontWeight: 700, color: '#111827' }}>
           Unassigned <span style={{ color: '#6b7280', fontWeight: 500 }}>(drag onto the calendar of a selected technician tab)</span>:
         </div>
-        <div
-          ref={extRef}
-          style={{
-            display: 'flex',
-            gap: 8,
-            flexWrap: 'wrap',
-            padding: 10,
-            border: '1px dashed #e5e7eb',
-            borderRadius: 12,
-            background: '#fafafa'
-          }}
-        >
+        <div ref={extRef} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: 10, border: '1px dashed #e5e7eb', borderRadius: 12, background: '#fafafa' }}>
           {unassigned.length === 0 && <div style={{ color: '#6b7280' }}>— no jobs —</div>}
           {unassigned.map((j) => {
             const title = `#${j.job_number || j.id} — ${getClientName(j)}`;
@@ -597,17 +592,9 @@ export default function CalendarPage() {
                 title="Drag onto a technician's calendar"
                 onDoubleClick={() => navigate(`/job/${j.id}`)}
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  gap: 6,
-                  minWidth: 280,
-                  maxWidth: 420,
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 12,
-                  background: '#fff',
-                  padding: '8px 10px',
-                  cursor: 'grab',
-                  boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
+                  display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 6, minWidth: 280, maxWidth: 420,
+                  border: '1px solid #e5e7eb', borderRadius: 12, background: '#fff', padding: '8px 10px',
+                  cursor: 'grab', boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 4px 12px rgba(0,0,0,0.05)'
                 }}
               >
                 <div style={{ fontWeight: 800 }}>#{j.job_number || j.id}</div>
@@ -617,27 +604,15 @@ export default function CalendarPage() {
                     {comp}
                   </div>
                 )}
-                {addr && (
-                  <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>
-                )}
-                {j.issue && (
-                  <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>
-                )}
+                {addr && <div style={{ gridColumn: '1 / span 2', color: '#374151' }}>{addr}</div>}
+                {j.issue && <div style={{ gridColumn: '1 / span 2', color: '#6b7280' }}>{j.issue}</div>}
               </div>
             );
           })}
         </div>
       </div>
 
-      <div
-        style={{
-          background: '#fff',
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
-          padding: 8,
-          boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 10px 20px rgba(0,0,0,0.04)'
-        }}
-      >
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 8, boxShadow: '0 1px 0 rgba(0,0,0,0.02), 0 10px 20px rgba(0,0,0,0.04)' }}>
         <FullCalendar
           ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
@@ -768,7 +743,7 @@ function Legend() {
   );
 }
 
-/* ========== TimePicker Modal (используется только в Month) ========== */
+/* ========== TimePicker Modal ========== */
 function TimePickerModal({ defaultTime = '09:00', onConfirm, onCancel }) {
   const [val, setVal] = useState(defaultTime);
 
@@ -793,7 +768,7 @@ function TimePickerModal({ defaultTime = '09:00', onConfirm, onCancel }) {
       }}>
         <div style={{ fontSize: 18, fontWeight: 800 }}>Выбери время апойтмента</div>
         <div style={{ color: '#6b7280', fontSize: 13 }}>
-          Month-вид: укажи точное время визита (по Нью-Йорку).
+          Month-вид: укажи точное время визита.
         </div>
         <input
           type="time"
