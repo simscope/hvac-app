@@ -17,65 +17,31 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-// ----- TZ helpers (без глобальных конверсий, только для Month-модалки) -----
-const makeTZFormatter = (timeZone) =>
-  new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+// ===== Month-only helpers (пишем NY-стеночное время строкой со смещением) =====
+const nyOffsetStringForDate = (baseDate) => {
+  // вернёт '-04:00' летом и '-05:00' зимой для Нью-Йорка
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: APP_TZ,
+    timeZoneName: 'shortOffset',
   });
-
-/** offset(ms) зоны для локального момента (через «стеночное» -> UTC трюк) */
-const tzOffsetMsAt = (utcMs, timeZone) => {
-  const dtf = makeTZFormatter(timeZone);
-  const d = new Date(utcMs);
-  const parts = dtf.formatToParts(d);
-  const year = +parts.find((p) => p.type === 'year').value;
-  const month = +parts.find((p) => p.type === 'month').value;
-  const day = +parts.find((p) => p.type === 'day').value;
-  const hour = +parts.find((p) => p.type === 'hour').value;
-  const minute = +parts.find((p) => p.type === 'minute').value;
-  const second = +parts.find((p) => p.type === 'second').value;
-  const asUTC = Date.UTC(year, month - 1, day, hour, minute, second);
-  return asUTC - utcMs; // +5h зимой для NY (UTC-5)
+  const part = fmt.formatToParts(baseDate).find((p) => p.type === 'timeZoneName');
+  const raw = part?.value || 'GMT-05';
+  const m = raw.match(/GMT([+\-]\d{1,2})(?::?(\d{2}))?/); // 'GMT-5', 'GMT-04', 'GMT+03:30'
+  const sign = (m?.[1] || '-5').startsWith('-') ? '-' : '+';
+  const hh = String(Math.abs(parseInt(m?.[1] || '-5', 10))).padStart(2, '0');
+  const mm = String(parseInt(m?.[2] || '0', 10)).padStart(2, '0');
+  return `${sign}${hh}:${mm}`;
 };
 
-/**
- * СБОР СТРОКИ без конверсии: "YYYY-MM-DDTHH:mm:00±HH:MM"
- * Для Month-модалки — записываем в БД именно тот час, который выбрал пользователь.
- */
-const zonedWallTimeWithOffsetString = (baseDate, hh = 9, mm = 0, timeZone = APP_TZ) => {
+const nyWallToText = (baseDate, hh = 9, mm = 0) => {
   if (!baseDate) return null;
-
-  // 1) Берём Y-M-D выбранного дня в заданной зоне
-  const dtf = makeTZFormatter(timeZone);
-  const parts = dtf.formatToParts(baseDate);
-  const year = +parts.find((p) => p.type === 'year').value;
-  const month = +parts.find((p) => p.type === 'month').value;
-  const day = +parts.find((p) => p.type === 'day').value;
-
-  // 2) «Представим», что эта местная стенка — UTC
-  const wallAsUTC = Date.UTC(year, month - 1, day, hh, mm, 0);
-
-  // 3) Узнаем смещение зоны в этот момент (мс). Для NY зимой это +5h*3600000.
-  const offsetMs = tzOffsetMsAt(wallAsUTC, timeZone);
-
-  // 4) Переводим смещение в ±HH:MM строку. Знак инвертируем:
-  // offsetMs=+5h  -> zone "-05:00"
-  const totalMinutes = Math.round(Math.abs(offsetMs) / 60000);
-  const offHours = Math.floor(totalMinutes / 60);
-  const offMinutes = totalMinutes % 60;
-  const sign = offsetMs >= 0 ? '-' : '+'; // инверсия знака
-  const pad2 = (n) => String(n).padStart(2, '0');
-  const offsetStr = `${sign}${pad2(offHours)}:${pad2(offMinutes)}`;
-
-  // 5) Формируем строку без каких-либо toISOString()
-  return `${year}-${pad2(month)}-${pad2(day)}T${pad2(hh)}:${pad2(mm)}:00${offsetStr}`;
+  const y = baseDate.getFullYear();
+  const mo = String(baseDate.getMonth() + 1).padStart(2, '0');
+  const d = String(baseDate.getDate()).padStart(2, '0');
+  const H = String(hh).padStart(2, '0');
+  const M = String(mm).padStart(2, '0');
+  const off = nyOffsetStringForDate(new Date(y, baseDate.getMonth(), baseDate.getDate(), hh, mm, 0));
+  return `${y}-${mo}-${d} ${H}:${M}:00${off}`; // именно текст с оффсетом
 };
 
 // ==== day cell date fix (для кнопки "Маршрут") ====
@@ -100,7 +66,7 @@ const inLocalCellDay = (eventDate, cellUtcDate) => {
   return t >= start.getTime() && t < end.getTime();
 };
 
-// Для Week/Day — оставляем поведение как было (если 00:00 → 09:00), сохраняем ISO/UTC
+// Week/Day «00:00» → 09:00 локально; в БД пишем как ISO/UTC
 const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
   if (!date) return null;
   const d = new Date(date);
@@ -263,7 +229,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // оставляем как есть (FullCalendar сам покажет по APP_TZ)
+        start: j.appointment_time, // FullCalendar сам распарсит ISO с оффсетом
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -294,7 +260,7 @@ export default function CalendarPage() {
 
     if (viewType === 'dayGridMonth') {
       const event = info.event;
-      const newDate = event.start ? new Date(event.start) : null; // локальная дата дня
+      const newDate = event.start ? new Date(event.start) : null; // локальный день
       const revert = info.revert;
 
       setTimeModal({
@@ -307,18 +273,21 @@ export default function CalendarPage() {
             if (!newDate) throw new Error('No target date');
             const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
 
-            // СТРОИМ СТРОКУ с оффсетом зоны без toISOString()
-            const tsWithOffset = zonedWallTimeWithOffsetString(newDate, hh, mm, APP_TZ);
+            // формируем текст NY-стеночного времени со смещением
+            const txt = nyWallToText(newDate, hh, mm);
 
-            // Обновим визуально (FullCalendar поймёт ISO-строку с оффсетом)
-            try { event.setStart(tsWithOffset); } catch {}
+            // визуально обновим
+            try { event.setStart(txt); } catch {}
 
-            const { error } = await supabase.from('jobs').update({ appointment_time: tsWithOffset }).eq('id', event.id);
+            const { error } = await supabase
+              .from('jobs')
+              .update({ appointment_time: txt })
+              .eq('id', event.id);
             if (error) throw error;
 
-            setJobs((prev) => prev.map((j) =>
-              String(j.id) === String(event.id) ? { ...j, appointment_time: tsWithOffset } : j
-            ));
+            setJobs((prev) =>
+              prev.map((j) => (String(j.id) === String(event.id) ? { ...j, appointment_time: txt } : j))
+            );
             toast('Saved');
           } catch (e) {
             console.error('eventDrop month save error:', e);
@@ -330,7 +299,7 @@ export default function CalendarPage() {
       return;
     }
 
-    // Week/Day — как было
+    // Week/Day — как было (UTC ISO)
     const id = info.event.id;
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
     const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
@@ -370,17 +339,17 @@ export default function CalendarPage() {
             if (!baseDate) throw new Error('No base date');
             const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
 
-            const tsWithOffset = zonedWallTimeWithOffsetString(baseDate, hh, mm, APP_TZ);
+            const txt = nyWallToText(baseDate, hh, mm);
 
-            try { event.setStart(tsWithOffset); } catch {}
+            try { event.setStart(txt); } catch {}
 
-            const payload = { appointment_time: tsWithOffset, technician_id: normalizeId(activeTech) };
+            const payload = { appointment_time: txt, technician_id: normalizeId(activeTech) };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
             if (error) throw error;
 
             setJobs((prev) =>
               prev.map((j) =>
-                String(j.id) === id ? { ...j, appointment_time: tsWithOffset, technician_id: normalizeId(activeTech) } : j
+                String(j.id) === id ? { ...j, appointment_time: txt, technician_id: normalizeId(activeTech) } : j
               )
             );
             toast('Saved');
