@@ -17,31 +17,16 @@ const normalizeId = (v) => {
   return /^\d+$/.test(s) ? Number(s) : s;
 };
 
-/* ===== Month-only helpers (пишем NY-время строкой с оффсетом; без UTC-конверсий) ===== */
-const nyOffsetStringForDate = (baseDate) => {
-  // '-04:00' летом и '-05:00' зимой
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: APP_TZ,
-    timeZoneName: 'shortOffset',
-  });
-  const part = fmt.formatToParts(baseDate).find((p) => p.type === 'timeZoneName');
-  const raw = part?.value || 'GMT-05';
-  const m = raw.match(/GMT([+\-]\d{1,2})(?::?(\d{2}))?/);
-  const sign = (m?.[1] || '-5').startsWith('-') ? '-' : '+';
-  const hh = String(Math.abs(parseInt(m?.[1] || '-5', 10))).padStart(2, '0');
-  const mm = String(parseInt(m?.[2] || '0', 10)).padStart(2, '0');
-  return `${sign}${hh}:${mm}`;
-};
-
-const nyWallToText = (baseDate, hh = 9, mm = 0) => {
+/* ===== Month-only helpers (пишем СТРОГО то, что выбрал пользователь; БЕЗ Z и оффсета) ===== */
+const buildLocalText = (baseDate, hh = 9, mm = 0) => {
   if (!baseDate) return null;
-  const y = baseDate.getFullYear();
+  const y  = baseDate.getFullYear();
   const mo = String(baseDate.getMonth() + 1).padStart(2, '0');
-  const d = String(baseDate.getDate()).padStart(2, '0');
-  const H = String(hh).padStart(2, '0');
-  const M = String(mm).padStart(2, '0');
-  const off = nyOffsetStringForDate(new Date(y, baseDate.getMonth(), baseDate.getDate(), hh, mm, 0));
-  return `${y}-${mo}-${d} ${H}:${M}:00${off}`; // пример: 2025-11-05 13:00:00-05:00
+  const d  = String(baseDate.getDate()).padStart(2, '0');
+  const H  = String(hh).padStart(2, '0');
+  const M  = String(mm).padStart(2, '0');
+  // НИКАКИХ 'Z' и НИКАКИХ смещений — пишем «как есть»
+  return `${y}-${mo}-${d} ${H}:${M}:00`;
 };
 
 /* ==== вспомогалки для кнопки "Маршрут" ==== */
@@ -229,7 +214,7 @@ export default function CalendarPage() {
       return {
         id: String(j.id),
         title,
-        start: j.appointment_time, // FullCalendar понимает ISO/текст с оффсетом
+        start: j.appointment_time, // FullCalendar съест и ISO, и локальную строку
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -258,7 +243,7 @@ export default function CalendarPage() {
     const api = calRef.current?.getApi?.();
     const viewType = api?.view?.type;
 
-    // Только в Month просим время и пишем текст NY-времени со смещением
+    // Только в Month просим время и пишем текст «как ввёл пользователь»
     if (viewType === 'dayGridMonth') {
       const event = info.event;
       const newDate = event.start ? new Date(event.start) : null; // локальный день
@@ -274,7 +259,7 @@ export default function CalendarPage() {
             if (!newDate) throw new Error('No target date');
             const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
 
-            const txt = nyWallToText(newDate, hh, mm); // 'YYYY-MM-DD HH:MM:00-05:00/-04:00'
+            const txt = buildLocalText(newDate, hh, mm); // 'YYYY-MM-DD HH:MM:00' БЕЗ TZ
 
             // визуально обновим (не переводим в UTC!)
             try { event.setStart(txt); } catch {}
@@ -341,7 +326,7 @@ export default function CalendarPage() {
             if (!baseDate) throw new Error('No base date');
             const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
 
-            const txt = nyWallToText(baseDate, hh, mm);
+            const txt = buildLocalText(baseDate, hh, mm); // 'YYYY-MM-DD HH:MM:00'
 
             try { event.setStart(txt); } catch {}
 
