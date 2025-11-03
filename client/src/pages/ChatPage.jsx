@@ -7,14 +7,14 @@ import MessageList from '../components/chat/MessageList.jsx';
 import MessageInput from '../components/chat/MessageInput.jsx';
 import ChatHeader from '../components/chat/ChatHeader.jsx';
 
-// Колонка пользователя в message_receipts
+// В message_receipts колонка пользователя называется так:
 const RECEIPTS_USER_COLUMN = 'user_id';
 
-// Поля профиля автора сообщения
+// Поля профиля, которые реально есть (avatar_url убран)
 const PROFILE_FIELDS = 'id, full_name, role';
 
-// ВАЖНО: это имя FK-алиаса chat_messages.author_id -> profiles.id
-// Проверь в Table Editor → chat_messages → Foreign Keys и, если нужно, замени.
+// Имя внешнего ключа chat_messages.author_id -> profiles.id.
+// Если у тебя другое — подставь точное из Table Editor (Foreign Keys).
 const AUTHOR_FK_ALIAS = 'chat_messages_author_fk';
 
 export default function ChatPage() {
@@ -41,55 +41,81 @@ export default function ChatPage() {
   const [activeChatId, setActiveChatId] = useState(null);
   const [unreadByChat, setUnreadByChat] = useState({}); // { [chat_id]: number }
 
-  const loadChats = useCallback(async () => {
-    // Политика RLS на chats должна возвращать только чаты, где user — член
-    const { data, error } = await supabase
-      .from('chats')
-      .select('id, title, is_group, updated_at, deleted')
-      .eq('deleted', false)
-      .order('updated_at', { ascending: false });
-
-    if (error) {
-      console.error('[CHAT] load chats error:', error);
-      setChats([]);
-      return;
-    }
-
-    const mapped = (data || []).map((r) => ({
-      chat_id: r.id,
-      title: r.title,
-      is_group: r.is_group,
-      last_at: r.updated_at,
-    }));
-
-    setChats(mapped);
-    // Выбираем первый чат, если активный не установлен
-    if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
-  }, [activeChatId]);
-
-  const loadUnreadCounters = useCallback(async () => {
-    // RPC должна быть уже создана в БД (как у тебя)
-    const { data, error } = await supabase.rpc('get_unread_by_chat');
-    if (error) {
-      console.warn('[CHAT] unread counters rpc error:', error);
-      return;
-    }
-    const dict = {};
-    (data || []).forEach((row) => {
-      dict[row.chat_id] = Number(row.unread) || 0;
-    });
-    setUnreadByChat(dict);
-  }, []);
-
   useEffect(() => {
+    if (!selfId) {
+      setChats([]);
+      setActiveChatId(null);
+      setUnreadByChat({});
+      return;
+    }
+
     let channel;
+
+    const loadChats = async () => {
+      // 1) Берём список chat_id, где текущий пользователь — участник
+      const { data: cm, error: cmErr } = await supabase
+        .from('chat_members')
+        .select('chat_id')
+        .eq('member_id', selfId);
+
+      if (cmErr) {
+        console.error('[CHAT] load chat_members error:', cmErr);
+        setChats([]);
+        return;
+      }
+
+      const ids = Array.from(new Set((cm || []).map((r) => r.chat_id))).filter(Boolean);
+      if (!ids.length) {
+        setChats([]);
+        setActiveChatId(null);
+        return;
+      }
+
+      // 2) Грузим «живые» чаты по этим id
+      const { data: rows, error: cErr } = await supabase
+        .from('chats')
+        .select('id, title, is_group, updated_at, deleted')
+        .in('id', ids)
+        .eq('deleted', false)
+        .order('updated_at', { ascending: false });
+
+      if (cErr) {
+        console.error('[CHAT] load chats error:', cErr);
+        setChats([]);
+        return;
+      }
+
+      const mapped = (rows || []).map((r) => ({
+        chat_id: r.id,
+        title: r.title,
+        is_group: r.is_group,
+        last_at: r.updated_at,
+      }));
+
+      setChats(mapped);
+      if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
+    };
+
+    const loadUnreadCounters = async () => {
+      // забираем с сервера непрочитанные по всем чатам
+      const { data, error } = await supabase.rpc('get_unread_by_chat');
+      if (error) {
+        console.warn('[CHAT] unread counters rpc error:', error);
+        return;
+      }
+      const dict = {};
+      (data || []).forEach((row) => {
+        dict[row.chat_id] = Number(row.unread) || 0;
+      });
+      setUnreadByChat(dict);
+    };
 
     (async () => {
       await loadChats();
       await loadUnreadCounters();
     })();
 
-    // Реалтайм: при новых сообщениях — поднимаем чат вверх и инкрементим бэйдж
+    // Пересортировать чат и инкрементнуть непрочитанные при новых сообщениях
     channel = supabase
       .channel('chats-overview')
       .on(
@@ -103,14 +129,12 @@ export default function ChatPage() {
             const i = arr.findIndex((c) => c.chat_id === m.chat_id);
             if (i >= 0) {
               arr[i] = { ...arr[i], last_at: m.created_at };
-              arr.sort(
-                (a, b) =>
-                  new Date(b.last_at || 0) - new Date(a.last_at || 0),
-              );
+              arr.sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
             }
             return arr;
           });
 
+          // если пришло чужое сообщение и чат не активный — инкрементим бэйдж
           if (selfId && m.author_id !== selfId && m.chat_id !== activeChatId) {
             setUnreadByChat((prev) => ({
               ...prev,
@@ -122,44 +146,62 @@ export default function ChatPage() {
       .subscribe();
 
     return () => {
-      try {
-        supabase.removeChannel(channel);
-      } catch {}
+      try { supabase.removeChannel(channel); } catch {}
     };
-  }, [activeChatId, selfId, loadChats, loadUnreadCounters]);
+  }, [activeChatId, selfId]);
 
   /** ───────────────  УЧАСТНИКИ АКТИВНОГО ЧАТА + ИМЕНА  ─────────────── */
-  const [members, setMembers] = useState([]); // массив user_id
+  const [members, setMembers] = useState([]); // массив auth.user.id
   const [memberNames, setMemberNames] = useState({}); // { user_id: 'Имя' }
 
-  const loadParticipants = useCallback(async (chatId) => {
-    if (!chatId) {
-      setMembers([]);
-      setMemberNames({});
-      return;
-    }
-    // Берём участников через RPC (security definer), чтобы не биться об RLS
-    const { data, error } = await supabase.rpc('get_chat_participants', {
-      p_chat_id: chatId,
-    });
-    if (error) {
-      console.error('[CHAT] participants rpc error:', error);
-      setMembers([]);
-      setMemberNames({});
-      return;
-    }
-    const ids = (data || []).map((p) => p.id);
-    const dict = {};
-    (data || []).forEach((p) => {
-      dict[p.id] = p.full_name || '—';
-    });
-    setMembers(ids);
-    setMemberNames(dict);
-  }, []);
-
   useEffect(() => {
-    loadParticipants(activeChatId);
-  }, [activeChatId, loadParticipants]);
+    if (!activeChatId) {
+      setMembers([]);
+      setMemberNames({});
+      return;
+    }
+
+    (async () => {
+      // Берём участников
+      const { data: mems, error } = await supabase
+        .from('chat_members')
+        .select('member_id')
+        .eq('chat_id', activeChatId);
+
+      if (error) {
+        console.error('[CHAT] members error:', error);
+        setMembers([]);
+        setMemberNames({});
+        return;
+      }
+
+      const ids = (mems || []).map((m) => m.member_id).filter(Boolean);
+      setMembers(ids);
+
+      // Имена из profiles
+      if (!ids.length) {
+        setMemberNames({});
+        return;
+      }
+
+      const { data: profs, error: pErr } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .in('id', ids);
+
+      if (pErr) {
+        console.warn('[CHAT] profiles load error:', pErr);
+        setMemberNames({});
+        return;
+      }
+
+      const dict = {};
+      (profs || []).forEach((p) => {
+        dict[p.id] = p.full_name || '—';
+      });
+      setMemberNames(dict);
+    })();
+  }, [activeChatId]);
 
   /** ─────────────────────  СООБЩЕНИЯ / КВИТАНЦИИ  ─────────────────── */
   const [messages, setMessages] = useState([]);
@@ -205,7 +247,8 @@ export default function ChatPage() {
     if (!chatId) return;
     setLoadingMessages(true);
 
-    // Эмбед автора по алиасу внешнего ключа
+    // Пытаемся получить автора эмбедами (явный FK-алиас).
+    // Если алиас другой — ниже подхватит backfillAuthors.
     const { data, error } = await supabase
       .from('chat_messages')
       .select(
@@ -304,12 +347,8 @@ export default function ChatPage() {
     receiptsSubRef.current = rCh;
 
     return () => {
-      try {
-        supabase.removeChannel(msgCh);
-      } catch {}
-      try {
-        supabase.removeChannel(rCh);
-      } catch {}
+      try { supabase.removeChannel(msgCh); } catch {}
+      try { supabase.removeChannel(rCh); } catch {}
     };
   }, [activeChatId, selfId, fetchMessages, fetchAuthor]);
 
@@ -355,7 +394,7 @@ export default function ChatPage() {
         chat_id: activeChatId,
         author_id: selfId,
         body: (text || '').trim() || null,
-        // Метаданные файла (аплоад в Storage — опционально, вне этого файла)
+        // Метаданные файла (реальный аплоад — по желанию)
         file_url: null,
         file_name: f ? f.name : null,
         file_type: f ? f.type : null,
@@ -374,15 +413,10 @@ export default function ChatPage() {
 
   /** ─────────────────────  СУММАРНЫЙ БЕЙДЖ В НАВИГАЦИИ  ───────────── */
   useEffect(() => {
-    const total = Object.values(unreadByChat).reduce(
-      (s, n) => s + (n || 0),
-      0,
-    );
+    const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
     if (typeof window !== 'undefined') {
       localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-      window.dispatchEvent(
-        new CustomEvent('chat-unread-changed', { detail: { total } }),
-      );
+      window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
     }
   }, [unreadByChat]);
 
@@ -456,3 +490,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
