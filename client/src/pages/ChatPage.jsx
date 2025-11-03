@@ -45,62 +45,55 @@ export default function ChatPage() {
     if (!selfId) {
       setChats([]);
       setActiveChatId(null);
+      setUnreadByChat({});
       return;
     }
 
     let channel;
 
-    // ДВУХШАГОВАЯ ЗАГРУЗКА:
-    // 1) chat_ids, где текущий пользователь участник (гарантированно проходит RLS chat_members)
-    // 2) сами чаты по этим id (SELECT-политика на chats должна пускать участника)
     const loadChats = async () => {
-      // 1) ids чатов
-      const { data: mems, error: mErr } = await supabase
+      // 1) Берём список chat_id, где текущий пользователь — участник
+      const { data: cm, error: cmErr } = await supabase
         .from('chat_members')
         .select('chat_id')
         .eq('member_id', selfId);
 
-      if (mErr) {
-        console.error('[CHAT] chat_members error:', mErr);
+      if (cmErr) {
+        console.error('[CHAT] load chat_members error:', cmErr);
         setChats([]);
         return;
       }
 
-      const ids = Array.from(new Set((mems || []).map((r) => r.chat_id))).filter(Boolean);
+      const ids = Array.from(new Set((cm || []).map((r) => r.chat_id))).filter(Boolean);
       if (!ids.length) {
-        console.warn('[CHAT] you are not a member of any chats');
         setChats([]);
+        setActiveChatId(null);
         return;
       }
 
-      // 2) данные чатов
+      // 2) Грузим «живые» чаты по этим id
       const { data: rows, error: cErr } = await supabase
         .from('chats')
-        .select('id, title, is_group, updated_at')
-        .in('id', ids);
+        .select('id, title, is_group, updated_at, deleted')
+        .in('id', ids)
+        .eq('deleted', false)
+        .order('updated_at', { ascending: false });
 
       if (cErr) {
-        console.error('[CHAT] chats select error:', cErr);
+        console.error('[CHAT] load chats error:', cErr);
         setChats([]);
         return;
       }
 
-      const mapped = (rows || [])
-        .map((r) => ({
-          chat_id: r.id,
-          title: r.title ?? 'Chat',
-          is_group: !!r.is_group,
-          last_at: r.updated_at ?? null,
-        }))
-        .sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
+      const mapped = (rows || []).map((r) => ({
+        chat_id: r.id,
+        title: r.title,
+        is_group: r.is_group,
+        last_at: r.updated_at,
+      }));
 
       setChats(mapped);
       if (!activeChatId && mapped.length) setActiveChatId(mapped[0].chat_id);
-
-      // диагностика
-      console.log('[CHAT] selfId:', selfId);
-      console.log('[CHAT] member chat ids:', ids);
-      console.log('[CHAT] chats loaded:', mapped.length);
     };
 
     const loadUnreadCounters = async () => {
@@ -136,9 +129,7 @@ export default function ChatPage() {
             const i = arr.findIndex((c) => c.chat_id === m.chat_id);
             if (i >= 0) {
               arr[i] = { ...arr[i], last_at: m.created_at };
-              arr.sort(
-                (a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0),
-              );
+              arr.sort((a, b) => new Date(b.last_at || 0) - new Date(a.last_at || 0));
             }
             return arr;
           });
@@ -425,9 +416,7 @@ export default function ChatPage() {
     const total = Object.values(unreadByChat).reduce((s, n) => s + (n || 0), 0);
     if (typeof window !== 'undefined') {
       localStorage.setItem('CHAT_UNREAD_TOTAL', String(total));
-      window.dispatchEvent(
-        new CustomEvent('chat-unread-changed', { detail: { total } }),
-      );
+      window.dispatchEvent(new CustomEvent('chat-unread-changed', { detail: { total } }));
     }
   }, [unreadByChat]);
 
