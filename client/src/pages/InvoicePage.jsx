@@ -1,4 +1,4 @@
-// client/src/pages/InvoicePage.jsx
+// Updated visual layout: tighter spacing & stronger borders — October 2025
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -8,156 +8,57 @@ import autoTable from 'jspdf-autotable';
 /* ---------------- helpers ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
 const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const fromInputDate = (s) => {
-  if (!s) return new Date();
-  const [y, m, day] = s.split('-').map(Number);
-  return new Date(y, (m || 1) - 1, day || 1);
-};
+const fromInputDate = (s) => { if (!s) return new Date(); const [y, m, day] = s.split('-').map(Number); return new Date(y, (m || 1) - 1, day || 1); };
 const human = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
 const N = (v) => Number(v || 0);
-const clean = (v) => {
-  const s = String(v ?? '').trim();
-  return s && s.toLowerCase() !== 'empty' ? s : '';
-};
-
+const clean = (v) => { const s = String(v ?? '').trim(); return s && s.toLowerCase() !== 'empty' ? s : ''; };
 function composeAddress(o = {}) {
-  const parts = [
-    o.address, o.address_line1, o.address_line2, o.street, o.street1, o.street2,
-    o.city, o.state, o.region, o.zip, o.postal_code
-  ]
-    .map(clean)
-    .filter(Boolean);
+  const parts = [o.address, o.address_line1, o.address_line2, o.street, o.street1, o.street2, o.city, o.state, o.region, o.zip, o.postal_code]
+    .map(clean).filter(Boolean);
   return [...new Set(parts)].join(', ');
 }
-
 const nowMinusSecISO = (sec = 45) => new Date(Date.now() - sec * 1000).toISOString();
 
 async function loadLogoDataURL(timeoutMs = 2500) {
   try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
-    const res = await fetch('/logo_invoice_header.png', { cache: 'force-cache', signal: ac.signal });
-    clearTimeout(t);
+    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), timeoutMs);
+    const res = await fetch('/logo_invoice_header.png', { cache: 'force-cache', signal: ac.signal }); clearTimeout(t);
     if (!res.ok) throw new Error('logo fetch failed');
     const blob = await res.blob();
-    return await new Promise((resolve) => {
-      const fr = new FileReader();
-      fr.onloadend = () => resolve(fr.result);
-      fr.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
+    return await new Promise((resolve) => { const fr = new FileReader(); fr.onloadend = () => resolve(fr.result); fr.readAsDataURL(blob); });
+  } catch { return null; }
 }
 
 /* ---------------- styles (UI) ---------------- */
 const BORDER = '#d1d5db';
 const BORDER_SOFT = '#e2e8f0';
-
 const S = {
   page: { maxWidth: 1000, margin: '24px auto 80px', padding: '0 16px' },
   bar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 },
-  primary: {
-    padding: '10px 16px',
-    borderRadius: 10,
-    border: `1px solid #2563eb`,
-    background: '#2563eb',
-    color: '#fff',
-    cursor: 'pointer',
-    fontWeight: 600
-  },
-  ghost: {
-    padding: '9px 14px',
-    borderRadius: 10,
-    border: `1px solid ${BORDER}`,
-    background: '#f8fafc',
-    cursor: 'pointer'
-  },
-  card: {
-    background: '#fff',
-    border: `1px solid ${BORDER}`,
-    borderRadius: 16,
-    padding: 24,
-    boxShadow: '0 2px 24px rgba(0,0,0,0.04)'
-  },
-
-  /* === Шапка: две равные колонки одной высоты === */
-  headerGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    alignItems: 'stretch',
-    gap: 16
-  },
-  colWrap: { display: 'flex', flexDirection: 'column', height: '100%' },
-
-  // Левая колонка (логотип + Моя компания)
-  brandBox: {
-    display: 'grid',
-    gridTemplateColumns: 'auto 1fr',
-    alignItems: 'start',
-    gap: 12,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 12,
-    padding: 16,
-    height: '100%'
-  },
+  primary: { padding: '10px 16px', borderRadius: 10, border: `1px solid #2563eb`, background: '#2563eb', color: '#fff', cursor: 'pointer', fontWeight: 600 },
+  ghost: { padding: '9px 14px', borderRadius: 10, border: `1px solid ${BORDER}`, background: '#f8fafc', cursor: 'pointer' },
+  card: { background: '#fff', border: `1px solid ${BORDER}`, borderRadius: 16, padding: 24, boxShadow: '0 2px 24px rgba(0,0,0,0.04)' },
+  header: { display: 'grid', gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 12 },
   brandName: { fontWeight: 700, fontSize: 16 },
-  brandInfo: {
-    color: '#6b7280',
-    lineHeight: 1.6,          // ↑ увеличенный межстрочный ТОЛЬКО здесь
-    marginTop: 6              // ↓ “чуть-чуть ниже”
-  },
-
-  // Правая колонка (INVOICE / № / Date / Balance Due / Bill To)
-  rightBox: {
-    border: `1px solid ${BORDER}`,
-    borderRadius: 12,
-    padding: 16,
-    height: '100%',
-    display: 'flex',
-    flexDirection: 'column',
-    justifyContent: 'space-between',
-    gap: 12
-  },
   invoiceTitle: { fontWeight: 800, fontSize: 30, color: '#444', letterSpacing: 1 },
   invoiceNo: { textAlign: 'right', color: '#6b7280' },
-
   sep: { height: 1, background: '#eef2f7', margin: '14px 0' },
-
   pill: { borderRadius: 12, overflow: 'hidden', border: `1px solid ${BORDER}` },
   pillRow: { display: 'grid', gridTemplateColumns: '1fr 1fr', background: '#f6f7fb' },
   pillCellLeft: { padding: '10px 12px', fontWeight: 700, color: '#333', textAlign: 'right' },
   pillCellRight: { padding: '10px 12px', fontWeight: 700, textAlign: 'right' },
-
   tableWrap: { marginTop: 12, border: `1px solid ${BORDER}`, borderRadius: 12, overflow: 'hidden' },
   table: { width: '100%', borderCollapse: 'collapse' },
   th: { background: '#3c3c3c', color: '#fff', textAlign: 'left', padding: '10px 12px', fontWeight: 700 },
   td: { padding: '10px 12px', borderBottom: `1px solid ${BORDER_SOFT}`, verticalAlign: 'top' },
-
-  input: {
-    border: `1px solid ${BORDER}`,
-    borderRadius: 8,
-    padding: '8px 10px',
-    width: '100%',
-    height: 36,
-    boxSizing: 'border-box'
-  },
-  select: {
-    border: `1px solid ${BORDER}`,
-    borderRadius: 8,
-    padding: '8px 10px',
-    width: '100%',
-    height: 36,
-    boxSizing: 'border-box'
-  },
-
+  input: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
+  select: { border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px', width: '100%', height: 36, boxSizing: 'border-box' },
   totalsRow: { display: 'grid', gridTemplateColumns: '1fr 300px', gap: 14, marginTop: 16 },
   totalsCard: { border: `1px solid ${BORDER}`, borderRadius: 12, padding: 14 },
   totalsLine: { display: 'flex', justifyContent: 'space-between', padding: '6px 0' },
   totalsStrong: { fontWeight: 800, fontSize: 18 },
-
   taCenter: { textAlign: 'center' },
-  taRight: { textAlign: 'right' }
+  taRight: { textAlign: 'right' },
 };
 
 /* --- autosize для textarea (для поля Name/Description) --- */
@@ -175,7 +76,7 @@ export default function InvoicePage() {
   const [job, setJob] = useState(null);
 
   // Bill To
-  const [billCompany, setBillCompany] = useState('');
+  const [billCompany, setBillCompany] = useState(''); // ← NEW
   const [billName, setBillName] = useState('');
   const [billAddress, setBillAddress] = useState('');
   const [billPhone, setBillPhone] = useState('');
@@ -184,9 +85,8 @@ export default function InvoicePage() {
   // строки
   const [rows, setRows] = useState([
     { type: 'service', name: 'Labor', qty: 1, price: 0 },
-    { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 }
+    { type: 'service', name: 'Service Call Fee', qty: 1, price: 0 },
   ]);
-
   const [discount, setDiscount] = useState(0);
 
   // мета
@@ -195,15 +95,13 @@ export default function InvoicePage() {
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
-  // Переопределение Balance Due
+  // Переопределение Balance Due (пустая строка = auto от total)
   const [dueOverride, setDueOverride] = useState('');
 
   const [saving, setSaving] = useState(false);
 
   /* ----------- init ----------- */
-  useEffect(() => {
-    loadLogoDataURL().then((d) => setLogoDataURL(d || null));
-  }, []);
+  useEffect(() => { loadLogoDataURL().then((d) => setLogoDataURL(d || null)); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -224,19 +122,16 @@ export default function InvoicePage() {
       }
       if (!clientData) {
         clientData = {
-          company: j?.client_company || j?.company || '',
+          company: j?.client_company || j?.company || '', // ← fallback, если поле есть у job
           full_name: (j && (j.client_name || j.full_name)) || '',
           phone: (j && (j.client_phone || j.phone)) || '',
           email: (j && (j.client_email || j.email)) || '',
           address: (j && (j.client_address || j.address)) || '',
-          city: j?.city,
-          state: j?.state,
-          zip: j?.zip
+          city: j?.city, state: j?.state, zip: j?.zip,
         };
       }
       if (!alive) return;
-
-      setBillCompany(clean(clientData.company));
+      setBillCompany(clean(clientData.company));        // ← NEW
       setBillName(clean(clientData.full_name));
       setBillPhone(clean(clientData.phone));
       setBillEmail(clean(clientData.email));
@@ -244,33 +139,21 @@ export default function InvoicePage() {
 
       // Materials
       if (id) {
-        const { data: mlist } = await supabase
-          .from('materials')
-          .select('name, price, qty, quantity')
-          .eq('job_id', id);
-
+        const { data: mlist } = await supabase.from('materials').select('name, price, qty, quantity').eq('job_id', id);
         const mats = (mlist || []).map((m) => ({
-          type: 'material',
-          name: clean(m.name) || 'Item',
-          qty: N(m.qty ?? m.quantity ?? 1),
-          price: N(m.price)
+          type: 'material', name: clean(m.name) || 'Item', qty: N(m.qty ?? m.quantity ?? 1), price: N(m.price),
         }));
-
         setRows([
           { type: 'service', name: 'Labor', qty: 1, price: N(j?.labor_price) },
           { type: 'service', name: 'Service Call Fee', qty: 1, price: N(j?.scf) },
-          ...mats
+          ...mats,
         ]);
       }
 
       // Next invoice no
       try {
         const { data: last } = await supabase
-          .from('invoices')
-          .select('invoice_no')
-          .order('invoice_no', { ascending: false })
-          .limit(1);
-
+          .from('invoices').select('invoice_no').order('invoice_no', { ascending: false }).limit(1);
         if (!alive) return;
         const next = (N(last && last[0] && last[0].invoice_no) || 0) + 1;
         setInvoiceNo(String(next));
@@ -281,27 +164,19 @@ export default function InvoicePage() {
 
       setInvoiceDate(new Date());
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [id]);
 
   /* ----------- computed ----------- */
-  const subtotal = useMemo(
-    () => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0),
-    [rows]
-  );
-
+  const subtotal = useMemo(() => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0), [rows]);
   const laborTotal = useMemo(
     () => rows.filter((r) => r.type === 'service').reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
-
   const partsTotal = useMemo(
     () => rows.filter((r) => r.type === 'material').reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
-
   const total = useMemo(() => Math.max(0, N(subtotal) - N(discount)), [subtotal, discount]);
 
   const balanceDue = useMemo(() => {
@@ -340,13 +215,8 @@ export default function InvoicePage() {
         const n = Number(recentQ.data[0].invoice_no);
         if (!Number.isNaN(n) && n > 0) thisInvoiceNo = n;
       }
-
       if (thisInvoiceNo == null) {
-        const payload = {
-          job_id: id || null,
-          labor_cost: Number(laborTotal) || 0,
-          parts_cost: Number(partsTotal) || 0
-        };
+        const payload = { job_id: id || null, labor_cost: Number(laborTotal) || 0, parts_cost: Number(partsTotal) || 0 };
         const { data: inserted, error } = await supabase
           .from('invoices')
           .insert(payload)
@@ -358,90 +228,55 @@ export default function InvoicePage() {
 
       // PDF
       const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true, putOnlyUsedFonts: true });
+
       const pageW = 612;
       const marginX = 40;
 
       // Title
-      doc.setFontSize(30);
-      doc.setFont(undefined, 'bold');
+      doc.setFontSize(30); doc.setFont(undefined, 'bold');
       doc.text('INVOICE', pageW - marginX, 48, { align: 'right' });
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
-      doc.setTextColor(100);
+      doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(100);
       doc.text(`# ${thisInvoiceNo}`, pageW - marginX, 66, { align: 'right' });
 
       // Logo + company
       let logoBottom = 24;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
-        if (logo) {
-          doc.addImage(logo, 'PNG', marginX, 24, 120, 120);
-          logoBottom = 24 + 90;
-        }
+        if (logo) { doc.addImage(logo, 'PNG', marginX, 24, 120, 120); logoBottom = 24 + 90; }
       } catch {}
 
       // Right column: Date + Balance Due + Bill To
       const rightColW = 200;
       let rightY = 110;
-
-      doc.setFont(undefined, 'bold');
-      doc.setTextColor(80);
-      doc.text('Date:', pageW - marginX - rightColW, rightY);
-      doc.setFont(undefined, 'normal');
-      doc.setTextColor(0);
-      doc.text(human(invoiceDate), pageW - marginX - rightColW + 40, rightY);
-      rightY += 16;
+      doc.setFont(undefined, 'bold'); doc.setTextColor(80);
+      doc.text('Date:', pageW - marginX - rightColW, rightY); doc.setFont(undefined,'normal'); doc.setTextColor(0);
+      doc.text(human(invoiceDate), pageW - marginX - rightColW + 40, rightY); rightY += 16;
 
       // Capsule
       const pillW = 200, pillH = 40;
-      doc.setDrawColor(229, 231, 235);
-      doc.setFillColor(246, 247, 251);
+      doc.setDrawColor(229,231,235); doc.setFillColor(246,247,251);
       doc.roundedRect(pageW - marginX - pillW, rightY, pillW, pillH, 8, 8, 'FD');
-      doc.setFont(undefined, 'bold');
-      doc.setTextColor(70);
+      doc.setFont(undefined,'bold'); doc.setTextColor(70);
       doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
-      doc.setTextColor(0);
-      doc.text(`$${N(balanceDue).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
+      doc.setTextColor(0); doc.text(`$${N(balanceDue).toFixed(2)}`, pageW - marginX - 12, rightY + 26, { align: 'right' });
       rightY += pillH + 18;
 
-      // Company block aligned with Bill To — чуть ниже и больше интерлиньяж
-      const alignY = rightY;
-      let compTop = Math.max(logoBottom + 14, alignY); // +14 (было ~+8)
-      doc.setTextColor(0);
-      doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', marginX, compTop);
-      compTop += 16; // интерлиньяж чуток больше
-
-      doc.setFont(undefined, 'normal');
-      const companyLines = [
-        '1587 E 19th St',
-        'Brooklyn, NY 11230',
-        '(929) 412-9042 Zelle',
-        'simscope.office@gmail.com'
-      ];
-      companyLines.forEach((t) => {
-        doc.text(t, marginX, compTop);
-        compTop += 14; // немного увеличено
-      });
+      // Company block aligned with Bill To
+      const alignY = rightY; let compTop = Math.max(logoBottom + 8, alignY);
+      doc.setTextColor(0); doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', marginX, compTop);
+      compTop += 14; doc.setFont(undefined, 'normal');
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscope.office@gmail.com'].forEach((t) => { doc.text(t, marginX, compTop); compTop += 12; });
 
       // Bill To
-      doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', pageW - marginX - pillW, rightY);
-      rightY += 16;
-
-      doc.setFont(undefined, billCompany ? 'bold' : 'normal');
-      if (billCompany) {
-        doc.text(String(billCompany), pageW - marginX - pillW, rightY);
-        rightY += 14;
-      }
+      doc.setFont(undefined, 'bold'); doc.text('Bill To:', pageW - marginX - pillW, rightY); rightY += 16;
+      doc.setFont(undefined, billCompany ? 'bold' : 'normal'); // компания жирным
+      if (billCompany) { doc.text(String(billCompany), pageW - marginX - pillW, rightY); rightY += 14; }
       doc.setFont(undefined, 'normal');
-      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => {
-        doc.text(String(line), pageW - marginX - pillW, rightY);
-        rightY += 14;
-      });
+      [billName, billAddress, billPhone, billEmail].filter(Boolean).forEach((line) => { doc.text(String(line), pageW - marginX - pillW, rightY); rightY += 14; });
 
       // Table
       const tableStartY = Math.max(compTop, rightY) + 16;
+
       const toPdfRow = (r) => {
         const qtyNum = N(r.qty);
         const priceNum = N(r.price);
@@ -452,44 +287,40 @@ export default function InvoicePage() {
           r.name || (r.type === 'service' ? 'Service' : 'Item'),
           qtyCell,
           priceCell,
-          amountCell
+          amountCell,
         ];
       };
+
       const services = rows.filter(r => r.type === 'service');
       const materials = rows.filter(r => r.type === 'material');
+
       const body = [];
       if (services.length) {
-        body.push([{ content: 'Services', colSpan: 4, styles: { fillColor: [238, 242, 247], fontStyle: 'bold', halign: 'left' } }]);
+        body.push([{ content: 'Services', colSpan: 4, styles: { fillColor: [238,242,247], fontStyle: 'bold', halign: 'left' } }]);
         services.forEach(r => body.push(toPdfRow(r)));
       }
       if (materials.length) {
-        if (services.length) body.push([{ content: ' ', colSpan: 4, styles: { fillColor: [255, 255, 255], lineWidth: 0 } }]);
-        body.push([{ content: 'Materials', colSpan: 4, styles: { fillColor: [238, 242, 247], fontStyle: 'bold', halign: 'left' } }]);
+        if (services.length) body.push([{ content: ' ', colSpan: 4, styles: { fillColor: [255,255,255], lineWidth: 0 } }]);
+        body.push([{ content: 'Materials', colSpan: 4, styles: { fillColor: [238,242,247], fontStyle: 'bold', halign: 'left' } }]);
         materials.forEach(r => body.push(toPdfRow(r)));
       }
 
       autoTable(doc, {
         startY: tableStartY,
-        head: [['Description', 'Qty', 'Unit Price', 'Amount']],
+        head: [['Description','Qty','Unit Price','Amount']],
         body,
-        styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1, textColor: [60, 60, 60] },
-        headStyles: { fillColor: [60, 60, 60], textColor: 255, fontStyle: 'bold' },
-        alternateRowStyles: { fillColor: [249, 250, 251] },
+        styles: { fontSize: 10, cellPadding: 6, lineWidth: 0.1, textColor: [60,60,60] },
+        headStyles: { fillColor: [60,60,60], textColor: 255, fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [249,250,251] },
         margin: { left: marginX, right: marginX },
-        columnStyles: {
-          0: { cellWidth: 360 },
-          1: { cellWidth: 40, halign: 'center' },
-          2: { cellWidth: 80, halign: 'right' },
-          3: { cellWidth: 80, halign: 'right' }
-        }
+        columnStyles: { 0:{cellWidth:360}, 1:{cellWidth:40,halign:'center'}, 2:{cellWidth:80,halign:'right'}, 3:{cellWidth:80,halign:'right'} },
       });
 
       // Totals
       let endY = doc.lastAutoTable.finalY + 10;
       const totalsRightX = pageW - marginX;
-      doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
-      endY += 16;
+      doc.setFont(undefined,'bold');
+      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 16;
 
       if (N(discount) > 0) {
         doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
@@ -497,29 +328,24 @@ export default function InvoicePage() {
       }
 
       doc.setFontSize(12);
-      doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, { align: 'right' });
-      endY += 22;
+      doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, { align: 'right' }); endY += 22;
 
       // Warranty
       if (includeWarranty && Number(warrantyDays) > 0) {
         const maxW = pageW - marginX * 2;
-        doc.setFontSize(10);
-        doc.setFont(undefined, 'bold');
-        doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY);
-        endY += 12;
-        doc.setFont(undefined, 'normal');
-        const txt =
-          `A ${Number(warrantyDays)}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
-          `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors ` +
-          `(impacts, moisture, power surges, etc.), or any third-party tampering. The warranty starts on the job completion date and is valid only ` +
-          `when the invoice is paid in full.`;
+        doc.setFontSize(10); doc.setFont(undefined,'bold');
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY); endY += 12;
+        doc.setFont(undefined,'normal');
+        const txt = `A ${Number(warrantyDays)}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. `
+          + `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors `
+          + `(impacts, moisture, power surges, etc.), or any third-party tampering. The warranty starts on the job completion date and is valid only `
+          + `when the invoice is paid in full.`;
         const lines = doc.splitTextToSize(txt, maxW);
         doc.text(lines, marginX, endY + 2);
       }
 
       // footer
-      doc.setFontSize(10);
-      doc.text('Thank you for your business!', pageW - marginX, 760, { align: 'right' });
+      doc.setFontSize(10); doc.text('Thank you for your business!', pageW - marginX, 760, { align: 'right' });
 
       const filename = `invoice_${thisInvoiceNo}.pdf`;
       doc.save(filename);
@@ -529,9 +355,7 @@ export default function InvoicePage() {
         const pdfBlob = doc.output('blob');
         const storageKey = `${id}/${filename}`;
         const up = await supabase.storage.from('invoices').upload(storageKey, pdfBlob, {
-          cacheControl: '3600',
-          contentType: 'application/pdf',
-          upsert: true
+          cacheControl: '3600', contentType: 'application/pdf', upsert: true,
         });
         if (up.error) console.warn('Upload invoice PDF failed:', up.error);
 
@@ -556,19 +380,15 @@ export default function InvoicePage() {
   /* ---------------- таблица UI ---------------- */
   const tableRow = (r, i) => (
     <tr key={i}>
-      {/* Type */}
+      {/* Узкая колонка Type */}
       <td style={{ ...S.td, width: 110 }}>
-        <select
-          style={{ ...S.select, height: 34 }}
-          value={r.type}
-          onChange={(e) => changeRow(i, 'type', e.target.value)}
-        >
+        <select style={{ ...S.select, height: 34 }} value={r.type} onChange={(e) => changeRow(i, 'type', e.target.value)}>
           <option value="service">service</option>
           <option value="material">material</option>
         </select>
       </td>
 
-      {/* Name/Description */}
+      {/* ШИРОКАЯ колонка Name/Description */}
       <td style={{ ...S.td, width: '52%' }}>
         <textarea
           style={{
@@ -577,7 +397,7 @@ export default function InvoicePage() {
             height: 'auto',
             resize: 'vertical',
             lineHeight: 1.4,
-            whiteSpace: 'pre-wrap'
+            whiteSpace: 'pre-wrap',
           }}
           value={r.name}
           onChange={(e) => {
@@ -590,7 +410,7 @@ export default function InvoicePage() {
         />
       </td>
 
-      {/* Qty */}
+      {/* Qty/Price/Amount/× */}
       <td style={{ ...S.td, width: 70, ...S.taCenter }}>
         <input
           type="number"
@@ -600,7 +420,6 @@ export default function InvoicePage() {
         />
       </td>
 
-      {/* Price */}
       <td style={{ ...S.td, width: 90, ...S.taRight }}>
         <input
           type="number"
@@ -610,17 +429,14 @@ export default function InvoicePage() {
         />
       </td>
 
-      {/* Amount */}
       <td style={{ ...S.td, width: 100, ...S.taRight }}>
         ${((N(r.qty) || 0) * (N(r.price) || 0)).toFixed(2)}
       </td>
 
-      {/* × */}
       <td style={{ ...S.td, width: 50, ...S.taCenter }}>
         <button
           style={{ ...S.ghost, color: '#ef4444', borderColor: '#ef4444', background: '#fff', padding: '4px 8px' }}
-          onClick={() => delRow(i)}
-          title="Remove"
+          onClick={() => delRow(i)} title="Remove"
         >
           ✕
         </button>
@@ -638,104 +454,93 @@ export default function InvoicePage() {
       </div>
 
       <div style={S.card}>
-        {/* === Шапка: 2 равные колонки === */}
-        <div style={S.headerGrid}>
-          {/* LEFT: Logo + Моя компания */}
-          <div style={S.colWrap}>
-            <div style={S.brandBox}>
-              {logoDataURL ? (
-                <img
-                  src={logoDataURL}
-                  alt="logo"
-                  style={{ width: 80, height: 80, objectFit: 'contain' }}
-                />
-              ) : (
-                <div style={{ width: 80, height: 80, borderRadius: 12, background: '#f3f4f6' }} />
-              )}
-              <div>
-                <div style={{ ...S.brandName }}>Sim Scope Inc.</div>
-                <div style={S.brandInfo}>
-                  1587 E 19th St <br />
-                  Brooklyn, NY 11230<br />
-                  (929) 412-9042 Zelle<br />
-                  simscope.office@gmail.com
-                </div>
-              </div>
+        <div style={S.header}>
+          <div>
+            {logoDataURL ? (
+              <img src={logoDataURL} alt="logo" style={{ width: 80, height: 80, objectFit: 'contain' }} />
+            ) : (
+              <div style={{ width: 80, height: 80, borderRadius: 12, background: '#f3f4f6' }} />
+            )}
+            <div style={{ marginTop: 8, fontWeight: 700 }}>Sim Scope Inc.</div>
+            <div style={{ color: '#6b7280', lineHeight: 1.4 }}>
+              1587 E 19th St <br />
+              Brooklyn, NY 11230<br />
+              (929) 412-9042 Zelle<br />
+              simscope.office@gmail.com
             </div>
           </div>
 
-          {/* RIGHT: Invoice / № / Date / Balance Due / Bill To */}
-          <div style={S.colWrap}>
-            <div style={S.rightBox}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'start', gap: 12 }}>
-                <div className="right-top">
-                  <div style={S.invoiceTitle}>INVOICE</div>
-                </div>
-                <div>
-                  <div style={S.invoiceNo}># {invoiceNo || '—'}</div>
-                </div>
-              </div>
+          <div />
 
-              <div style={{ color: '#6b7280', fontWeight: 600 }}>
-                Date:&nbsp;
-                <input
-                  type="date"
-                  style={{ ...S.input, width: 180, display: 'inline-block' }}
-                  value={toInputDate(invoiceDate)}
-                  onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
-                />
-              </div>
+          <div style={{ textAlign: 'right', justifySelf: 'end', width: 300 }}>
+            <div style={S.invoiceTitle}>INVOICE</div>
+            <div style={S.invoiceNo}># {invoiceNo || '—'}</div>
 
-              {/* ====== РЕДАКТИРУЕМЫЙ Balance Due ====== */}
-              <div style={S.pill}>
-                <div style={S.pillRow}>
-                  <div style={S.pillCellLeft}>Balance Due:</div>
-                  <div style={S.pillCellRight}>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ opacity: 0.7 }}>$</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        style={{ ...S.input, width: 120, height: 32, textAlign: 'right', padding: '4px 8px', background: '#fff', borderColor: '#dfe3ea' }}
-                        value={dueOverride === '' ? N(total).toFixed(2) : dueOverride}
-                        onChange={(e) => setDueOverride(e.target.value)}
-                        onFocus={() => {
-                          if (dueOverride === '') setDueOverride(N(total).toFixed(2));
-                        }}
-                        title="Можно отредактировать вручную; ↺ — сброс к авто"
-                      />
-                      {dueOverride !== '' && (
-                        <button
-                          type="button"
-                          onClick={() => setDueOverride('')}
-                          style={{ ...S.ghost, height: 32, lineHeight: '20px', padding: '4px 8px' }}
-                          title="Сбросить к авто (из Total)"
-                        >
-                          ↺
-                        </button>
-                      )}
-                    </div>
+            <div style={{ marginTop: 10, color: '#6b7280', fontWeight: 600 }}>
+              Date:&nbsp;
+              <input
+                type="date"
+                style={{ ...S.input, width: 180, display: 'inline-block' }}
+                value={toInputDate(invoiceDate)}
+                onChange={(e) => setInvoiceDate(fromInputDate(e.target.value))}
+              />
+            </div>
+
+            {/* ====== РЕДАКТИРУЕМЫЙ Balance Due ====== */}
+            <div style={{ ...S.pill, marginTop: 8 }}>
+              <div style={S.pillRow}>
+                <div style={S.pillCellLeft}>Balance Due:</div>
+                <div style={S.pillCellRight}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ opacity: 0.7 }}>$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      style={{
+                        ...S.input,
+                        width: 120,
+                        height: 32,
+                        textAlign: 'right',
+                        padding: '4px 8px',
+                        background: '#fff',
+                        borderColor: '#dfe3ea'
+                      }}
+                      value={dueOverride === '' ? N(total).toFixed(2) : dueOverride}
+                      onChange={(e) => setDueOverride(e.target.value)}
+                      onFocus={() => {
+                        if (dueOverride === '') setDueOverride(N(total).toFixed(2));
+                      }}
+                      title="Можно отредактировать вручную; ↺ — сброс к авто"
+                    />
+                    {dueOverride !== '' && (
+                      <button
+                        type="button"
+                        onClick={() => setDueOverride('')}
+                        style={{ ...S.ghost, height: 32, lineHeight: '20px', padding: '4px 8px' }}
+                        title="Сбросить к авто (из Total)"
+                      >
+                        ↺
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
+            </div>
 
-              {/* Bill To */}
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>Bill To</div>
-                <div style={{ color: '#111' }}>
-                  {billCompany && <div style={{ fontWeight: 700 }}>{billCompany}</div>}
-                  <div>{billName}</div>
-                  <div>{billAddress}</div>
-                  <div>{billPhone}</div>
-                  <div>{billEmail}</div>
-                </div>
+            <div style={{ marginTop: 12, textAlign: 'left' }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Bill To</div>
+              <div style={{ color: '#111' }}>
+                {billCompany && <div style={{ fontWeight: 700 }}>{billCompany}</div>} {/* ← NEW in UI */}
+                <div>{billName}</div>
+                <div>{billAddress}</div>
+                <div>{billPhone}</div>
+                <div>{billEmail}</div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* линия-разделитель */}
         <div style={S.sep} />
 
         {/* Таблица */}
@@ -754,7 +559,6 @@ export default function InvoicePage() {
             <tbody>{rows.map(tableRow)}</tbody>
           </table>
         </div>
-
         <div style={{ marginTop: 10 }}>
           <button style={S.ghost} onClick={addRow}>+ Add row</button>
         </div>
@@ -786,11 +590,7 @@ export default function InvoicePage() {
         {/* Warranty toggle */}
         <div style={{ marginTop: 16, color: '#6b7280' }}>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={includeWarranty}
-              onChange={(e) => setIncludeWarranty(e.target.checked)}
-            />
+            <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
             Include warranty
           </label>
           <span style={{ marginLeft: 10 }}>Days:&nbsp;</span>
