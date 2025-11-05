@@ -91,6 +91,7 @@ export default function InvoicePage() {
 
   // мета
   const [invoiceNo, setInvoiceNo] = useState('');
+  the
   const [invoiceDate, setInvoiceDate] = useState(new Date());
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
@@ -122,7 +123,7 @@ export default function InvoicePage() {
       }
       if (!clientData) {
         clientData = {
-          company: j?.client_company || j?.company || '', // ← fallback, если поле есть у job
+          company: j?.client_company || j?.company || '',
           full_name: (j && (j.client_name || j.full_name)) || '',
           phone: (j && (j.client_phone || j.phone)) || '',
           email: (j && (j.client_email || j.email)) || '',
@@ -131,7 +132,7 @@ export default function InvoicePage() {
         };
       }
       if (!alive) return;
-      setBillCompany(clean(clientData.company));        // ← NEW
+      setBillCompany(clean(clientData.company));
       setBillName(clean(clientData.full_name));
       setBillPhone(clean(clientData.phone));
       setBillEmail(clean(clientData.email));
@@ -262,10 +263,25 @@ export default function InvoicePage() {
       rightY += pillH + 18;
 
       // Company block aligned with Bill To
-      const alignY = rightY; let compTop = Math.max(logoBottom + 8, alignY);
-      doc.setTextColor(0); doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', marginX, compTop);
-      compTop += 14; doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscope.office@gmail.com'].forEach((t) => { doc.text(t, marginX, compTop); compTop += 12; });
+      const alignY = rightY;
+      let compTop = Math.max(logoBottom + 8, alignY);
+
+      // [COMPANY spacing tweak] — опускаем чуть ниже
+      compTop += 6; // было сразу compTop, теперь +6 pt вниз
+
+      doc.setTextColor(0); doc.setFont(undefined, 'bold');
+      doc.text('Sim Scope Inc.', marginX, compTop);
+
+      // [COMPANY spacing tweak] — увеличенный интервал между строками адреса ТОЛЬКО здесь
+      const COMPANY_TITLE_GAP = 18;  // было +14
+      const COMPANY_LINE_GAP  = 16;  // было +12
+
+      compTop += COMPANY_TITLE_GAP;
+      doc.setFont(undefined, 'normal');
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscope.office@gmail.com'].forEach((t) => {
+        doc.text(t, marginX, compTop);
+        compTop += COMPANY_LINE_GAP;
+      });
 
       // Bill To
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', pageW - marginX - pillW, rightY); rightY += 16;
@@ -461,8 +477,10 @@ export default function InvoicePage() {
             ) : (
               <div style={{ width: 80, height: 80, borderRadius: 12, background: '#f3f4f6' }} />
             )}
-            <div style={{ marginTop: 8, fontWeight: 700 }}>Sim Scope Inc.</div>
-            <div style={{ color: '#6b7280', lineHeight: 1.4 }}>
+
+            {/* [COMPANY spacing tweak] — в UI опускаем и увеличиваем межстрочный интервал только для компании */}
+            <div style={{ marginTop: 12, fontWeight: 700 }}>Sim Scope Inc.</div> {/* было 8 */}
+            <div style={{ color: '#6b7280', lineHeight: 1.8 }}> {/* было 1.4 */}
               1587 E 19th St <br />
               Brooklyn, NY 11230<br />
               (929) 412-9042 Zelle<br />
@@ -531,7 +549,7 @@ export default function InvoicePage() {
             <div style={{ marginTop: 12, textAlign: 'left' }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Bill To</div>
               <div style={{ color: '#111' }}>
-                {billCompany && <div style={{ fontWeight: 700 }}>{billCompany}</div>} {/* ← NEW in UI */}
+                {billCompany && <div style={{ fontWeight: 700 }}>{billCompany}</div>}
                 <div>{billName}</div>
                 <div>{billAddress}</div>
                 <div>{billPhone}</div>
@@ -606,4 +624,3 @@ export default function InvoicePage() {
     </div>
   );
 }
-
