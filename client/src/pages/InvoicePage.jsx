@@ -242,7 +242,11 @@ export default function InvoicePage() {
       let logoBottom = 24;
       try {
         const logo = logoDataURL || (await loadLogoDataURL());
-        if (logo) { doc.addImage(logo, 'PNG', marginX, 24, 120, 120); logoBottom = 24 + 90; }
+        if (logo) {
+          // ★ LOGO SIZE: увеличен логотип в PDF
+          doc.addImage(logo, 'PNG', marginX, 24, 150, 150);
+          logoBottom = 24 + 150;
+        }
       } catch {}
 
       // Right column: Date + Balance Due + Bill To
@@ -457,9 +461,10 @@ export default function InvoicePage() {
         <div style={S.header}>
           <div>
             {logoDataURL ? (
-              <img src={logoDataURL} alt="logo" style={{ width: 80, height: 80, objectFit: 'contain' }} />
+              // ★ LOGO SIZE: увеличен логотип в UI
+              <img src={logoDataURL} alt="logo" style={{ width: 120, height: 120, objectFit: 'contain' }} />
             ) : (
-              <div style={{ width: 80, height: 80, borderRadius: 12, background: '#f3f4f6' }} />
+              <div style={{ width: 120, height: 120, borderRadius: 12, background: '#f3f4f6' }} />
             )}
             <div style={{ marginTop: 8, fontWeight: 700 }}>Sim Scope Inc.</div>
             <div style={{ color: '#6b7280', lineHeight: 1.4 }}>
@@ -567,42 +572,4 @@ export default function InvoicePage() {
         <div style={S.totalsRow}>
           <div />
           <div style={S.totalsCard}>
-            <div style={S.totalsLine}><div>Subtotal:</div><div>${N(subtotal).toFixed(2)}</div></div>
-            <div style={S.totalsLine}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                Discount $:
-                <input
-                  type="number"
-                  style={{ ...S.input, width: 120, textAlign: 'right' }}
-                  value={discount}
-                  onChange={(e) => setDiscount(Number(e.target.value || 0))}
-                />
-              </div>
-              <div>- ${N(discount).toFixed(2)}</div>
-            </div>
-            <div style={{ ...S.totalsLine, marginTop: 4 }}>
-              <div style={S.totalsStrong}>Total:</div>
-              <div style={S.totalsStrong}>${N(total).toFixed(2)}</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Warranty toggle */}
-        <div style={{ marginTop: 16, color: '#6b7280' }}>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            <input type="checkbox" checked={includeWarranty} onChange={(e) => setIncludeWarranty(e.target.checked)} />
-            Include warranty
-          </label>
-          <span style={{ marginLeft: 10 }}>Days:&nbsp;</span>
-          <input
-            type="number"
-            min={0}
-            style={{ ...S.input, width: 90, display: 'inline-block' }}
-            value={warrantyDays}
-            onChange={(e) => setWarrantyDays(Number(e.target.value || 0))}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
+            <div style={S.tot
