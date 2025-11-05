@@ -91,7 +91,6 @@ export default function InvoicePage() {
 
   // мета
   const [invoiceNo, setInvoiceNo] = useState('');
-  the
   const [invoiceDate, setInvoiceDate] = useState(new Date());
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
@@ -624,3 +623,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
