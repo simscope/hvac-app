@@ -18,15 +18,24 @@ const normalizeId = (v) => {
 };
 
 /* ===== Month-only helpers (пишем СТРОГО то, что выбрал пользователь; БЕЗ Z и оффсета) ===== */
+const pad2 = (n) => String(n).padStart(2, '0');
+
 const buildLocalText = (baseDate, hh = 9, mm = 0) => {
   if (!baseDate) return null;
   const y  = baseDate.getFullYear();
-  const mo = String(baseDate.getMonth() + 1).padStart(2, '0');
-  const d  = String(baseDate.getDate()).padStart(2, '0');
-  const H  = String(hh).padStart(2, '0');
-  const M  = String(mm).padStart(2, '0');
+  const mo = pad2(baseDate.getMonth() + 1);
+  const d  = pad2(baseDate.getDate());
+  const H  = pad2(hh);
+  const M  = pad2(mm);
   // НИКАКИХ 'Z' и НИКАКИХ смещений — пишем «как есть»
   return `${y}-${mo}-${d} ${H}:${M}:00`;
+};
+
+// форматируем Date -> локальная строка "YYYY-MM-DD HH:MM:00"
+const localTextFromDate = (d) => {
+  if (!d) return null;
+  const dt = new Date(d);
+  return buildLocalText(dt, dt.getHours(), dt.getMinutes());
 };
 
 /* ==== вспомогалки для кнопки "Маршрут" ==== */
@@ -63,16 +72,15 @@ const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
 
 const toast = (msg) => window.alert(msg);
 
-// <<< NEW >>> округление к шагу в минутах
+// округление к шагу в минутах (минимум 30)
 const roundToStep = (mins, step = 30) => Math.max(step, Math.round(mins / step) * step);
 
-// <<< NEW >>> вычисляем end для события из start + duration
-const computeEventEnd = (startLike, durationMin = 60) => {
+// вычисляем end (Date) из start + minutes
+const computeEventEnd = (startLike, minutes = 60) => {
   if (!startLike) return null;
   const start = new Date(startLike);
   if (isNaN(start.getTime())) return null;
-  const end = new Date(start.getTime() + Number(durationMin || 60) * 60000);
-  return end; // FullCalendar нормально ест Date
+  return new Date(start.getTime() + Number(minutes || 60) * 60000);
 };
 
 export default function CalendarPage() {
@@ -83,6 +91,9 @@ export default function CalendarPage() {
   const [activeTech, setActiveTech] = useState('all'); // 'all' | technician_id
   const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
+
+  // визуальная длительность по id заявки (минуты), живёт только в сессии
+  const [durMap, setDurMap] = useState({}); // { [jobId]: minutes }
 
   // модалка выбора времени (Month)
   const [timeModal, setTimeModal] = useState({
@@ -111,6 +122,15 @@ export default function CalendarPage() {
       setJobs(j || []);
       setTechs(t || []);
       setClients(c || []);
+      // инициализируем длительности: всем по 60 мин, если ещё нет
+      setDurMap((prev) => {
+        const m = { ...prev };
+        (j || []).forEach((row) => {
+          const id = String(row.id);
+          if (m[id] == null) m[id] = 60;
+        });
+        return m;
+      });
     })();
   }, []);
 
@@ -223,15 +243,14 @@ export default function CalendarPage() {
       const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
-      // <<< NEW >>> берём длительность (мин) или 60 по умолчанию
-      const durMin = Number(j.appointment_duration_min) > 0 ? Number(j.appointment_duration_min) : 60;
-      const end = computeEventEnd(j.appointment_time, durMin);
+      const minutes = durMap[String(j.id)] ?? 60; // визуально: 60 по умолчанию
+      const end = computeEventEnd(j.appointment_time, minutes);
 
       return {
         id: String(j.id),
         title,
         start: j.appointment_time, // FullCalendar съест и ISO, и локальную строку
-        end,                       // <<< NEW >>> конец события для отрисовки длины
+        end,                       // только для визуала, не пишем в БД
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -243,11 +262,10 @@ export default function CalendarPage() {
           isRecall: statusKey(j.status) === 'recall',
           job: j,
           techName: tName,
-          durMin, // <<< NEW >>> удобно иметь под рукой
         },
       };
     });
-  }, [filteredJobs, activeTech, techById, techColor]);
+  }, [filteredJobs, activeTech, techById, techColor, durMap]);
 
   const unassigned = useMemo(
     () => (jobs || []).filter((j) => !j.appointment_time || !j.technician_id),
@@ -256,96 +274,81 @@ export default function CalendarPage() {
 
   /* ---------- DnD/click handlers ---------- */
 
-  // Перенос существующего события (start)
+  // Перенос существующего события: сохраняем только START
   const handleEventDrop = async (info) => {
     const api = calRef.current?.getApi?.();
     const viewType = api?.view?.type;
 
-    // Только в Month просим время и пишем текст «как ввёл пользователь»
     if (viewType === 'dayGridMonth') {
       const event = info.event;
-      const newDate = event.start ? new Date(event.start) : null; // локальный день
       const revert = info.revert;
 
-      setTimeModal({
-        open: true,
-        baseDate: newDate,
-        defaultTime: '09:00',
-        onCancel: () => { try { revert(); } catch {} },
-        onConfirm: async (hhmm) => {
-          try {
-            if (!newDate) throw new Error('No target date');
-            const [hh, mm] = hhmm.split(':').map((x) => parseInt(x || '0', 10));
+      const txtStart = localTextFromDate(event.start);
 
-            const txt = buildLocalText(newDate, hh, mm); // 'YYYY-MM-DD HH:MM:00' БЕЗ TZ
+      try {
+        const { error } = await supabase
+          .from('jobs')
+          .update({ appointment_time: txtStart })
+          .eq('id', event.id);
+        if (error) throw error;
 
-            // визуально обновим (не переводим в UTC!)
-            try { event.setStart(txt); } catch {}
-
-            const { error } = await supabase
-              .from('jobs')
-              .update({ appointment_time: txt })
-              .eq('id', event.id);
-            if (error) throw error;
-
-            setJobs((prev) =>
-              prev.map((j) =>
-                String(j.id) === String(event.id) ? { ...j, appointment_time: txt } : j
-              )
-            );
-            toast('Saved');
-          } catch (e) {
-            console.error('eventDrop month save error:', e);
-            toast('Failed to save selected time');
-            try { revert(); } catch {}
-          }
-        },
-      });
+        setJobs((prev) =>
+          prev.map((j) => (String(j.id) === String(event.id) ? { ...j, appointment_time: txtStart } : j))
+        );
+        toast('Saved');
+      } catch (e) {
+        console.error('eventDrop month save error:', e);
+        toast('Failed to save date/time');
+        try { revert(); } catch {}
+      }
       return;
     }
 
-    // Week/Day — без изменений (ISO/UTC)
+    // Week/Day — ISO
     const id = info.event.id;
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
-    const { error } = await supabase.from('jobs').update({ appointment_time: newStart }).eq('id', id);
+
+    const { error } = await supabase
+      .from('jobs')
+      .update({ appointment_time: newStart })
+      .eq('id', id);
+
     if (error) {
       console.error('eventDrop save error:', error);
       info.revert();
       toast('Failed to save date/time');
       return;
     }
-    setJobs((prev) => prev.map((j) => (String(j.id) === id ? { ...j, appointment_time: newStart } : j)));
+    setJobs((prev) =>
+      prev.map((j) => (String(j.id) === id ? { ...j, appointment_time: newStart } : j))
+    );
     toast('Saved');
   };
 
-  // <<< NEW >>> Растягивание/сжатие события (меняем длительность)
+  // Растягивание/сжатие: меняем только визуальную длительность (durMap), без БД
   const handleEventResize = async (info) => {
     try {
-      const id = info.event.id;
       const start = info.event.start;
       const end = info.event.end;
-
       if (!start || !end) throw new Error('No start/end on resize');
+
       const diffMin = Math.round((end.getTime() - start.getTime()) / 60000);
-      const durMin = roundToStep(diffMin, 30); // шаг 30 минут, минимум 30
+      const durMin  = roundToStep(diffMin, 30); // шаг 30 мин
 
-      const { error } = await supabase
-        .from('jobs')
-        .update({ appointment_duration_min: durMin })
-        .eq('id', id);
+      // фиксируем визуально
+      const endRounded = new Date(start.getTime() + durMin * 60000);
+      try { info.event.setEnd(endRounded); } catch {}
 
-      if (error) throw error;
-
-      setJobs((prev) => prev.map((j) => (String(j.id) === id ? { ...j, appointment_duration_min: durMin } : j)));
-      toast(`Saved: ${durMin} min`);
+      setDurMap((prev) => ({ ...prev, [String(info.event.id)]: durMin }));
+      // БД не трогаем
     } catch (e) {
-      console.error('eventResize save error:', e);
+      console.error('eventResize error:', e);
       info.revert();
-      toast('Failed to save duration');
+      toast('Resize failed');
     }
   };
 
-  // Дроп из Unassigned
+  // Дроп из Unassigned: сохраняем только START и technician_id; визуальная длительность = 60
   const handleEventReceive = async (info) => {
     const id = info.event.id;
     if (activeTech === 'all') {
@@ -370,26 +373,20 @@ export default function CalendarPage() {
           try {
             if (!baseDate) throw new Error('No base date');
             const [hh, mm] = hhmm.split(':').map((v) => parseInt(v || '0', 10));
+            const txtStart = buildLocalText(baseDate, hh, mm); // 'YYYY-MM-DD HH:MM:00'
 
-            const txt = buildLocalText(baseDate, hh, mm); // 'YYYY-MM-DD HH:MM:00'
+            try { event.setStart(txtStart); } catch {}
 
-            try { event.setStart(txt); } catch {}
-
-            const payload = {
-              appointment_time: txt,
-              technician_id: normalizeId(activeTech),
-              appointment_duration_min: 60, // <<< NEW >>> дефолт 60 мин
-            };
+            const payload = { appointment_time: txtStart, technician_id: normalizeId(activeTech) };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
             if (error) throw error;
 
             setJobs((prev) =>
               prev.map((j) =>
-                String(j.id) === id
-                  ? { ...j, appointment_time: txt, technician_id: normalizeId(activeTech), appointment_duration_min: 60 }
-                  : j
+                String(j.id) === id ? { ...j, appointment_time: txtStart, technician_id: normalizeId(activeTech) } : j
               )
             );
+            setDurMap((prev) => ({ ...prev, [String(id)]: 60 })); // визуально 60 мин
             toast('Saved');
           } catch (e) {
             console.error('eventReceive month save error:', e);
@@ -401,13 +398,9 @@ export default function CalendarPage() {
       return;
     }
 
-    // Week/Day — как было
+    // Week/Day — ISO
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
-    const payload = {
-      appointment_time: newStart,
-      technician_id: normalizeId(activeTech),
-      appointment_duration_min: 60, // <<< NEW >>> дефолт 60 мин
-    };
+    const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
       console.error('eventReceive save error:', error);
@@ -417,18 +410,17 @@ export default function CalendarPage() {
     }
     setJobs((prev) =>
       prev.map((j) =>
-        String(j.id) === id
-          ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech), appointment_duration_min: 60 }
-          : j
+        String(j.id) === id ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech) } : j
       )
     );
+    setDurMap((prev) => ({ ...prev, [String(id)]: 60 }));
     toast('Saved');
   };
 
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
   const renderEventContent = (arg) => {
-    const { address, company, durMin } = arg.event.extendedProps;
+    const { address, company } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
@@ -438,15 +430,6 @@ export default function CalendarPage() {
     line1.style.fontWeight = '700';
     line1.textContent = arg.event.title;
     wrap.appendChild(line1);
-
-    // <<< NEW >>> маленький бейдж длительности
-    if (durMin) {
-      const badge = document.createElement('div');
-      badge.style.fontSize = '11px';
-      badge.style.opacity = '0.9';
-      badge.textContent = `${durMin} min`;
-      wrap.appendChild(badge);
-    }
 
     if (company) {
       const lineC = document.createElement('div');
@@ -650,9 +633,9 @@ export default function CalendarPage() {
           allDaySlot={false}
           nowIndicator={true}
           expandRows={true}
-          slotDuration="00:30:00"           /* <<< NEW >>> шаг сетки 30 мин */
-          snapDuration="00:30:00"           /* <<< NEW >>> снап на 30 мин */
-          slotLabelInterval="00:30"         /* <<< NEW >>> подписи каждые 30 мин */
+          slotDuration="01:00:00"           /* часовая сетка */
+          snapDuration="00:30:00"           /* тянуть кратно 30 минутам */
+          slotLabelInterval="01:00"         /* подписи раз в час */
           slotLabelFormat={{ hour: '2-digit', minute: '2-digit' }}
           dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
           stickyHeaderDates={true}
@@ -669,7 +652,7 @@ export default function CalendarPage() {
           /* ===== DnD/edit ===== */
           editable
           eventStartEditable
-          eventDurationEditable={true}      /* <<< NEW >>> разрешаем тянуть длину */
+          eventDurationEditable={true}
           droppable
 
           /* ===== data ===== */
@@ -678,7 +661,7 @@ export default function CalendarPage() {
           /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
-          eventResize={handleEventResize}   /* <<< NEW >>> сохраняем длительность */
+          eventResize={handleEventResize}
           eventClick={handleEventClick}
           eventContent={renderEventContent}
           eventDidMount={eventDidMount}
