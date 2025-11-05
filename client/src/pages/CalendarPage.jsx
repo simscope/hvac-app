@@ -63,6 +63,18 @@ const ensureBusinessTimeISO = (date, fallbackHour = 9) => {
 
 const toast = (msg) => window.alert(msg);
 
+// <<< NEW >>> округление к шагу в минутах
+const roundToStep = (mins, step = 30) => Math.max(step, Math.round(mins / step) * step);
+
+// <<< NEW >>> вычисляем end для события из start + duration
+const computeEventEnd = (startLike, durationMin = 60) => {
+  if (!startLike) return null;
+  const start = new Date(startLike);
+  if (isNaN(start.getTime())) return null;
+  const end = new Date(start.getTime() + Number(durationMin || 60) * 60000);
+  return end; // FullCalendar нормально ест Date
+};
+
 export default function CalendarPage() {
   const [jobs, setJobs] = useState([]);
   const [techs, setTechs] = useState([]);
@@ -211,10 +223,15 @@ export default function CalendarPage() {
       const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
+      // <<< NEW >>> берём длительность (мин) или 60 по умолчанию
+      const durMin = Number(j.appointment_duration_min) > 0 ? Number(j.appointment_duration_min) : 60;
+      const end = computeEventEnd(j.appointment_time, durMin);
+
       return {
         id: String(j.id),
         title,
         start: j.appointment_time, // FullCalendar съест и ISO, и локальную строку
+        end,                       // <<< NEW >>> конец события для отрисовки длины
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -226,6 +243,7 @@ export default function CalendarPage() {
           isRecall: statusKey(j.status) === 'recall',
           job: j,
           techName: tName,
+          durMin, // <<< NEW >>> удобно иметь под рукой
         },
       };
     });
@@ -238,7 +256,7 @@ export default function CalendarPage() {
 
   /* ---------- DnD/click handlers ---------- */
 
-  // Перенос существующего события
+  // Перенос существующего события (start)
   const handleEventDrop = async (info) => {
     const api = calRef.current?.getApi?.();
     const viewType = api?.view?.type;
@@ -300,6 +318,33 @@ export default function CalendarPage() {
     toast('Saved');
   };
 
+  // <<< NEW >>> Растягивание/сжатие события (меняем длительность)
+  const handleEventResize = async (info) => {
+    try {
+      const id = info.event.id;
+      const start = info.event.start;
+      const end = info.event.end;
+
+      if (!start || !end) throw new Error('No start/end on resize');
+      const diffMin = Math.round((end.getTime() - start.getTime()) / 60000);
+      const durMin = roundToStep(diffMin, 30); // шаг 30 минут, минимум 30
+
+      const { error } = await supabase
+        .from('jobs')
+        .update({ appointment_duration_min: durMin })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setJobs((prev) => prev.map((j) => (String(j.id) === id ? { ...j, appointment_duration_min: durMin } : j)));
+      toast(`Saved: ${durMin} min`);
+    } catch (e) {
+      console.error('eventResize save error:', e);
+      info.revert();
+      toast('Failed to save duration');
+    }
+  };
+
   // Дроп из Unassigned
   const handleEventReceive = async (info) => {
     const id = info.event.id;
@@ -330,13 +375,19 @@ export default function CalendarPage() {
 
             try { event.setStart(txt); } catch {}
 
-            const payload = { appointment_time: txt, technician_id: normalizeId(activeTech) };
+            const payload = {
+              appointment_time: txt,
+              technician_id: normalizeId(activeTech),
+              appointment_duration_min: 60, // <<< NEW >>> дефолт 60 мин
+            };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
             if (error) throw error;
 
             setJobs((prev) =>
               prev.map((j) =>
-                String(j.id) === id ? { ...j, appointment_time: txt, technician_id: normalizeId(activeTech) } : j
+                String(j.id) === id
+                  ? { ...j, appointment_time: txt, technician_id: normalizeId(activeTech), appointment_duration_min: 60 }
+                  : j
               )
             );
             toast('Saved');
@@ -352,7 +403,11 @@ export default function CalendarPage() {
 
     // Week/Day — как было
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
-    const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
+    const payload = {
+      appointment_time: newStart,
+      technician_id: normalizeId(activeTech),
+      appointment_duration_min: 60, // <<< NEW >>> дефолт 60 мин
+    };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
       console.error('eventReceive save error:', error);
@@ -362,7 +417,9 @@ export default function CalendarPage() {
     }
     setJobs((prev) =>
       prev.map((j) =>
-        String(j.id) === id ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech) } : j
+        String(j.id) === id
+          ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech), appointment_duration_min: 60 }
+          : j
       )
     );
     toast('Saved');
@@ -371,7 +428,7 @@ export default function CalendarPage() {
   const handleEventClick = (info) => navigate(`/job/${info.event.id}`);
 
   const renderEventContent = (arg) => {
-    const { address, company } = arg.event.extendedProps;
+    const { address, company, durMin } = arg.event.extendedProps;
     const wrap = document.createElement('div');
     wrap.style.display = 'grid';
     wrap.style.gap = '2px';
@@ -381,6 +438,15 @@ export default function CalendarPage() {
     line1.style.fontWeight = '700';
     line1.textContent = arg.event.title;
     wrap.appendChild(line1);
+
+    // <<< NEW >>> маленький бейдж длительности
+    if (durMin) {
+      const badge = document.createElement('div');
+      badge.style.fontSize = '11px';
+      badge.style.opacity = '0.9';
+      badge.textContent = `${durMin} min`;
+      wrap.appendChild(badge);
+    }
 
     if (company) {
       const lineC = document.createElement('div');
@@ -584,8 +650,9 @@ export default function CalendarPage() {
           allDaySlot={false}
           nowIndicator={true}
           expandRows={true}
-          slotDuration="01:00:00"
-          slotLabelInterval="01:00"
+          slotDuration="00:30:00"           /* <<< NEW >>> шаг сетки 30 мин */
+          snapDuration="00:30:00"           /* <<< NEW >>> снап на 30 мин */
+          slotLabelInterval="00:30"         /* <<< NEW >>> подписи каждые 30 мин */
           slotLabelFormat={{ hour: '2-digit', minute: '2-digit' }}
           dayHeaderFormat={{ weekday: 'short', month: 'numeric', day: 'numeric' }}
           stickyHeaderDates={true}
@@ -602,7 +669,7 @@ export default function CalendarPage() {
           /* ===== DnD/edit ===== */
           editable
           eventStartEditable
-          eventDurationEditable={false}
+          eventDurationEditable={true}      /* <<< NEW >>> разрешаем тянуть длину */
           droppable
 
           /* ===== data ===== */
@@ -611,6 +678,7 @@ export default function CalendarPage() {
           /* ===== callbacks ===== */
           eventDrop={handleEventDrop}
           eventReceive={handleEventReceive}
+          eventResize={handleEventResize}   /* <<< NEW >>> сохраняем длительность */
           eventClick={handleEventClick}
           eventContent={renderEventContent}
           eventDidMount={eventDidMount}
