@@ -92,9 +92,6 @@ export default function CalendarPage() {
   const [view, setView] = useState('timeGridWeek');    // dayGridMonth | timeGridWeek | timeGridDay
   const [query, setQuery] = useState('');
 
-  // визуальная длительность по id заявки (минуты), живёт только в сессии
-  const [durMap, setDurMap] = useState({}); // { [jobId]: minutes }
-
   // модалка выбора времени (Month)
   const [timeModal, setTimeModal] = useState({
     open: false,
@@ -122,15 +119,6 @@ export default function CalendarPage() {
       setJobs(j || []);
       setTechs(t || []);
       setClients(c || []);
-      // инициализируем длительности: всем по 60 мин, если ещё нет
-      setDurMap((prev) => {
-        const m = { ...prev };
-        (j || []).forEach((row) => {
-          const id = String(row.id);
-          if (m[id] == null) m[id] = 60;
-        });
-        return m;
-      });
     })();
   }, []);
 
@@ -243,14 +231,14 @@ export default function CalendarPage() {
       const baseTitle = `#${j.job_number || j.id} — ${getClientName(j)}`;
       const title = activeTech === 'all' && tName ? `${baseTitle} • ${tName}` : baseTitle;
 
-      const minutes = durMap[String(j.id)] ?? 60; // визуально: 60 по умолчанию
+      const minutes = (j.appointment_duration_min ?? 60); // визуально: 60 по умолчанию
       const end = computeEventEnd(j.appointment_time, minutes);
 
       return {
         id: String(j.id),
         title,
         start: j.appointment_time, // FullCalendar съест и ISO, и локальную строку
-        end,                       // только для визуала, не пишем в БД
+        end,                       // только для визуала, в БД не храним конец
         allDay: false,
         backgroundColor: activeTech === 'all' ? techColor[String(j.technician_id)] || s.bg : s.bg,
         borderColor: isUnpaid(j) ? '#ef4444' : s.ring,
@@ -265,7 +253,7 @@ export default function CalendarPage() {
         },
       };
     });
-  }, [filteredJobs, activeTech, techById, techColor, durMap]);
+  }, [filteredJobs, activeTech, techById, techColor]);
 
   const unassigned = useMemo(
     () => (jobs || []).filter((j) => !j.appointment_time || !j.technician_id),
@@ -325,7 +313,7 @@ export default function CalendarPage() {
     toast('Saved');
   };
 
-  // Растягивание/сжатие: меняем только визуальную длительность (durMap), без БД
+  // Растягивание/сжатие: меняем только длительность (appointment_duration_min), без БД-апдейта старта
   const handleEventResize = async (info) => {
     try {
       const start = info.event.start;
@@ -335,20 +323,36 @@ export default function CalendarPage() {
       const diffMin = Math.round((end.getTime() - start.getTime()) / 60000);
       const durMin  = roundToStep(diffMin, 30); // шаг 30 мин
 
-      // фиксируем визуально
+      // визуально фиксируем округлённый конец
       const endRounded = new Date(start.getTime() + durMin * 60000);
       try { info.event.setEnd(endRounded); } catch {}
 
-      setDurMap((prev) => ({ ...prev, [String(info.event.id)]: durMin }));
-      // БД не трогаем
+      // сохраняем ТОЛЬКО длительность в БД
+      const { error } = await supabase
+        .from('jobs')
+        .update({ appointment_duration_min: durMin })
+        .eq('id', info.event.id);
+
+      if (error) throw error;
+
+      // локально обновим, чтобы пересчёт events отразил новое end
+      setJobs((prev) =>
+        prev.map((j) =>
+          String(j.id) === String(info.event.id)
+            ? { ...j, appointment_duration_min: durMin }
+            : j
+        )
+      );
+
+      toast('Saved');
     } catch (e) {
       console.error('eventResize error:', e);
       info.revert();
-      toast('Resize failed');
+      toast('Failed to save duration');
     }
   };
 
-  // Дроп из Unassigned: сохраняем только START и technician_id; визуальная длительность = 60
+  // Дроп из Unassigned: сохраняем только START и technician_id; длительность = 60 по умолчанию
   const handleEventReceive = async (info) => {
     const id = info.event.id;
     if (activeTech === 'all') {
@@ -377,16 +381,21 @@ export default function CalendarPage() {
 
             try { event.setStart(txtStart); } catch {}
 
-            const payload = { appointment_time: txtStart, technician_id: normalizeId(activeTech) };
+            const payload = {
+              appointment_time: txtStart,
+              appointment_duration_min: 60,           // дефолт час
+              technician_id: normalizeId(activeTech)
+            };
             const { error } = await supabase.from('jobs').update(payload).eq('id', id);
             if (error) throw error;
 
             setJobs((prev) =>
               prev.map((j) =>
-                String(j.id) === id ? { ...j, appointment_time: txtStart, technician_id: normalizeId(activeTech) } : j
+                String(j.id) === id
+                  ? { ...j, appointment_time: txtStart, appointment_duration_min: 60, technician_id: normalizeId(activeTech) }
+                  : j
               )
             );
-            setDurMap((prev) => ({ ...prev, [String(id)]: 60 })); // визуально 60 мин
             toast('Saved');
           } catch (e) {
             console.error('eventReceive month save error:', e);
@@ -400,7 +409,11 @@ export default function CalendarPage() {
 
     // Week/Day — ISO
     const newStart = info.event.start ? ensureBusinessTimeISO(info.event.start, 9) : null;
-    const payload = { appointment_time: newStart, technician_id: normalizeId(activeTech) };
+    const payload = {
+      appointment_time: newStart,
+      appointment_duration_min: 60,
+      technician_id: normalizeId(activeTech),
+    };
     const { error } = await supabase.from('jobs').update(payload).eq('id', id);
     if (error) {
       console.error('eventReceive save error:', error);
@@ -410,10 +423,11 @@ export default function CalendarPage() {
     }
     setJobs((prev) =>
       prev.map((j) =>
-        String(j.id) === id ? { ...j, appointment_time: newStart, technician_id: normalizeId(activeTech) } : j
+        String(j.id) === id
+          ? { ...j, appointment_time: newStart, appointment_duration_min: 60, technician_id: normalizeId(activeTech) }
+          : j
       )
     );
-    setDurMap((prev) => ({ ...prev, [String(id)]: 60 }));
     toast('Saved');
   };
 
@@ -652,7 +666,7 @@ export default function CalendarPage() {
           /* ===== DnD/edit ===== */
           editable
           eventStartEditable
-          eventDurationEditable={true}
+          eventDurationEditable={true}      /* можно растягивать */
           droppable
 
           /* ===== data ===== */
@@ -729,7 +743,7 @@ function Legend() {
         color: text,
         fontSize: 12,
         marginRight: 8,
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6)',
+        boxShadow: 'inset 1px 1px 0 rgba(255,255,255,0.6)',
         border: '1px solid rgba(0,0,0,0.04)'
       }}
     >
