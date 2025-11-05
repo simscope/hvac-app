@@ -266,10 +266,10 @@ export default function InvoicePage() {
       rightY += pillH + 18;
 
       // Company block aligned with Bill To
-      const alignY = rightY; let compTop = Math.max(logoBottom + 8, alignY);
+      const alignY = rightY; let compTop = Math.max(logoBottom + 8, alignY)+ 10;
       doc.setTextColor(0); doc.setFont(undefined, 'bold'); doc.text('Sim Scope Inc.', marginX, compTop);
       compTop += 14; doc.setFont(undefined, 'normal');
-      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscope.office@gmail.com'].forEach((t) => { doc.text(t, marginX, compTop); compTop += 12; });
+      ['1587 E 19th St', 'Brooklyn, NY 11230', '(929) 412-9042 Zelle', 'simscope.office@gmail.com'].forEach((t) => { doc.text(t, marginX, compTop); compTop += 14; });
 
       // Bill To
       doc.setFont(undefined, 'bold'); doc.text('Bill To:', pageW - marginX - pillW, rightY); rightY += 16;
@@ -611,3 +611,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
