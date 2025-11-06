@@ -74,7 +74,6 @@ const styles = {
     borderBottom: `1px solid ${colors.border}`
   },
 
-  // Заголовок секции с кнопкой раскрытия
   collapsibleHead: {
     display: 'flex',
     alignItems: 'center',
@@ -163,13 +162,10 @@ const LABELS = [
   { id: 'spam', title: 'Спам', icon: '🚫' },
 ];
 
-/* ====== helper: заменить cid: на blob: для inline-вложений ====== */
+/* ====== INLINE-IMAGES ====== */
 function hydrateCidImages(message) {
   if (!message?.html || !Array.isArray(message.attachments)) return message;
-
-  const urlMap = {};
-  const revoke = [];
-
+  const urlMap = {}; const revoke = [];
   for (const a of message.attachments) {
     if (!a?.contentId || !a?.dataBase64) continue;
     const cid = String(a.contentId).replace(/[<>]/g, '');
@@ -179,48 +175,34 @@ function hydrateCidImages(message) {
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const blob = new Blob([bytes], { type: a.mimeType || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
-      urlMap[cid] = url;
-      revoke.push(url);
-    } catch (e) {
-      console.warn('inline image decode failed', a.filename, e);
-    }
+      urlMap[cid] = url; revoke.push(url);
+    } catch {}
   }
-
   let html = message.html;
   html = html.replace(/src=["']cid:([^"']+)["']/gi, (m, cidRaw) => {
     const key = String(cidRaw).replace(/[<>]/g, '');
     const url = urlMap[key];
     return url ? `src="${url}"` : m;
   });
-
   return { ...message, html, _blobUrlsToRevoke: revoke };
 }
 
-/* ====== helpers: HTML-обёртка (Times New Roman) ====== */
+/* ====== HTML WRAP ====== */
 const nl2br = (s) => String(s).replace(/\n/g, '<br>');
 function wrapHtmlTimes(contentHtml) {
-  return `<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Email</title>
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Email</title>
 <style>
-  body { font-family: "Times New Roman", Times, serif; font-size: 14px; line-height: 1.45; color:#111; }
-  a { color:#1d4ed8; }
-  p { margin:0 0 10px; }
-</style>
-</head>
-<body>${contentHtml}</body>
-</html>`;
+body{font-family:"Times New Roman",Times,serif;font-size:14px;line-height:1.45;color:#111}
+a{color:#1d4ed8}p{margin:0 0 10px}
+</style></head><body>${contentHtml}</body></html>`;
 }
 
-/* ====== reply/forward helpers ====== */
+/* ====== HELPERS ====== */
 function parseEmailAddress(display) {
   if (!display) return '';
   const m = String(display).match(/<([^>]+)>/);
   return m ? m[1].trim() : String(display).trim();
 }
-
 function htmlToText(html) {
   if (!html) return '';
   const tmp = document.createElement('div');
@@ -228,60 +210,40 @@ function htmlToText(html) {
   const text = tmp.innerText || tmp.textContent || '';
   return text.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
-
 function quoteBlock(s) {
-  return String(s)
-    .split('\n')
-    .map(line => (line.trim() ? '> ' + line : '>'))
-    .join('\n');
+  return String(s).split('\n').map(l => (l.trim() ? '> ' + l : '>')).join('\n');
 }
 
 /* ====== ГРУППИРОВКА ====== */
-function startOfTodayRange() {
+function todayRange() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
   return { start, end };
 }
-
-function monthKey(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-function monthTitle(d) {
-  return d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
-}
-
+function monthKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
+function monthTitle(d) { return d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' }); }
 function buildGroups(list) {
-  const safe = Array.isArray(list) ? list.slice() : [];
-  // newest first
-  safe.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-
-  const { start, end } = startOfTodayRange();
-  const today = [];
-  const map = new Map(); // key -> {title, items, dateForSort}
-
-  for (const m of safe) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  arr.sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+  const { start, end } = todayRange();
+  const today = []; const map = new Map();
+  for (const m of arr) {
     const dd = m?.date ? new Date(m.date) : null;
     if (!dd) continue;
-    if (dd >= start && dd <= end) {
-      today.push(m);
-      continue;
-    }
+    if (dd >= start && dd <= end) { today.push(m); continue; }
     const key = monthKey(dd);
     if (!map.has(key)) {
       map.set(key, { key, title: monthTitle(dd), items: [], sortTime: new Date(dd.getFullYear(), dd.getMonth(), 1).getTime() });
     }
     map.get(key).items.push(m);
   }
-
-  const months = Array.from(map.values())
-    .sort((a, b) => b.sortTime - a.sortTime);
-
+  const months = Array.from(map.values()).sort((a,b)=>b.sortTime-a.sortTime);
   return { today, months };
 }
 
 export default function EmailTab() {
-  /* ======= STATE ======= */
+  /* STATE */
   const [folder, setFolder] = useState('inbox');
   const [q, setQ] = useState('');
   const [list, setList] = useState([]);
@@ -291,7 +253,6 @@ export default function EmailTab() {
 
   // compose
   const [composeOpen, setComposeOpen] = useState(false);
-  const [sending, setSending] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(true);
   const toRef = useRef(); const subjectRef = useRef(); const textRef = useRef(); const filesRef = useRef();
 
@@ -301,8 +262,8 @@ export default function EmailTab() {
   const [reading, setReading] = useState(false);
   const readBodyRef = useRef(null);
 
-  // раскрытие по месяцам: по папке свой набор ключей
-  const [collapsedByFolder, setCollapsedByFolder] = useState({
+  // ► ВАЖНО: по умолчанию месяцы закрыты. Храним набор *раскрытых* месяцев отдельно для каждой папки.
+  const [expandedByFolder, setExpandedByFolder] = useState({
     inbox: new Set(),
     sent: new Set(),
   });
@@ -314,7 +275,7 @@ export default function EmailTab() {
     oauthStart: `${FUNCTIONS_URL}/oauth_google_start`,
   }), []);
 
-  /* ======= HELPERS ======= */
+  /* DATA */
   async function authedFetch(url, options = {}) {
     const { data: { session } = {} } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('Нет сессии Supabase. Войдите и повторите.');
@@ -327,15 +288,48 @@ export default function EmailTab() {
     return fetch(url, { ...options, headers });
   }
 
-  // открыть композер поверх чтения
+  async function loadList() {
+    try {
+      setError(''); setListLoading(true);
+      const r = await authedFetch(API.list, { method: 'POST', body: JSON.stringify({ folder, q }) });
+      if (!r.ok) {
+        const txt = await r.text();
+        if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) { setConnected(false); throw new Error('Аккаунт Gmail не привязан.'); }
+        throw new Error(`gmail_list: ${r.status} ${txt}`);
+      }
+      const data = await r.json();
+      setList(Array.isArray(data?.emails) ? data.emails : []);
+      setConnected(true);
+    } catch (e) {
+      console.error(e); setList([]); setError(e.message || String(e));
+    } finally { setListLoading(false); }
+  }
+  useEffect(() => { loadList(); /* eslint-disable-line */ }, [folder]);
+
+  /* OPEN / READ */
+  async function openMail(id) {
+    setCurrent(null); setReadOpen(true); setReading(true);
+    try {
+      const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id }) });
+      if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
+      const data = await r.json();
+      setCurrent(hydrateCidImages(data || {}));
+    } catch (e) {
+      console.error(e);
+      const m = list.find(x => x.id === id);
+      setCurrent({ id, from: m?.from, to: '', subject: m?.subject, date: m?.date, text: m?.snippet || '(не удалось загрузить тело письма)', attachments: [] });
+    } finally { setReading(false); }
+  }
+  useEffect(() => { if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0; }, [readOpen, current, reading]);
+
   function openComposerWith({ to = '', subject = '', body = '' } = {}) {
     if (readOpen) setReadOpen(false);
     setTimeout(() => {
       setComposeOpen(true);
       setTimeout(() => {
-        if (toRef.current)       toRef.current.value = to;
-        if (subjectRef.current)  subjectRef.current.value = subject;
-        if (textRef.current)     textRef.current.value = body;
+        if (toRef.current) toRef.current.value = to;
+        if (subjectRef.current) subjectRef.current.value = subject;
+        if (textRef.current) textRef.current.value = body;
       }, 0);
     }, 0);
   }
@@ -343,92 +337,25 @@ export default function EmailTab() {
   const fmtDate = (iso) => {
     if (!iso) return '';
     const d = new Date(iso);
-    const { start, end } = startOfTodayRange();
-    if (d >= start && d <= end) {
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    return d.toLocaleDateString();
+    const { start, end } = todayRange();
+    return d >= start && d <= end
+      ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString();
   };
 
-  /* ======= DATA LOAD ======= */
-  async function loadList() {
-    try {
-      setError('');
-      setListLoading(true);
-      const r = await authedFetch(API.list, { method: 'POST', body: JSON.stringify({ folder, q }) });
-      if (!r.ok) {
-        const txt = await r.text();
-        if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) {
-          setConnected(false);
-          throw new Error('Аккаунт Gmail не привязан.');
-        }
-        throw new Error(`gmail_list: ${r.status} ${txt}`);
-      }
-      const data = await r.json();
-      setList(Array.isArray(data?.emails) ? data.emails : []);
-      setConnected(true);
-    } catch (e) {
-      console.error(e);
-      setList([]);
-      setError(e.message || String(e));
-    } finally {
-      setListLoading(false);
-    }
-  }
-
-  useEffect(() => { loadList(); /* eslint-disable-next-line */ }, [folder]);
-
-  /* ======= OPEN / READ ======= */
-  async function openMail(id) {
-    setCurrent(null);
-    setReadOpen(true);
-    setReading(true);
-    try {
-      const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id }) });
-      if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
-      const data = await r.json();
-      const hydrated = hydrateCidImages(data || {});
-      setCurrent(hydrated);
-    } catch (e) {
-      console.error(e);
-      const m = list.find(x => x.id === id);
-      setCurrent({
-        id,
-        from: m?.from, to: '', subject: m?.subject, date: m?.date,
-        text: m?.snippet || '(не удалось загрузить тело письма)',
-        attachments: [],
-      });
-    } finally {
-      setReading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0;
-  }, [readOpen, current, reading]);
-
-  // Ответить
   function onReply() {
-    const m = current;
-    if (!m) return;
+    const m = current; if (!m) return;
     const to = parseEmailAddress(m.from);
-    const subjBase = m.subject || '';
-    const subject = subjBase.toLowerCase().startsWith('re:') ? subjBase : `Re: ${subjBase}`;
-    const plain = m.text && m.text.trim() ? m.text.trim() : htmlToText(m.html || '');
+    const subj = (m.subject || ''); const subject = subj.toLowerCase().startsWith('re:') ? subj : `Re: ${subj}`;
+    const plain = m.text?.trim() || htmlToText(m.html || '');
     const when = m.date ? new Date(m.date).toLocaleString() : '';
-    const quoted =
-      `\n\n${SIGNATURE}\n\n----\nOn ${when}, ${m.from} wrote:\n` +
-      quoteBlock(plain || '(пустое сообщение)');
+    const quoted = `\n\n${SIGNATURE}\n\n----\nOn ${when}, ${m.from} wrote:\n` + quoteBlock(plain || '(пустое сообщение)');
     openComposerWith({ to, subject, body: quoted });
   }
-
-  // Переслать
   function onForward() {
-    const m = current;
-    if (!m) return;
-    const subjBase = m.subject || '';
-    const subject = subjBase.toLowerCase().startsWith('fwd:') ? subjBase : `Fwd: ${subjBase}`;
-    const plain = m.text && m.text.trim() ? m.text.trim() : htmlToText(m.html || '');
+    const m = current; if (!m) return;
+    const subj = (m.subject || ''); const subject = subj.toLowerCase().startsWith('fwd:') ? subj : `Fwd: ${subj}`;
+    const plain = m.text?.trim() || htmlToText(m.html || '');
     const when = m.date ? new Date(m.date).toLocaleString() : '';
     const header =
       `\n\n${SIGNATURE}\n\n---- Forwarded message ----\n` +
@@ -436,26 +363,16 @@ export default function EmailTab() {
       (m.to ? `To: ${m.to}\n` : '') +
       `Date: ${when}\n` +
       `Subject: ${m.subject || ''}\n\n`;
-    const body = header + plain;
-    openComposerWith({ to: '', subject, body });
+    openComposerWith({ to: '', subject, body: header + plain });
   }
-
   function closeRead() {
-    if (current?._blobUrlsToRevoke) {
-      current._blobUrlsToRevoke.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
-    }
+    if (current?._blobUrlsToRevoke) current._blobUrlsToRevoke.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
     setReadOpen(false);
   }
 
-  /* ======= ОТОБРАЖЕНИЕ СТРОКИ ПИСЬМА ======= */
+  /* ROW */
   const MailRow = ({ m }) => (
-    <div
-      key={m.id}
-      style={styles.row}
-      onClick={() => openMail(m.id)}
-      role="button"
-      title="Открыть"
-    >
+    <div key={m.id} style={styles.row} onClick={() => openMail(m.id)} role="button" title="Открыть">
       <div style={{ minWidth: 0 }}>
         <span style={styles.from}>{m.from || '(без отправителя)'}</span>
         <span style={styles.subject}> {m.subject || '(без темы)'}</span>
@@ -465,22 +382,20 @@ export default function EmailTab() {
     </div>
   );
 
-  /* ======= ГРУППЫ ДЛЯ ВХОДЯЩИХ/ОТПРАВЛЕННЫХ ======= */
+  /* GROUPS */
   const { today, months } = useMemo(() => buildGroups(list), [list]);
-
-  const collapsedSet = collapsedByFolder[folder] || new Set();
+  const expandedSet = expandedByFolder[folder] || new Set();
   function toggleMonth(key) {
-    setCollapsedByFolder((prev) => {
+    setExpandedByFolder(prev => {
       const copy = { ...prev };
       const set = new Set(copy[folder] || []);
-      if (set.has(key)) set.delete(key);
-      else set.add(key);
+      if (set.has(key)) set.delete(key); else set.add(key);
       copy[folder] = set;
       return copy;
     });
   }
 
-  /* ======= RENDER ======= */
+  /* RENDER */
   return (
     <div style={styles.app}>
       {/* LEFT */}
@@ -492,12 +407,7 @@ export default function EmailTab() {
 
         <nav style={styles.menu}>
           {LABELS.map(l => (
-            <div
-              key={l.id}
-              style={styles.menuItem(folder === l.id)}
-              onClick={() => setFolder(l.id)}
-              role="button"
-            >
+            <div key={l.id} style={styles.menuItem(folder === l.id)} onClick={() => setFolder(l.id)} role="button">
               <span style={styles.menuIcon}>{l.icon}</span>
               <span>{l.title}</span>
             </div>
@@ -505,11 +415,14 @@ export default function EmailTab() {
         </nav>
 
         {!connected && (
-          <button style={styles.connectBtn} onClick={function connectGmail() {
-            const w = window.open(`${FUNCTIONS_URL}/oauth_google_start`, 'oauth_gmail', 'width=600,height=700');
-            if (!w) { /* всплывающие заблокированы */ return; }
-            const t = setInterval(() => { if (!w || w.closed) { clearInterval(t); loadList(); } }, 800);
-          }}>
+          <button
+            style={styles.connectBtn}
+            onClick={() => {
+              const w = window.open(`${FUNCTIONS_URL}/oauth_google_start`, 'oauth_gmail', 'width=600,height=700');
+              if (!w) return;
+              const t = setInterval(() => { if (!w || w.closed) { clearInterval(t); loadList(); } }, 800);
+            }}
+          >
             Подключить Gmail
           </button>
         )}
@@ -519,7 +432,6 @@ export default function EmailTab() {
 
       {/* RIGHT */}
       <section style={styles.right}>
-        {/* Top bar with search */}
         <div style={styles.topbar}>
           <div style={styles.search}>
             <span>🔎</span>
@@ -531,27 +443,21 @@ export default function EmailTab() {
               onKeyDown={(e) => e.key === 'Enter' && loadList()}
             />
           </div>
-          <button style={styles.btn} onClick={loadList} disabled={listLoading}>
-            Обновить
-          </button>
+          <button style={styles.btn} onClick={loadList} disabled={listLoading}>Обновить</button>
         </div>
 
-        {/* Заголовок списка */}
         <div style={styles.listHead}>
           {LABELS.find(l => l.id === folder)?.title || ''}{q ? ` — поиск: ${q}` : ''}
         </div>
 
-        {/* Таблица / Группы */}
         <div style={styles.table}>
           {listLoading ? (
             <div style={{ padding: 16, color: colors.subtext }}>Загрузка…</div>
           ) : (list.length === 0 ? (
             <div style={{ padding: 16, color: colors.subtext }}>Писем нет</div>
           ) : (
-            // Группировка только для inbox/sent без активного поиска
-            (['inbox', 'sent'].includes(folder) && !q) ? (
+            (['inbox','sent'].includes(folder) && !q) ? (
               <>
-                {/* Сегодня — всегда открыто */}
                 <div style={styles.sectionTitle}>
                   Сегодня {today.length ? `(${today.length})` : ''}
                 </div>
@@ -561,21 +467,20 @@ export default function EmailTab() {
                   today.map(m => <MailRow key={m.id} m={m} />)
                 )}
 
-                {/* Месяцы */}
                 {months.map(g => {
-                  const collapsed = collapsedSet.has(g.key);
+                  const expanded = expandedSet.has(g.key); // по умолчанию false => закрыт
                   return (
                     <div key={g.key}>
                       <div
                         style={styles.collapsibleHead}
                         onClick={() => toggleMonth(g.key)}
                         role="button"
-                        title={collapsed ? 'Развернуть' : 'Свернуть'}
+                        title={expanded ? 'Свернуть' : 'Развернуть'}
                       >
-                        <span style={styles.caret}>{collapsed ? '▸' : '▾'}</span>
+                        <span style={styles.caret}>{expanded ? '▾' : '▸'}</span>
                         <span>{g.title} {g.items.length ? `(${g.items.length})` : ''}</span>
                       </div>
-                      {!collapsed && (
+                      {expanded && (
                         g.items.length === 0
                           ? <div style={{ padding: 12, color: colors.muted }}>Нет писем</div>
                           : g.items.map(m => <MailRow key={m.id} m={m} />)
@@ -585,118 +490,71 @@ export default function EmailTab() {
                 })}
               </>
             ) : (
-              // обычный список (поиск/другие папки)
-              list
-                .slice()
-                .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-                .map(m => <MailRow key={m.id} m={m} />)
+              list.slice().sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).map(m => <MailRow key={m.id} m={m} />)
             )
           ))}
         </div>
       </section>
 
-      {/* COMPOSE MODAL — выше по Z */}
+      {/* COMPOSE */}
       {composeOpen && (
-        <div
-          style={{ ...styles.overlayBase, ...styles.composeOverlay }}
-          onClick={() => setComposeOpen(false)}
-        >
-          <div
-            style={styles.composeModal}
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div style={{ ...styles.overlayBase, ...styles.composeOverlay }} onClick={() => setComposeOpen(false)}>
+          <div style={styles.composeModal} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>Новое письмо</h3>
             <form onSubmit={async (e) => {
               e.preventDefault();
               try {
-                // отправка
                 const to = (toRef.current?.value || '').split(',').map(s => s.trim()).filter(Boolean);
                 const subject = subjectRef.current?.value || '';
                 const baseText = textRef.current?.value || '';
                 const append = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
-                const textForBody = append ? `${baseText}${SIGNATURE}` : baseText;
-                const html = wrapHtmlTimes(`<div>${nl2br(textForBody)}</div>`);
+                const text = append ? `${baseText}${SIGNATURE}` : baseText;
+                const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
                 const files = Array.from(filesRef.current?.files || []);
                 const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
                   const fr = new FileReader();
                   fr.onerror = () => rej(new Error('File read error'));
                   fr.onload = () => res({
-                    filename: f.name,
-                    mimeType: f.type || 'application/octet-stream',
+                    filename: f.name, mimeType: f.type || 'application/octet-stream',
                     base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
                   });
                   fr.readAsArrayBuffer(f);
                 })));
-
                 const { data: { session } = {} } = await supabase.auth.getSession();
                 const r = await fetch(`${FUNCTIONS_URL}/gmail_send`, {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    apikey: SUPABASE_ANON_KEY,
-                    Authorization: `Bearer ${session?.access_token || ''}`,
-                  },
-                  body: JSON.stringify({ to, subject, text: textForBody, html, attachments })
+                  headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session?.access_token || ''}` },
+                  body: JSON.stringify({ to, subject, text, html, attachments })
                 });
                 if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
-                setComposeOpen(false);
-                setFolder('sent');
-                loadList();
-              } catch (err) {
-                alert(err.message || String(err));
-              }
+                setComposeOpen(false); setFolder('sent'); loadList();
+              } catch (err) { alert(err.message || String(err)); }
             }}>
-              <div style={styles.formRow}>
-                <div>От</div>
-                <input value={ACCOUNT_EMAIL} disabled style={styles.input} />
-              </div>
-              <div style={styles.formRow}>
-                <div>Кому (через запятую)</div>
-                <input ref={toRef} style={styles.input} placeholder="user@example.com, ..." />
-              </div>
-              <div style={styles.formRow}>
-                <div>Тема</div>
-                <input ref={subjectRef} style={styles.input} />
-              </div>
+              <div style={styles.formRow}><div>От</div><input value={ACCOUNT_EMAIL} disabled style={styles.input} /></div>
+              <div style={styles.formRow}><div>Кому (через запятую)</div><input ref={toRef} style={styles.input} placeholder="user@example.com, ..." /></div>
+              <div style={styles.formRow}><div>Тема</div><input ref={subjectRef} style={styles.input} /></div>
               <div style={styles.formRow}>
                 <div>Текст</div>
                 <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={includeSignature}
-                    onChange={(e) => setIncludeSignature(e.target.checked)}
-                  />
+                <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
+                  <input type="checkbox" checked={includeSignature} onChange={(e)=>setIncludeSignature(e.target.checked)} />
                   Добавлять подпись компании
                 </label>
-                <div style={styles.signatureHint}>
-                  Подпись будет добавлена в конец письма:
-                  {SIGNATURE}
-                </div>
+                <div style={styles.signatureHint}>Подпись будет добавлена в конец письма:{SIGNATURE}</div>
               </div>
-              <div style={styles.formRow}>
-                <div>Вложения</div>
-                <input ref={filesRef} type="file" multiple />
-              </div>
+              <div style={styles.formRow}><div>Вложения</div><input ref={filesRef} type="file" multiple /></div>
               <div style={styles.btnLine}>
-                <button type="submit" style={styles.btnPrimary}>
-                  Отправить
-                </button>
-                <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)}>
-                  Отмена
-                </button>
+                <button type="submit" style={styles.btnPrimary}>Отправить</button>
+                <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)}>Отмена</button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* READ MODAL — ниже по Z */}
+      {/* READ */}
       {readOpen && (
-        <div
-          style={{ ...styles.overlayBase, ...styles.readOverlay }}
-          onClick={closeRead}
-        >
+        <div style={{ ...styles.overlayBase, ...styles.readOverlay }} onClick={closeRead}>
           <div style={styles.readModal} onClick={(e) => e.stopPropagation()}>
             <div style={styles.readHeader}>
               <h3 style={{ margin: 0 }}>{current?.subject || '(без темы)'}</h3>
@@ -706,30 +564,22 @@ export default function EmailTab() {
                 <button style={styles.btn} onClick={closeRead}>Закрыть</button>
               </div>
             </div>
-
             <div style={styles.readMeta}>
               <div><b>От:</b> {current?.from || ''}</div>
               {current?.to ? <div><b>Кому:</b> {current.to}</div> : null}
               <div><b>Дата:</b> {current?.date ? new Date(current.date).toLocaleString() : ''}</div>
             </div>
-
             <div style={styles.readBody} ref={readBodyRef}>
               {reading ? (
                 <div style={{ color: colors.subtext }}>Загрузка письма…</div>
               ) : current?.html ? (
                 <>
-                  <style>{`
-                    .email-body * { max-width: 100%; box-sizing: border-box; }
-                    .email-body img { height: auto; }
-                    .email-body table { width: 100%; }
-                    .email-body pre { white-space: pre-wrap; }
-                  `}</style>
+                  <style>{`.email-body *{max-width:100%;box-sizing:border-box}.email-body img{height:auto}.email-body table{width:100%}.email-body pre{white-space:pre-wrap}`}</style>
                   <div className="email-body" dangerouslySetInnerHTML={{ __html: current.html }} />
                 </>
               ) : (
                 <pre style={{ whiteSpace: 'pre-wrap' }}>{current?.text || '(пустое письмо)'}</pre>
               )}
-
               {Array.isArray(current?.attachments) && current.attachments.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <b>Вложения:</b>
