@@ -65,7 +65,29 @@ const styles = {
   listHead: { padding: '8px 12px', borderBottom: `1px solid ${colors.border}`, color: colors.subtext },
 
   table: { flex: 1, overflow: 'auto' },
-  sectionTitle: { padding: '10px 12px', fontWeight: 700, color: '#0f172a', background: '#f9fbff', borderBottom: `1px solid ${colors.border}` },
+
+  sectionTitle: {
+    padding: '10px 12px',
+    fontWeight: 700,
+    color: '#0f172a',
+    background: '#f9fbff',
+    borderBottom: `1px solid ${colors.border}`
+  },
+
+  // Заголовок секции с кнопкой раскрытия
+  collapsibleHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '10px 12px',
+    cursor: 'pointer',
+    userSelect: 'none',
+    background: '#f9fbff',
+    borderBottom: `1px solid ${colors.border}`,
+    fontWeight: 700,
+    color: '#0f172a'
+  },
+  caret: { width: 18, textAlign: 'center' },
 
   row: {
     display: 'grid', gridTemplateColumns: '1fr 180px',
@@ -113,10 +135,10 @@ const styles = {
     marginBottom: 8,
     borderBottom: `1px solid ${colors.border}`,
     paddingBottom: 8,
-    position: 'sticky',     // ★ держим шапку на виду при прокрутке
-    top: 0,                 // ★
-    background: colors.white, // ★
-    zIndex: 1,              // ★
+    position: 'sticky',
+    top: 0,
+    background: colors.white,
+    zIndex: 1,
   },
   readMeta: { color: colors.subtext, margin: '6px 0 8px' },
   readBody: {
@@ -214,6 +236,50 @@ function quoteBlock(s) {
     .join('\n');
 }
 
+/* ====== ГРУППИРОВКА ====== */
+function startOfTodayRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  return { start, end };
+}
+
+function monthKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function monthTitle(d) {
+  return d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+}
+
+function buildGroups(list) {
+  const safe = Array.isArray(list) ? list.slice() : [];
+  // newest first
+  safe.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+  const { start, end } = startOfTodayRange();
+  const today = [];
+  const map = new Map(); // key -> {title, items, dateForSort}
+
+  for (const m of safe) {
+    const dd = m?.date ? new Date(m.date) : null;
+    if (!dd) continue;
+    if (dd >= start && dd <= end) {
+      today.push(m);
+      continue;
+    }
+    const key = monthKey(dd);
+    if (!map.has(key)) {
+      map.set(key, { key, title: monthTitle(dd), items: [], sortTime: new Date(dd.getFullYear(), dd.getMonth(), 1).getTime() });
+    }
+    map.get(key).items.push(m);
+  }
+
+  const months = Array.from(map.values())
+    .sort((a, b) => b.sortTime - a.sortTime);
+
+  return { today, months };
+}
+
 export default function EmailTab() {
   /* ======= STATE ======= */
   const [folder, setFolder] = useState('inbox');
@@ -233,7 +299,13 @@ export default function EmailTab() {
   const [readOpen, setReadOpen] = useState(false);
   const [current, setCurrent] = useState(null);
   const [reading, setReading] = useState(false);
-  const readBodyRef = useRef(null); // ★ ref на скролл-контейнер
+  const readBodyRef = useRef(null);
+
+  // раскрытие по месяцам: по папке свой набор ключей
+  const [collapsedByFolder, setCollapsedByFolder] = useState({
+    inbox: new Set(),
+    sent: new Set(),
+  });
 
   const API = useMemo(() => ({
     list: `${FUNCTIONS_URL}/gmail_list`,
@@ -255,9 +327,9 @@ export default function EmailTab() {
     return fetch(url, { ...options, headers });
   }
 
-  // открыть композер и проставить значения, предварительно закрыв чтение
+  // открыть композер поверх чтения
   function openComposerWith({ to = '', subject = '', body = '' } = {}) {
-    if (readOpen) setReadOpen(false); // ★ закрываем чтение, чтобы композер был поверх
+    if (readOpen) setReadOpen(false);
     setTimeout(() => {
       setComposeOpen(true);
       setTimeout(() => {
@@ -271,31 +343,12 @@ export default function EmailTab() {
   const fmtDate = (iso) => {
     if (!iso) return '';
     const d = new Date(iso);
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-    if (d >= startOfToday && d <= endOfToday) {
+    const { start, end } = startOfTodayRange();
+    if (d >= start && d <= end) {
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
     return d.toLocaleDateString();
   };
-
-  // группировка: сегодня / ранее (только для inbox)
-  const { todayList, olderList } = useMemo(() => {
-    if (folder !== 'inbox') return { todayList: [], olderList: [] };
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-    const safeList = Array.isArray(list) ? list : [];
-    const t = []; const o = [];
-    for (const m of safeList) {
-      const d = m?.date ? new Date(m.date) : null;
-      if (d && d >= startOfToday && d <= endOfToday) t.push(m);
-      else o.push(m);
-    }
-    const byDesc = (a, b) => new Date(b.date || 0) - new Date(a.date || 0);
-    return { todayList: t.sort(byDesc), olderList: o.sort(byDesc) };
-  }, [list, folder]);
 
   /* ======= DATA LOAD ======= */
   async function loadList() {
@@ -312,8 +365,7 @@ export default function EmailTab() {
         throw new Error(`gmail_list: ${r.status} ${txt}`);
       }
       const data = await r.json();
-      const emails = Array.isArray(data?.emails) ? data.emails : [];
-      setList(emails);
+      setList(Array.isArray(data?.emails) ? data.emails : []);
       setConnected(true);
     } catch (e) {
       console.error(e);
@@ -351,12 +403,9 @@ export default function EmailTab() {
     }
   }
 
-  // ★ Всегда прокручиваем начало письма наверх, когда открыли/подгрузили
   useEffect(() => {
-    if (readOpen && readBodyRef.current) {
-      readBodyRef.current.scrollTop = 0;
-    }
-  }, [readOpen, current, reading]); // ★
+    if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0;
+  }, [readOpen, current, reading]);
 
   // Ответить
   function onReply() {
@@ -398,59 +447,7 @@ export default function EmailTab() {
     setReadOpen(false);
   }
 
-  /* ======= SEND (Times New Roman HTML + plain) ======= */
-  async function onSubmit(e) {
-    e.preventDefault();
-    try {
-      setSending(true);
-      const to = (toRef.current?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-      const subject = subjectRef.current?.value || '';
-      const baseText = textRef.current?.value || '';
-
-      const shouldAppend = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
-      const textForBody = shouldAppend ? `${baseText}${SIGNATURE}` : baseText;
-
-      const htmlContent = nl2br(textForBody);
-      const html = wrapHtmlTimes(`<div>${htmlContent}</div>`);
-      const text = textForBody;
-
-      const files = Array.from(filesRef.current?.files || []);
-      const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
-        const fr = new FileReader();
-        fr.onerror = () => rej(new Error('File read error'));
-        fr.onload = () => res({
-          filename: f.name,
-          mimeType: f.type || 'application/octet-stream',
-          base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
-        });
-        fr.readAsArrayBuffer(f);
-      })));
-
-      const r = await authedFetch(API.send, {
-        method: 'POST',
-        body: JSON.stringify({ to, subject, text, html, attachments })
-      });
-      if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
-      setComposeOpen(false);
-      setFolder('sent');
-      await loadList();
-    } catch (e) {
-      alert(e.message || String(e));
-    } finally {
-      setSending(false);
-    }
-  }
-
-  /* ======= OAUTH ======= */
-  function connectGmail() {
-    const w = window.open(API.oauthStart, 'oauth_gmail', 'width=600,height=700');
-    if (!w) { setError('Разрешите всплывающие окна и попробуйте снова.'); return; }
-    const t = setInterval(() => {
-      if (!w || w.closed) { clearInterval(t); loadList(); }
-    }, 800);
-  }
-
-  /* ======= РЕНДЕР ПОЧТОВОЙ СТРОКИ ======= */
+  /* ======= ОТОБРАЖЕНИЕ СТРОКИ ПИСЬМА ======= */
   const MailRow = ({ m }) => (
     <div
       key={m.id}
@@ -461,14 +458,27 @@ export default function EmailTab() {
     >
       <div style={{ minWidth: 0 }}>
         <span style={styles.from}>{m.from || '(без отправителя)'}</span>
-        <span style={styles.subject}>{m.subject || '(без темы)'}</span>
+        <span style={styles.subject}> {m.subject || '(без темы)'}</span>
         <span style={styles.snippet}> — {m.snippet || ''}</span>
       </div>
-      <div style={styles.date}>
-        {fmtDate(m.date)}
-      </div>
+      <div style={styles.date}>{fmtDate(m.date)}</div>
     </div>
   );
+
+  /* ======= ГРУППЫ ДЛЯ ВХОДЯЩИХ/ОТПРАВЛЕННЫХ ======= */
+  const { today, months } = useMemo(() => buildGroups(list), [list]);
+
+  const collapsedSet = collapsedByFolder[folder] || new Set();
+  function toggleMonth(key) {
+    setCollapsedByFolder((prev) => {
+      const copy = { ...prev };
+      const set = new Set(copy[folder] || []);
+      if (set.has(key)) set.delete(key);
+      else set.add(key);
+      copy[folder] = set;
+      return copy;
+    });
+  }
 
   /* ======= RENDER ======= */
   return (
@@ -495,7 +505,11 @@ export default function EmailTab() {
         </nav>
 
         {!connected && (
-          <button style={styles.connectBtn} onClick={connectGmail}>
+          <button style={styles.connectBtn} onClick={function connectGmail() {
+            const w = window.open(`${FUNCTIONS_URL}/oauth_google_start`, 'oauth_gmail', 'width=600,height=700');
+            if (!w) { /* всплывающие заблокированы */ return; }
+            const t = setInterval(() => { if (!w || w.closed) { clearInterval(t); loadList(); } }, 800);
+          }}>
             Подключить Gmail
           </button>
         )}
@@ -522,51 +536,66 @@ export default function EmailTab() {
           </button>
         </div>
 
-        {/* List head */}
+        {/* Заголовок списка */}
         <div style={styles.listHead}>
           {LABELS.find(l => l.id === folder)?.title || ''}{q ? ` — поиск: ${q}` : ''}
         </div>
 
-        {/* Table */}
+        {/* Таблица / Группы */}
         <div style={styles.table}>
           {listLoading ? (
             <div style={{ padding: 16, color: colors.subtext }}>Загрузка…</div>
           ) : (list.length === 0 ? (
             <div style={{ padding: 16, color: colors.subtext }}>Писем нет</div>
           ) : (
-            folder === 'inbox' && !q
-              ? (
-                <>
-                  <div style={styles.sectionTitle}>
-                    Сегодня {todayList.length ? `(${todayList.length})` : ''}
-                  </div>
-                  {todayList.length === 0 ? (
-                    <div style={{ padding: 12, color: colors.muted }}>Нет писем за сегодня</div>
-                  ) : (
-                    todayList.map(m => <MailRow key={m.id} m={m} />)
-                  )}
+            // Группировка только для inbox/sent без активного поиска
+            (['inbox', 'sent'].includes(folder) && !q) ? (
+              <>
+                {/* Сегодня — всегда открыто */}
+                <div style={styles.sectionTitle}>
+                  Сегодня {today.length ? `(${today.length})` : ''}
+                </div>
+                {today.length === 0 ? (
+                  <div style={{ padding: 12, color: colors.muted }}>Нет писем за сегодня</div>
+                ) : (
+                  today.map(m => <MailRow key={m.id} m={m} />)
+                )}
 
-                  <div style={styles.sectionTitle} >
-                    Ранее {olderList.length ? `(${olderList.length})` : ''}
-                  </div>
-                  {olderList.length === 0 ? (
-                    <div style={{ padding: 12, color: colors.muted }}>Старых писем нет</div>
-                  ) : (
-                    olderList.map(m => <MailRow key={m.id} m={m} />)
-                  )}
-                </>
-              )
-              : (
-                list
-                  .slice()
-                  .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-                  .map(m => <MailRow key={m.id} m={m} />)
-              )
+                {/* Месяцы */}
+                {months.map(g => {
+                  const collapsed = collapsedSet.has(g.key);
+                  return (
+                    <div key={g.key}>
+                      <div
+                        style={styles.collapsibleHead}
+                        onClick={() => toggleMonth(g.key)}
+                        role="button"
+                        title={collapsed ? 'Развернуть' : 'Свернуть'}
+                      >
+                        <span style={styles.caret}>{collapsed ? '▸' : '▾'}</span>
+                        <span>{g.title} {g.items.length ? `(${g.items.length})` : ''}</span>
+                      </div>
+                      {!collapsed && (
+                        g.items.length === 0
+                          ? <div style={{ padding: 12, color: colors.muted }}>Нет писем</div>
+                          : g.items.map(m => <MailRow key={m.id} m={m} />)
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            ) : (
+              // обычный список (поиск/другие папки)
+              list
+                .slice()
+                .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+                .map(m => <MailRow key={m.id} m={m} />)
+            )
           ))}
         </div>
       </section>
 
-      {/* COMPOSE MODAL — ВЫШЕ ПО Z-INDEX */}
+      {/* COMPOSE MODAL — выше по Z */}
       {composeOpen && (
         <div
           style={{ ...styles.overlayBase, ...styles.composeOverlay }}
@@ -577,7 +606,46 @@ export default function EmailTab() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 style={{ marginTop: 0 }}>Новое письмо</h3>
-            <form onSubmit={onSubmit}>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                // отправка
+                const to = (toRef.current?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+                const subject = subjectRef.current?.value || '';
+                const baseText = textRef.current?.value || '';
+                const append = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
+                const textForBody = append ? `${baseText}${SIGNATURE}` : baseText;
+                const html = wrapHtmlTimes(`<div>${nl2br(textForBody)}</div>`);
+                const files = Array.from(filesRef.current?.files || []);
+                const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
+                  const fr = new FileReader();
+                  fr.onerror = () => rej(new Error('File read error'));
+                  fr.onload = () => res({
+                    filename: f.name,
+                    mimeType: f.type || 'application/octet-stream',
+                    base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
+                  });
+                  fr.readAsArrayBuffer(f);
+                })));
+
+                const { data: { session } = {} } = await supabase.auth.getSession();
+                const r = await fetch(`${FUNCTIONS_URL}/gmail_send`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    apikey: SUPABASE_ANON_KEY,
+                    Authorization: `Bearer ${session?.access_token || ''}`,
+                  },
+                  body: JSON.stringify({ to, subject, text: textForBody, html, attachments })
+                });
+                if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
+                setComposeOpen(false);
+                setFolder('sent');
+                loadList();
+              } catch (err) {
+                alert(err.message || String(err));
+              }
+            }}>
               <div style={styles.formRow}>
                 <div>От</div>
                 <input value={ACCOUNT_EMAIL} disabled style={styles.input} />
@@ -611,10 +679,10 @@ export default function EmailTab() {
                 <input ref={filesRef} type="file" multiple />
               </div>
               <div style={styles.btnLine}>
-                <button type="submit" style={styles.btnPrimary} disabled={sending}>
+                <button type="submit" style={styles.btnPrimary}>
                   Отправить
                 </button>
-                <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)} disabled={sending}>
+                <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)}>
                   Отмена
                 </button>
               </div>
@@ -623,7 +691,7 @@ export default function EmailTab() {
         </div>
       )}
 
-      {/* READ MODAL — НИЖЕ ПО Z-INDEX */}
+      {/* READ MODAL — ниже по Z */}
       {readOpen && (
         <div
           style={{ ...styles.overlayBase, ...styles.readOverlay }}
