@@ -78,7 +78,6 @@ const styles = {
   date: { textAlign: 'right', color: colors.subtext },
 
   /* MODALS */
-  // общий базовый оверлей
   overlayBase: {
     position: 'fixed',
     inset: 0,
@@ -89,14 +88,8 @@ const styles = {
     padding: 24,
     overflow: 'auto',
   },
-  // Оверлей чтения: ниже по Z
-  readOverlay: {
-    zIndex: 50,
-  },
-  // Оверлей композера: выше по Z
-  composeOverlay: {
-    zIndex: 60,
-  },
+  readOverlay: { zIndex: 50 },
+  composeOverlay: { zIndex: 60 },
 
   composeModal: {
     width: 720, maxWidth: '90vw',
@@ -120,6 +113,10 @@ const styles = {
     marginBottom: 8,
     borderBottom: `1px solid ${colors.border}`,
     paddingBottom: 8,
+    position: 'sticky',     // ★ держим шапку на виду при прокрутке
+    top: 0,                 // ★
+    background: colors.white, // ★
+    zIndex: 1,              // ★
   },
   readMeta: { color: colors.subtext, margin: '6px 0 8px' },
   readBody: {
@@ -236,6 +233,7 @@ export default function EmailTab() {
   const [readOpen, setReadOpen] = useState(false);
   const [current, setCurrent] = useState(null);
   const [reading, setReading] = useState(false);
+  const readBodyRef = useRef(null); // ★ ref на скролл-контейнер
 
   const API = useMemo(() => ({
     list: `${FUNCTIONS_URL}/gmail_list`,
@@ -259,9 +257,7 @@ export default function EmailTab() {
 
   // открыть композер и проставить значения, предварительно закрыв чтение
   function openComposerWith({ to = '', subject = '', body = '' } = {}) {
-    // 1) закрываем модалку чтения (если открыта), чтобы она не перекрывала
-    if (readOpen) setReadOpen(false);
-    // 2) в следующем тике открываем композер и заполняем поля
+    if (readOpen) setReadOpen(false); // ★ закрываем чтение, чтобы композер был поверх
     setTimeout(() => {
       setComposeOpen(true);
       setTimeout(() => {
@@ -287,21 +283,16 @@ export default function EmailTab() {
   // группировка: сегодня / ранее (только для inbox)
   const { todayList, olderList } = useMemo(() => {
     if (folder !== 'inbox') return { todayList: [], olderList: [] };
-
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-
     const safeList = Array.isArray(list) ? list : [];
-
-    const t = [];
-    const o = [];
+    const t = []; const o = [];
     for (const m of safeList) {
       const d = m?.date ? new Date(m.date) : null;
       if (d && d >= startOfToday && d <= endOfToday) t.push(m);
       else o.push(m);
     }
-
     const byDesc = (a, b) => new Date(b.date || 0) - new Date(a.date || 0);
     return { todayList: t.sort(byDesc), olderList: o.sort(byDesc) };
   }, [list, folder]);
@@ -359,6 +350,13 @@ export default function EmailTab() {
       setReading(false);
     }
   }
+
+  // ★ Всегда прокручиваем начало письма наверх, когда открыли/подгрузили
+  useEffect(() => {
+    if (readOpen && readBodyRef.current) {
+      readBodyRef.current.scrollTop = 0;
+    }
+  }, [readOpen, current, reading]); // ★
 
   // Ответить
   function onReply() {
@@ -647,7 +645,7 @@ export default function EmailTab() {
               <div><b>Дата:</b> {current?.date ? new Date(current.date).toLocaleString() : ''}</div>
             </div>
 
-            <div style={styles.readBody}>
+            <div style={styles.readBody} ref={readBodyRef}>
               {reading ? (
                 <div style={{ color: colors.subtext }}>Загрузка письма…</div>
               ) : current?.html ? (
