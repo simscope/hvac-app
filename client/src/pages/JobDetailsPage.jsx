@@ -1062,14 +1062,15 @@ Services Licensed & Insured | Serving NYC and NJ`;
     });
 
     try {
-      await callEdgeAuth('send-invoice-email-multi', {
-        to, subject, text, html,
-        attachments,            // [{bucket,key,filename}]
-        job_id: jobId,
-        client_name: client?.full_name || null,
-        client_address: client?.address || null,
-        job_number: job?.job_number || null,
-      });
+     await callEdgeAuth('gmail_send', {
+    to: [to],               // gmail_send ждёт массив получателей
+    subject,
+    text,                   // html можно не передавать — функция шлёт plain/text
+    attachments: attachments.map(a => ({
+      ...a,                 // { bucket, key, filename }
+      mimeType: 'application/pdf'
+    })),
+  });
       alert(`Sent ${attachments.length} invoice(s) to ${to}`);
     } catch (e) {
       alert('Failed to send multiple invoices: ' + (e.message || e));
@@ -1792,3 +1793,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
