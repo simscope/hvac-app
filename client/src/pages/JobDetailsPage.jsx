@@ -913,7 +913,7 @@ export default function JobDetailsPage() {
   function escapeHtml(s) {
     return String(s ?? '')
       .replace(/&/g,'&amp;')
-      .replace(/<//g,'&lt;')
+      .replace(/</g,'&lt;')
       .replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;')
       .replace(/'/g,'&#39;');
@@ -1800,3 +1800,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
