@@ -262,6 +262,9 @@ export default function EmailTab() {
   const [reading, setReading] = useState(false);
   const readBodyRef = useRef(null);
 
+  // ► кэш получателей для отправленных
+  const [recipients, setRecipients] = useState({}); // { [id]: "to@addr, ..." }
+
   // ► по умолчанию месяцы закрыты
   const [expandedByFolder, setExpandedByFolder] = useState({
     inbox: new Set(),
@@ -306,6 +309,36 @@ export default function EmailTab() {
   }
   useEffect(() => { loadList(); /* eslint-disable-line */ }, [folder]);
 
+  // ► лениво догружаем "Кому" для отправленных, если в списке поле пустое
+  useEffect(() => {
+    if (folder !== 'sent' || !Array.isArray(list) || list.length === 0) return;
+    const need = list.filter(m => !m.to && !recipients[m.id]).slice(0, 25);
+    if (need.length === 0) return;
+
+    (async () => {
+      try {
+        const pairs = await Promise.all(
+          need.map(async (m) => {
+            try {
+              const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id: m.id }) });
+              if (!r.ok) throw new Error(await r.text());
+              const data = await r.json();
+              return [m.id, data?.to || ''];
+            } catch {
+              return [m.id, ''];
+            }
+          })
+        );
+        setRecipients(prev => {
+          const next = { ...prev };
+          for (const [id, to] of pairs) if (to) next[id] = to;
+          return next;
+        });
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folder, list]);
+
   /* OPEN / READ */
   async function openMail(id) {
     setCurrent(null); setReadOpen(true); setReading(true);
@@ -317,8 +350,15 @@ export default function EmailTab() {
     } catch (e) {
       console.error(e);
       const m = list.find(x => x.id === id);
-      // фолбэк: сохраняем и получателя, чтобы было видно «Кому»
-      setCurrent({ id, from: m?.from, to: m?.to || '', subject: m?.subject, date: m?.date, text: m?.snippet || '(не удалось загрузить тело письма)', attachments: [] });
+      setCurrent({
+        id,
+        from: m?.from,
+        to: recipients[id] || m?.to || '',
+        subject: m?.subject,
+        date: m?.date,
+        text: m?.snippet || '(не удалось загрузить тело письма)',
+        attachments: []
+      });
     } finally { setReading(false); }
   }
   useEffect(() => { if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0; }, [readOpen, current, reading]);
@@ -371,9 +411,11 @@ export default function EmailTab() {
     setReadOpen(false);
   }
 
-  /* ROW (показываем адрес собеседника: для Sent — Кому, для Inbox — От кого) */
+  /* ROW (для Sent показываем адресата, для Inbox — отправителя) */
   const MailRow = ({ m }) => {
-    const peer = (folder === 'sent') ? (m.to || '(без получателя)') : (m.from || '(без отправителя)');
+    const peer = (folder === 'sent')
+      ? (recipients[m.id] || m.to || '(без получателя)')
+      : (m.from || '(без отправителя)');
     return (
       <div key={m.id} style={styles.row} onClick={() => openMail(m.id)} role="button" title="Открыть">
         <div style={{ minWidth: 0 }}>
