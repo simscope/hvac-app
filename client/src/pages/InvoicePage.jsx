@@ -9,7 +9,10 @@ import autoTable from 'jspdf-autotable';
 const pad = (n) => String(n).padStart(2, '0');
 const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fromInputDate = (s) => { if (!s) return new Date(); const [y, m, day] = s.split('-').map(Number); return new Date(y, (m || 1) - 1, day || 1); };
-const human = (d) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+const human = (d) => { const dt = new Date(d);
+ const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+ return `${pad(dt.getDate())} ${M[dt.getMonth()]} ${dt.getFullYear()}`;
+};
 const N = (v) => Number(v || 0);
 const clean = (v) => { const s = String(v ?? '').trim(); return s && s.toLowerCase() !== 'empty' ? s : ''; };
 function composeAddress(o = {}) {
@@ -611,5 +614,6 @@ export default function InvoicePage() {
     </div>
   );
 }
+
 
 
