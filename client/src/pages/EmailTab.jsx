@@ -262,7 +262,7 @@ export default function EmailTab() {
   const [reading, setReading] = useState(false);
   const readBodyRef = useRef(null);
 
-  // ► ВАЖНО: по умолчанию месяцы закрыты. Храним набор *раскрытых* месяцев отдельно для каждой папки.
+  // ► по умолчанию месяцы закрыты
   const [expandedByFolder, setExpandedByFolder] = useState({
     inbox: new Set(),
     sent: new Set(),
@@ -317,7 +317,8 @@ export default function EmailTab() {
     } catch (e) {
       console.error(e);
       const m = list.find(x => x.id === id);
-      setCurrent({ id, from: m?.from, to: '', subject: m?.subject, date: m?.date, text: m?.snippet || '(не удалось загрузить тело письма)', attachments: [] });
+      // фолбэк: сохраняем и получателя, чтобы было видно «Кому»
+      setCurrent({ id, from: m?.from, to: m?.to || '', subject: m?.subject, date: m?.date, text: m?.snippet || '(не удалось загрузить тело письма)', attachments: [] });
     } finally { setReading(false); }
   }
   useEffect(() => { if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0; }, [readOpen, current, reading]);
@@ -370,17 +371,20 @@ export default function EmailTab() {
     setReadOpen(false);
   }
 
-  /* ROW */
-  const MailRow = ({ m }) => (
-    <div key={m.id} style={styles.row} onClick={() => openMail(m.id)} role="button" title="Открыть">
-      <div style={{ minWidth: 0 }}>
-        <span style={styles.from}>{m.from || '(без отправителя)'}</span>
-        <span style={styles.subject}> {m.subject || '(без темы)'}</span>
-        <span style={styles.snippet}> — {m.snippet || ''}</span>
+  /* ROW (показываем адрес собеседника: для Sent — Кому, для Inbox — От кого) */
+  const MailRow = ({ m }) => {
+    const peer = (folder === 'sent') ? (m.to || '(без получателя)') : (m.from || '(без отправителя)');
+    return (
+      <div key={m.id} style={styles.row} onClick={() => openMail(m.id)} role="button" title="Открыть">
+        <div style={{ minWidth: 0 }}>
+          <span style={styles.from}>{peer}</span>
+          <span style={styles.subject}> {m.subject || '(без темы)'}</span>
+          <span style={styles.snippet}> — {m.snippet || ''}</span>
+        </div>
+        <div style={styles.date}>{fmtDate(m.date)}</div>
       </div>
-      <div style={styles.date}>{fmtDate(m.date)}</div>
-    </div>
-  );
+    );
+  };
 
   /* GROUPS */
   const { today, months } = useMemo(() => buildGroups(list), [list]);
@@ -437,7 +441,7 @@ export default function EmailTab() {
             <span>🔎</span>
             <input
               style={styles.searchInput}
-              placeholder="Поиск (gmail: from:, subject:, has:attachment …)"
+              placeholder="Поиск (gmail: from:, to:, subject:, has:attachment …)"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && loadList()}
@@ -468,7 +472,7 @@ export default function EmailTab() {
                 )}
 
                 {months.map(g => {
-                  const expanded = expandedSet.has(g.key); // по умолчанию false => закрыт
+                  const expanded = expandedSet.has(g.key);
                   return (
                     <div key={g.key}>
                       <div
