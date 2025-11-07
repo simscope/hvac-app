@@ -283,7 +283,25 @@ export default function JobDetailsPage() {
   // invoices
   const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,db_id}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
-  const [sendingInvId, setSendingInvId] = useState(null); // UI: show spinner/disable per-invoice send
+  const [sendingInvId, setSendingInvId] = useState(null); // UI: spinner для одиночной отправки
+
+  // NEW: выбор нескольких инвойсов
+  const [invChecked, setInvChecked] = useState({});
+  const allInvChecked = useMemo(
+    () => invoices.length > 0 && invoices.every((x) => invChecked[keyOfInv(x)]),
+    [invoices, invChecked]
+  );
+  const selectedInvoices = useMemo(
+    () => invoices.filter((x) => invChecked[keyOfInv(x)]),
+    [invoices, invChecked]
+  );
+  const canSendSelected = useMemo(
+    () =>
+      selectedInvoices.length > 0 &&
+      selectedInvoices.every((i) => i.hasFile) &&
+      !!normalizeEmail(client?.email),
+    [selectedInvoices, client]
+  );
 
   // to avoid auto-archive loop
   const autoArchivedOnce = useRef(false);
@@ -292,6 +310,10 @@ export default function JobDetailsPage() {
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', message: '' });
   const [emailInvSelected, setEmailInvSelected] = useState(null);
+
+  // NEW: модалка для мульти-отправки
+  const [emailModalMultiOpen, setEmailModalMultiOpen] = useState(false);
+  const [emailDraftMulti, setEmailDraftMulti] = useState({ to: '', subject: '', message: '' });
 
   /* ---------- load ---------- */
   useEffect(() => {
@@ -806,12 +828,15 @@ export default function JobDetailsPage() {
       });
       merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
       setInvoices(merged);
+      setInvChecked({}); // сброс мультивыбора
     } catch {
       setInvoices([]);
     } finally {
       setInvoicesLoading(false);
     }
   };
+
+  const keyOfInv = (inv) => `${inv.source}-${inv.invoice_no || inv.name}`;
 
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) window.open(item.url, '_blank', 'noopener,noreferrer');
@@ -839,55 +864,44 @@ export default function JobDetailsPage() {
 
   // --- replace whole deleteInvoice with this version ---
   const deleteInvoice = async (item) => {
-    // 0) sanity
     if (!item) return;
 
-    // 1) определяем номер инвойса и имя файла
     const invoiceNoStr = item?.invoice_no != null ? String(item.invoice_no) : null;
     const invoiceNoNum = invoiceNoStr ? Number(invoiceNoStr) : null;
     const fileName = item?.name || (invoiceNoStr ? `invoice_${invoiceNoStr}.pdf` : null);
 
     if (!window.confirm(`Delete invoice${invoiceNoStr ? ' #' + invoiceNoStr : ''}?`)) return;
 
-    // 2) пробуем удалить через Edge (она сама чистит Storage + БД)
     let edgeOk = false;
     try {
       await callEdgeAuth('admin-delete-invoice', {
         bucket: INVOICES_BUCKET,
         job_id: jobId,
-        invoice_no: invoiceNoStr,   // строкой — как ждёт Edge
-        file_name: fileName,        // опционально; Edge сама соберёт путь <jobId>/<file_name>
+        invoice_no: invoiceNoStr,
+        file_name: fileName,
       });
       edgeOk = true;
     } catch (e) {
       console.warn('Edge delete failed:', e?.message || e);
     }
 
-    // 3) Фоллбек: чистим руками, если Edge не смогла
     if (!edgeOk) {
-      // 3a) PDF в Storage
       try {
         if (fileName) await invStorage().remove([`${jobId}/${fileName}`]);
       } catch (e) {
         console.warn('Storage fallback delete warn:', e?.message || e);
       }
-      // 3b) запись в БД
       try {
         if (item?.db_id) {
           await supabase.from('invoices').delete().eq('id', item.db_id);
         } else if (invoiceNoNum != null) {
-          await supabase
-            .from('invoices')
-            .delete()
-            .eq('job_id', jobId)
-            .eq('invoice_no', invoiceNoNum);
+          await supabase.from('invoices').delete().eq('job_id', jobId).eq('invoice_no', invoiceNoNum);
         }
       } catch (e) {
         console.warn('DB cleanup warn:', e?.message || e);
       }
     }
 
-    // 4) обновить список
     await loadInvoices();
   };
 
@@ -899,7 +913,7 @@ export default function JobDetailsPage() {
   function escapeHtml(s) {
     return String(s ?? '')
       .replace(/&/g,'&amp;')
-      .replace(/</g,'&lt;')
+      .replace(/<//g,'&lt;')
       .replace(/>/g,'&gt;')
       .replace(/"/g,'&quot;')
       .replace(/'/g,'&#39;');
@@ -911,7 +925,6 @@ export default function JobDetailsPage() {
   const buildDefaultEmailDraft = (inv) => {
     const to = normalizeEmail(client?.email) || '';
     const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
-    const jobNo = job?.job_number ? `#${job.job_number}` : '';
     const subject = `Invoice ${invoiceNo ? '#' + invoiceNo : ''} — Sim Scope Inc.`;
     const message =
 `Hello${client?.full_name ? ' ' + client.full_name : ''},
@@ -930,7 +943,29 @@ Services Licensed & Insured | Serving NYC and NJ`;
     return { to, subject, message };
   };
 
-  // NEW: send invoice email via Edge Function (now supports overrides from modal)
+  // Build default email draft for MULTI
+  const buildDefaultEmailDraftMulti = (list) => {
+    const to = normalizeEmail(client?.email) || '';
+    const nums = list.map((i) => i.invoice_no ? `#${i.invoice_no}` : i.name).join(', ');
+    const subject = `Invoices ${nums} — Sim Scope Inc.`;
+    const message =
+`Hello${client?.full_name ? ' ' + client.full_name : ''},
+
+Please find your invoices (${nums}) attached as PDFs in one email.
+
+If you have any questions, just reply to this email.
+
+—
+Sim HVAC & Appliance repair
+New York City, NY
+Phone: (929) 412-9042 Zelle
+Website: https://appliance-hvac-repair.com
+HVAC • Appliance Repair
+Services Licensed & Insured | Serving NYC and NJ`;
+    return { to, subject, message };
+  };
+
+  // --- SINGLE: send invoice email via Edge Function ---
   const sendInvoiceEmail = async (inv, overrides = {}) => {
     if (!inv?.hasFile) {
       alert('Invoice PDF is not in storage yet. Open the invoice and save it first, then press Refresh.');
@@ -963,12 +998,9 @@ Services Licensed & Insured | Serving NYC and NJ`;
 </div>`.trim();
 
     try {
-      setSendingInvId(`${inv.source}-${inv.invoice_no || inv.name}`);
+      setSendingInvId(keyOfInv(inv));
       await callEdgeAuth('send-invoice-email', {
-        to,
-        subject,
-        text,
-        html,
+        to, subject, text, html,
         bucket: INVOICES_BUCKET,
         key,           // "<jobId>/<fileName>"
         job_id: jobId,
@@ -985,7 +1017,64 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // Modal open/close + send
+  // --- MULTI: send ONE email with MULTIPLE attachments ---
+  // ожидаемый формат Edge функции "send-invoice-email-multi":
+  // { to, subject, text, html, attachments: [{ bucket, key, filename }], job_id, client_name, client_address, job_number }
+  const sendInvoicesEmailMulti = async (list, overrides = {}) => {
+    const allHaveFile = list.every((i) => i.hasFile);
+    if (!allHaveFile) {
+      alert('Some invoices are not saved in storage yet. Open & save PDFs, then Refresh.');
+      return;
+    }
+    const draft = buildDefaultEmailDraftMulti(list);
+    const to = normalizeEmail(overrides.to ?? draft.to);
+    if (!to) {
+      alert('Client email is empty. Please fill it in.');
+      return;
+    }
+    const subject = String(overrides.subject ?? draft.subject);
+    const text = String(overrides.message ?? draft.message);
+    const html =
+`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
+  ${nl2brHtml(text)}
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+  <div style="font-size:12px;color:#334155">
+    <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
+    <div>📍 New York City, NY</div>
+    <div>📞 Phone: (929) 412-9042 Zelle</div>
+    <div>🌐 Website: <a href="https://appliance-hvac-repair.com" target="_blank">https://appliance-hvac-repair.com</a></div>
+    <div>HVAC • Appliance Repair</div>
+    <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
+  </div>
+</div>`.trim();
+
+    const attachments = list.map((i) => {
+      const invoiceNo = i?.invoice_no ? String(i.invoice_no) : null;
+      const fileName = i?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : 'invoice.pdf');
+      return {
+        bucket: INVOICES_BUCKET,
+        key: `${jobId}/${fileName}`,
+        filename: fileName,
+      };
+    });
+
+    try {
+      await callEdgeAuth('send-invoice-email-multi', {
+        to, subject, text, html,
+        attachments,
+        job_id: jobId,
+        client_name: client?.full_name || null,
+        client_address: client?.address || null,
+        job_number: job?.job_number || null,
+      });
+      alert(`Sent ${attachments.length} invoice(s) to ${to}`);
+    } catch (e) {
+      // если на бекенде пока нет multi — подсказка
+      alert('Failed to send multiple invoices: ' + (e.message || e) + '\n\nMake sure Edge function "send-invoice-email-multi" accepts {attachments:[{bucket,key,filename}]}');
+    }
+  };
+
+  // Modal open/close + send (single)
   const openEmailModal = (inv) => {
     const draft = buildDefaultEmailDraft(inv);
     setEmailDraft(draft);
@@ -1004,6 +1093,23 @@ Services Licensed & Insured | Serving NYC and NJ`;
       message: emailDraft.message,
     });
     closeEmailModal();
+  };
+
+  // MULTI modal
+  const openEmailMultiModal = () => {
+    const draft = buildDefaultEmailDraftMulti(selectedInvoices);
+    setEmailDraftMulti(draft);
+    setEmailModalMultiOpen(true);
+  };
+  const closeEmailMultiModal = () => setEmailModalMultiOpen(false);
+  const confirmSendEmailMultiFromModal = async () => {
+    if (!selectedInvoices.length) return;
+    await sendInvoicesEmailMulti(selectedInvoices, {
+      to: emailDraftMulti.to,
+      subject: emailDraftMulti.subject,
+      message: emailDraftMulti.message,
+    });
+    closeEmailMultiModal();
   };
 
   /* ---------- display ---------- */
@@ -1235,7 +1341,35 @@ Services Licensed & Insured | Serving NYC and NJ`;
           <div style={BOX}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Invoices (PDF)</div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {/* NEW: bulk actions */}
+                <label style={{ userSelect: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={allInvChecked}
+                    onChange={(e) =>
+                      setInvChecked(
+                        e.target.checked ? Object.fromEntries(invoices.map((i) => [keyOfInv(i), true])) : {}
+                      )
+                    }
+                  />
+                  <span style={{ fontSize: 12, color: '#475569' }}>Select all</span>
+                </label>
+                <button
+                  type="button"
+                  style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.5, cursor: canSendSelected ? 'pointer' : 'not-allowed' }}
+                  disabled={!canSendSelected}
+                  onClick={openEmailMultiModal}
+                  title={
+                    !normalizeEmail(client?.email)
+                      ? 'Client email is empty'
+                      : selectedInvoices.some((i) => !i.hasFile)
+                      ? 'Some PDFs are not saved yet'
+                      : 'Send one email with multiple PDFs'
+                  }
+                >
+                  Send selected
+                </button>
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
                   {invoicesLoading ? '...' : 'Refresh'}
                 </button>
@@ -1250,7 +1384,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
                 {invoices.map((inv) => {
-                  const invKey = `${inv.source}-${inv.invoice_no || inv.name}`;
+                  const invKey = keyOfInv(inv);
                   const canSend = !!inv.hasFile && !!normalizeEmail(client?.email);
                   const sending = sendingInvId === invKey;
                   return (
@@ -1265,22 +1399,33 @@ Services Licensed & Insured | Serving NYC and NJ`;
                         borderRadius: 8,
                       }}
                     >
-                      <div>
-                        <div style={{ fontWeight: 600 }}>
-                          {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                          {!inv.hasFile && (
-                            <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {/* чекбокс выбора для мульти */}
+                        <input
+                          type="checkbox"
+                          checked={!!invChecked[invKey]}
+                          onChange={() =>
+                            setInvChecked((s) => ({ ...s, [invKey]: !s[invKey] }))
+                          }
+                        />
+                        <div>
+                          <div style={{ fontWeight: 600 }}>
+                            {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
+                            {!inv.hasFile && (
+                              <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#6b7280' }}>
+                            {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
+                          </div>
+                          {!normalizeEmail(client?.email) && (
+                            <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
+                              Client email is empty — fill it above to enable sending.
+                            </div>
                           )}
                         </div>
-                        <div style={{ fontSize: 12, color: '#6b7280' }}>
-                          {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
-                        </div>
-                        {!normalizeEmail(client?.email) && (
-                          <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
-                            Client email is empty — fill it above to enable sending.
-                          </div>
-                        )}
                       </div>
+
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
                           Open PDF
@@ -1516,7 +1661,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
         </div>
       </div>
 
-      {/* === Email Compose Modal === */}
+      {/* === Email Compose Modal (single) === */}
       {emailModalOpen && (
         <div style={MODAL_BACKDROP} onClick={(e) => { if (e.target === e.currentTarget) closeEmailModal(); }}>
           <div style={MODAL_BOX}>
@@ -1569,6 +1714,67 @@ Services Licensed & Insured | Serving NYC and NJ`;
           </div>
         </div>
       )}
+
+      {/* === Email Compose Modal (MULTI) === */}
+      {emailModalMultiOpen && (
+        <div style={MODAL_BACKDROP} onClick={(e) => { if (e.target === e.currentTarget) closeEmailMultiModal(); }}>
+          <div style={MODAL_BOX}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ ...H2, margin: 0 }}>Send invoices (one email)</div>
+              <button style={BTN} onClick={closeEmailMultiModal}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div style={{ fontSize: 13, color: '#334155' }}>
+                Attachments:{' '}
+                <strong>{selectedInvoices.length} PDF</strong>
+                {selectedInvoices.length > 0 && (
+                  <span> — {selectedInvoices.map((i) => (i.invoice_no ? `#${i.invoice_no}` : i.name)).join(', ')}</span>
+                )}
+              </div>
+
+              <div style={ROW}>
+                <div>To</div>
+                <input
+                  style={INPUT}
+                  value={emailDraftMulti.to}
+                  onChange={(e) => setEmailDraftMulti((d) => ({ ...d, to: e.target.value }))}
+                  placeholder="client@example.com"
+                />
+              </div>
+              <div style={ROW}>
+                <div>Subject</div>
+                <input
+                  style={INPUT}
+                  value={emailDraftMulti.subject}
+                  onChange={(e) => setEmailDraftMulti((d) => ({ ...d, subject: e.target.value }))}
+                />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6, color: '#374151', fontWeight: 600 }}>Message</div>
+                <textarea
+                  style={{ ...TA, minHeight: 180 }}
+                  value={emailDraftMulti.message}
+                  onChange={(e) => setEmailDraftMulti((d) => ({ ...d, message: e.target.value }))}
+                />
+                <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
+                  Attachments will be added automatically
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button style={BTN} onClick={closeEmailMultiModal}>Cancel</button>
+              <button
+                style={PRIMARY}
+                onClick={confirmSendEmailMultiFromModal}
+              >
+                Send {selectedInvoices.length} PDFs
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1594,6 +1800,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
-
-
