@@ -1,4 +1,3 @@
-// client/src/pages/JobDetailsPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -184,6 +183,7 @@ function makeFrontUrl(path) {
   const clean = path.startsWith('/') ? path : `/${path}`;
   return isHash ? `${base}/#${clean}` : `${base}${clean}`;
 }
+// ''|null=>null; '123'=>123; otherwise keep string (UUID)
 const normalizeId = (v) => {
   if (v === '' || v == null) return null;
   const s = String(v);
@@ -283,9 +283,10 @@ export default function JobDetailsPage() {
   // invoices
   const [invoices, setInvoices] = useState([]); // {source,name,url,updated_at,invoice_no,hasFile,db_id}
   const [invoicesLoading, setInvoicesLoading] = useState(true);
-  const [sendingInvId, setSendingInvId] = useState(null); // UI: spinner для одиночной отправки
+  const [sendingInvId, setSendingInvId] = useState(null); // UI: show spinner/disable per-invoice send
 
-  // NEW: выбор нескольких инвойсов
+  // чекбоксы инвойсов
+  const keyOfInv = (inv) => `${inv.source}-${inv.invoice_no || inv.name}`;
   const [invChecked, setInvChecked] = useState({});
   const allInvChecked = useMemo(
     () => invoices.length > 0 && invoices.every((x) => invChecked[keyOfInv(x)]),
@@ -306,12 +307,12 @@ export default function JobDetailsPage() {
   // to avoid auto-archive loop
   const autoArchivedOnce = useRef(false);
 
-  // email modal state
+  // email modal (single)
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', message: '' });
   const [emailInvSelected, setEmailInvSelected] = useState(null);
 
-  // NEW: модалка для мульти-отправки
+  // email modal (multi)
   const [emailModalMultiOpen, setEmailModalMultiOpen] = useState(false);
   const [emailDraftMulti, setEmailDraftMulti] = useState({ to: '', subject: '', message: '' });
 
@@ -828,15 +829,13 @@ export default function JobDetailsPage() {
       });
       merged.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
       setInvoices(merged);
-      setInvChecked({}); // сброс мультивыбора
+      setInvChecked({});
     } catch {
       setInvoices([]);
     } finally {
       setInvoicesLoading(false);
     }
   };
-
-  const keyOfInv = (inv) => `${inv.source}-${inv.invoice_no || inv.name}`;
 
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) window.open(item.url, '_blank', 'noopener,noreferrer');
@@ -862,7 +861,7 @@ export default function JobDetailsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // --- replace whole deleteInvoice with this version ---
+  // --- delete invoice (edge + fallback) ---
   const deleteInvoice = async (item) => {
     if (!item) return;
 
@@ -877,8 +876,8 @@ export default function JobDetailsPage() {
       await callEdgeAuth('admin-delete-invoice', {
         bucket: INVOICES_BUCKET,
         job_id: jobId,
-        invoice_no: invoiceNoStr,
-        file_name: fileName,
+        invoice_no: invoiceNoStr,   // строкой
+        file_name: fileName,        // опционально
       });
       edgeOk = true;
     } catch (e) {
@@ -895,7 +894,11 @@ export default function JobDetailsPage() {
         if (item?.db_id) {
           await supabase.from('invoices').delete().eq('id', item.db_id);
         } else if (invoiceNoNum != null) {
-          await supabase.from('invoices').delete().eq('job_id', jobId).eq('invoice_no', invoiceNoNum);
+          await supabase
+            .from('invoices')
+            .delete()
+            .eq('job_id', jobId)
+            .eq('invoice_no', invoiceNoNum);
         }
       } catch (e) {
         console.warn('DB cleanup warn:', e?.message || e);
@@ -909,7 +912,7 @@ export default function JobDetailsPage() {
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
-  // util for html (function declaration to be safely used above)
+  // --- helpers for email body ---
   function escapeHtml(s) {
     return String(s ?? '')
       .replace(/&/g,'&amp;')
@@ -918,10 +921,9 @@ export default function JobDetailsPage() {
       .replace(/"/g,'&quot;')
       .replace(/'/g,'&#39;');
   }
-
   const nl2brHtml = (s) => `<p>${escapeHtml(String(s || '').trim()).replace(/\n{2,}/g, '\n\n').split('\n').join('<br/>')}</p>`;
 
-  // Build default email draft for an invoice
+  // Build default email draft (single)
   const buildDefaultEmailDraft = (inv) => {
     const to = normalizeEmail(client?.email) || '';
     const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
@@ -943,10 +945,10 @@ Services Licensed & Insured | Serving NYC and NJ`;
     return { to, subject, message };
   };
 
-  // Build default email draft for MULTI
+  // Build default email draft (multi)
   const buildDefaultEmailDraftMulti = (list) => {
     const to = normalizeEmail(client?.email) || '';
-    const nums = list.map((i) => i.invoice_no ? `#${i.invoice_no}` : i.name).join(', ');
+    const nums = list.map((i) => (i.invoice_no ? `#${i.invoice_no}` : i.name)).join(', ');
     const subject = `Invoices ${nums} — Sim Scope Inc.`;
     const message =
 `Hello${client?.full_name ? ' ' + client.full_name : ''},
@@ -965,7 +967,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
     return { to, subject, message };
   };
 
-  // --- SINGLE: send invoice email via Edge Function ---
+  // Send single invoice
   const sendInvoiceEmail = async (inv, overrides = {}) => {
     if (!inv?.hasFile) {
       alert('Invoice PDF is not in storage yet. Open the invoice and save it first, then press Refresh.');
@@ -1000,7 +1002,10 @@ Services Licensed & Insured | Serving NYC and NJ`;
     try {
       setSendingInvId(keyOfInv(inv));
       await callEdgeAuth('send-invoice-email', {
-        to, subject, text, html,
+        to,
+        subject,
+        text,
+        html,
         bucket: INVOICES_BUCKET,
         key,           // "<jobId>/<fileName>"
         job_id: jobId,
@@ -1017,9 +1022,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // --- MULTI: send ONE email with MULTIPLE attachments ---
-  // ожидаемый формат Edge функции "send-invoice-email-multi":
-  // { to, subject, text, html, attachments: [{ bucket, key, filename }], job_id, client_name, client_address, job_number }
+  // Send multiple invoices
   const sendInvoicesEmailMulti = async (list, overrides = {}) => {
     const allHaveFile = list.every((i) => i.hasFile);
     if (!allHaveFile) {
@@ -1061,7 +1064,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
     try {
       await callEdgeAuth('send-invoice-email-multi', {
         to, subject, text, html,
-        attachments,
+        attachments,            // [{bucket,key,filename}]
         job_id: jobId,
         client_name: client?.full_name || null,
         client_address: client?.address || null,
@@ -1069,8 +1072,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
       });
       alert(`Sent ${attachments.length} invoice(s) to ${to}`);
     } catch (e) {
-      // если на бекенде пока нет multi — подсказка
-      alert('Failed to send multiple invoices: ' + (e.message || e) + '\n\nMake sure Edge function "send-invoice-email-multi" accepts {attachments:[{bucket,key,filename}]}');
+      alert('Failed to send multiple invoices: ' + (e.message || e));
     }
   };
 
@@ -1095,21 +1097,20 @@ Services Licensed & Insured | Serving NYC and NJ`;
     closeEmailModal();
   };
 
-  // MULTI modal
-  const openEmailMultiModal = () => {
+  // Modal open/close + send (multi)
+  const openEmailModalMulti = () => {
     const draft = buildDefaultEmailDraftMulti(selectedInvoices);
     setEmailDraftMulti(draft);
     setEmailModalMultiOpen(true);
   };
-  const closeEmailMultiModal = () => setEmailModalMultiOpen(false);
-  const confirmSendEmailMultiFromModal = async () => {
-    if (!selectedInvoices.length) return;
+  const closeEmailModalMulti = () => setEmailModalMultiOpen(false);
+  const confirmSendEmailFromModalMulti = async () => {
     await sendInvoicesEmailMulti(selectedInvoices, {
       to: emailDraftMulti.to,
       subject: emailDraftMulti.subject,
       message: emailDraftMulti.message,
     });
-    closeEmailMultiModal();
+    closeEmailModalMulti();
   };
 
   /* ---------- display ---------- */
@@ -1342,31 +1343,23 @@ Services Licensed & Insured | Serving NYC and NJ`;
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Invoices (PDF)</div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {/* NEW: bulk actions */}
-                <label style={{ userSelect: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                {/* Select all / Send selected */}
+                <label style={{ userSelect: 'none', cursor: 'pointer', fontSize: 13 }}>
                   <input
                     type="checkbox"
+                    style={{ marginRight: 6 }}
                     checked={allInvChecked}
                     onChange={(e) =>
-                      setInvChecked(
-                        e.target.checked ? Object.fromEntries(invoices.map((i) => [keyOfInv(i), true])) : {}
-                      )
+                      setInvChecked(e.target.checked ? Object.fromEntries(invoices.map((it) => [keyOfInv(it), true])) : {})
                     }
                   />
-                  <span style={{ fontSize: 12, color: '#475569' }}>Select all</span>
+                  Select all
                 </label>
                 <button
                   type="button"
                   style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.5, cursor: canSendSelected ? 'pointer' : 'not-allowed' }}
+                  onClick={openEmailModalMulti}
                   disabled={!canSendSelected}
-                  onClick={openEmailMultiModal}
-                  title={
-                    !normalizeEmail(client?.email)
-                      ? 'Client email is empty'
-                      : selectedInvoices.some((i) => !i.hasFile)
-                      ? 'Some PDFs are not saved yet'
-                      : 'Send one email with multiple PDFs'
-                  }
                 >
                   Send selected
                 </button>
@@ -1397,16 +1390,14 @@ Services Licensed & Insured | Serving NYC and NJ`;
                         padding: '8px 10px',
                         border: '1px solid #eef2f7',
                         borderRadius: 8,
+                        gap: 10,
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        {/* чекбокс выбора для мульти */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <input
                           type="checkbox"
                           checked={!!invChecked[invKey]}
-                          onChange={() =>
-                            setInvChecked((s) => ({ ...s, [invKey]: !s[invKey] }))
-                          }
+                          onChange={(e) => setInvChecked((s) => ({ ...s, [invKey]: e.target.checked }))}
                         />
                         <div>
                           <div style={{ fontWeight: 600 }}>
@@ -1715,24 +1706,20 @@ Services Licensed & Insured | Serving NYC and NJ`;
         </div>
       )}
 
-      {/* === Email Compose Modal (MULTI) === */}
+      {/* === Email Compose Modal (multi) === */}
       {emailModalMultiOpen && (
-        <div style={MODAL_BACKDROP} onClick={(e) => { if (e.target === e.currentTarget) closeEmailMultiModal(); }}>
+        <div style={MODAL_BACKDROP} onClick={(e) => { if (e.target === e.currentTarget) closeEmailModalMulti(); }}>
           <div style={MODAL_BOX}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ ...H2, margin: 0 }}>Send invoices (one email)</div>
-              <button style={BTN} onClick={closeEmailMultiModal}>✕</button>
+              <div style={{ ...H2, margin: 0 }}>Send selected invoices</div>
+              <button style={BTN} onClick={closeEmailModalMulti}>✕</button>
+            </div>
+
+            <div style={{ ...MUTED, fontSize: 12 }}>
+              Selected: {selectedInvoices.map((i) => (i.invoice_no ? `#${i.invoice_no}` : i.name)).join(', ')}
             </div>
 
             <div style={{ display: 'grid', gap: 10 }}>
-              <div style={{ fontSize: 13, color: '#334155' }}>
-                Attachments:{' '}
-                <strong>{selectedInvoices.length} PDF</strong>
-                {selectedInvoices.length > 0 && (
-                  <span> — {selectedInvoices.map((i) => (i.invoice_no ? `#${i.invoice_no}` : i.name)).join(', ')}</span>
-                )}
-              </div>
-
               <div style={ROW}>
                 <div>To</div>
                 <input
@@ -1758,18 +1745,19 @@ Services Licensed & Insured | Serving NYC and NJ`;
                   onChange={(e) => setEmailDraftMulti((d) => ({ ...d, message: e.target.value }))}
                 />
                 <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
-                  Attachments will be added automatically
+                  Attachments: all selected invoice PDFs will be attached automatically
                 </div>
               </div>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button style={BTN} onClick={closeEmailMultiModal}>Cancel</button>
+              <button style={BTN} onClick={closeEmailModalMulti}>Cancel</button>
               <button
-                style={PRIMARY}
-                onClick={confirmSendEmailMultiFromModal}
+                style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.6, cursor: canSendSelected ? 'pointer' : 'not-allowed' }}
+                disabled={!canSendSelected}
+                onClick={confirmSendEmailFromModalMulti}
               >
-                Send {selectedInvoices.length} PDFs
+                Send {selectedInvoices.length}
               </button>
             </div>
           </div>
@@ -1782,9 +1770,13 @@ Services Licensed & Insured | Serving NYC and NJ`;
 /* ---------- Small components ---------- */
 function Row({ label, value, onChange }) {
   return (
-    <div style={ROW}>
+    <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'center' }}>
       <div>{label}</div>
-      <input style={INPUT} value={value || ''} onChange={(e) => onChange(e.target.value)} />
+      <input
+        style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' }}
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+      />
     </div>
   );
 }
@@ -1800,4 +1792,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
