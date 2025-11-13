@@ -568,11 +568,9 @@ export default function EmailTab() {
 
                 let text = baseText;
 
-                // подпись компании
                 if (includeSignature && !text.includes('Sim HVAC & Appliance repair')) {
                   text = `${text}${SIGNATURE}`;
                 }
-                // блок со способами оплаты (отдельно от подписи)
                 if (includePaymentOptions && !text.includes('Payment Options:')) {
                   text = `${text}${PAYMENT_OPTIONS}`;
                 }
@@ -604,30 +602,47 @@ export default function EmailTab() {
               <div style={styles.formRow}>
                 <div>Текст</div>
                 <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
-                <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
-                  <input
-                    type="checkbox"
-                    checked={includeSignature}
-                    onChange={(e)=>setIncludeSignature(e.target.checked)}
-                  />
-                  Добавлять подпись компании
-                </label>
-                <div style={styles.signatureHint}>
-                  Подпись будет добавлена в конец письма:{SIGNATURE}
-                </div>
 
-                <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
-                  <input
-                    type="checkbox"
-                    checked={includePaymentOptions}
-                    onChange={(e)=>setIncludePaymentOptions(e.target.checked)}
-                  />
-                  Добавлять блок со способами оплаты
-                </label>
-                <div style={styles.signatureHint}>
-                  Блок способов оплаты (будет после подписи):{PAYMENT_OPTIONS}
+                {/* ДВЕ КОЛОНКИ: слева подпись, справа способы оплаты */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 16,
+                    marginTop: 8,
+                    alignItems: 'flex-start',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 260 }}>
+                    <label style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <input
+                        type="checkbox"
+                        checked={includeSignature}
+                        onChange={(e)=>setIncludeSignature(e.target.checked)}
+                      />
+                      Добавлять подпись компании
+                    </label>
+                    <div style={styles.signatureHint}>
+                      Подпись будет добавлена в конец письма:{SIGNATURE}
+                    </div>
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 260 }}>
+                    <label style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <input
+                        type="checkbox"
+                        checked={includePaymentOptions}
+                        onChange={(e)=>setIncludePaymentOptions(e.target.checked)}
+                      />
+                      Добавлять блок со способами оплаты
+                    </label>
+                    <div style={styles.signatureHint}>
+                      Блок способов оплаты (будет после подписи):{PAYMENT_OPTIONS}
+                    </div>
+                  </div>
                 </div>
               </div>
+
               <div style={styles.formRow}><div>Вложения</div><input ref={filesRef} type="file" multiple /></div>
               <div style={styles.btnLine}>
                 <button type="submit" style={styles.btnPrimary}>Отправить</button>
