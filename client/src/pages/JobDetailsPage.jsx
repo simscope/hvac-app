@@ -474,9 +474,7 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-    theIds: {
       const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
-
       const nameByUserId = {};
       if (ids.length) {
         const { data: techPeople } = await supabase
@@ -1829,3 +1827,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
