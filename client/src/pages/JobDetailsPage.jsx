@@ -474,23 +474,22 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-      const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
-      const nameByUserId = {};
-      if (ids.length) {
-        const { data: techPeople } = await supabase
-          .from('technicians')
-          .select('auth_user_id, name')
-          .in('auth_user_id', ids);
-        (techPeople || []).forEach((t) => {
-          if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
-        });
-        const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
-        (profs || []).forEach((p) => {
-          if (p?.id && !nameByUserId[p.id] && p.full_name?.trim()) nameByUserId[p.id] = p.full_name.trim();
-        });
-      }
-      setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
+    const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
+    const nameByUserId = {};
+    if (ids.length) {
+      const { data: techPeople } = await supabase
+        .from('technicians')
+        .select('auth_user_id, name')
+        .in('auth_user_id', ids);
+      (techPeople || []).forEach((t) => {
+        if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
+      });
+      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
+      (profs || []).forEach((p) => {
+        if (p?.id && !nameByUserId[p.id] && p.full_name?.trim()) nameByUserId[p.id] = p.full_name.trim();
+      });
     }
+    setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
     setCommentsLoading(false);
   };
 
@@ -1827,4 +1826,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
