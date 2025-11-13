@@ -109,9 +109,15 @@ export default function CalendarPage() {
   useEffect(() => {
     (async () => {
       const [{ data: j, error: ej }, { data: t, error: et }, { data: c, error: ec }] = await Promise.all([
-        supabase.from('jobs').select('*'),
-        supabase.from('technicians').select('id, name, role').in('role', ['technician', 'tech']).order('name', { ascending: true }),
-        supabase.from('clients').select('id, full_name, address, company'),
+        supabase.from('jobs').select('*'), // грузим ВСЕ, включая архив
+        supabase
+          .from('technicians')
+          .select('id, name, role')
+          .in('role', ['technician', 'tech'])
+          .order('name', { ascending: true }),
+        supabase
+          .from('clients')
+          .select('id, full_name, address, company'),
       ]);
       if (ej) console.error('jobs select error:', ej);
       if (et) console.error('tech select error:', et);
@@ -208,6 +214,7 @@ export default function CalendarPage() {
   const filteredJobs = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (jobs || []).filter((j) => {
+      if (j.archived_at) return false;           // <<< НЕ показываем архив в календаре
       if (!j.appointment_time) return false;
       if (activeTech !== 'all' && String(j.technician_id) !== String(activeTech)) return false;
       if (!q) return true;
@@ -256,7 +263,12 @@ export default function CalendarPage() {
   }, [filteredJobs, activeTech, techById, techColor]);
 
   const unassigned = useMemo(
-    () => (jobs || []).filter((j) => !j.appointment_time || !j.technician_id),
+    () =>
+      (jobs || []).filter(
+        (j) =>
+          !j.archived_at &&                       // <<< архив не показываем среди Unassigned
+          (!j.appointment_time || !j.technician_id)
+      ),
     [jobs]
   );
 
