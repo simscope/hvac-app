@@ -66,7 +66,7 @@ export default function MaterialsPage() {
 
   // comments & photos (ALL for the job)
   const [modalComments, setModalComments] = useState([]); // [{text,created_at}]
-  const [modalPhotos, setModalPhotos] = useState([]);     // [url, ...]
+  const [modalPhotos, setModalPhotos] = useState([]); // [url, ...]
 
   const [hoveredJobId, setHoveredJobId] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -397,7 +397,7 @@ export default function MaterialsPage() {
   const clientDisplay = (job) => {
     const c = clientsById.get(job.client_id);
     if (!c) return '—';
-    return c.company ? c.company : (c.full_name || '—');
+    return c.company ? c.company : c.full_name || '—';
   };
 
   const jobHeaderLine = (job) => {
@@ -413,7 +413,9 @@ export default function MaterialsPage() {
       <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Materials by Jobs</h2>
 
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
-        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the materials editor. You can change <strong>Status</strong> and <strong>Technician</strong> inline.
+        💡 Tip: click <span style={linkNumStyle}>job number</span> or anywhere on a row to open the
+        materials editor. You can change <strong>Status</strong> and <strong>Technician</strong>{' '}
+        inline.
       </div>
 
       {/* Quick filters */}
@@ -425,7 +427,9 @@ export default function MaterialsPage() {
             onChange={(e) => setFilterStatus(e.target.value)}
             style={{ ...input, width: 280 }}
           >
-            <option value="all">All (showing only: Recall / Part(s) ordered / Waiting for parts)</option>
+            <option value="all">
+              All (showing only: Recall / Part(s) ordered / Waiting for parts)
+            </option>
             {STATUS_VALUES.map((s) => (
               <option key={s} value={s}>
                 {STATUS_LABEL(s)}
@@ -451,7 +455,9 @@ export default function MaterialsPage() {
         </div>
 
         <div style={{ flex: 1 }}>
-          <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>Search by Job # / ID</label>
+          <label style={{ display: 'block', fontSize: 12, marginBottom: 4 }}>
+            Search by Job # / ID
+          </label>
           <input
             value={searchJob}
             onChange={(e) => setSearchJob(e.target.value)}
@@ -514,7 +520,8 @@ export default function MaterialsPage() {
               if (!job) return null;
 
               const jobTechVal = job.technician_id == null ? '' : String(job.technician_id);
-              const techExists = jobTechVal === '' || technicians.some((t) => String(t.id) === jobTechVal);
+              const techExists =
+                jobTechVal === '' || technicians.some((t) => String(t.id) === jobTechVal);
 
               return (
                 <tr key={row.id} {...rowClickableProps(job)}>
@@ -535,7 +542,9 @@ export default function MaterialsPage() {
                     >
                       <option value="">—</option>
                       {!techExists && jobTechVal && (
-                        <option value={jobTechVal}>{techName(job.technician_id) || `ID ${jobTechVal}`}</option>
+                        <option value={jobTechVal}>
+                          {techName(job.technician_id) || `ID ${jobTechVal}`}
+                        </option>
                       )}
                       {technicians.map((t) => (
                         <option key={t.id} value={String(t.id)}>
@@ -631,7 +640,7 @@ export default function MaterialsPage() {
                     <a key={`${url}_${i}`} href={url} target="_blank" rel="noreferrer">
                       <img
                         src={url}
-                        alt={`job photo ${i + 1}`}
+                        alt={`Job ${modalJob?.job_number || modalJob?.id || ''} ${i + 1}`}
                         width={120}
                         style={{ borderRadius: 4, border: '1px solid #ddd' }}
                       />
