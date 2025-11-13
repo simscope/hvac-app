@@ -217,7 +217,7 @@ export default function TopNav() {
             <NavLink
               key={l.to}
               to={l.to}
-              end={l.end}   {/* 👈 вот это фикс */}
+              end={l.end}
               className={({ isActive }) => 'tn__link' + (isActive ? ' is-active' : '')}
               aria-label={`${l.label}${l.to === '/chat' && chatUnreadTotal ? `, ${chatUnreadTotal} непрочитанных` : ''}`}
             >
