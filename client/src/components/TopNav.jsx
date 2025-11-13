@@ -32,6 +32,15 @@ const Icon = {
       <path fill="currentColor" d="M12 2 3 6.5V18l9 4 9-4V6.5L12 2Zm0 2.2 6.8 3.2L12 10.6 5.2 7.4 12 4.2ZM5 9.6l7 3.3v6.9l-7-3.1V9.6Zm9 10.2v-6.9l7-3.3v7.1l-7 3.1Z"/>
     </svg>
   ),
+  // Новая иконка для техбиблиотеки
+  Library: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path
+        fill="currentColor"
+        d="M4 3h6a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V3Zm10 0h4a2 2 0 0 1 2 2v15h-6V5a2 2 0 0 0-2-2h2Zm-8 2v13h6V5H6Zm10 0v13h4V5h-4Z"
+      />
+    </svg>
+  ),
   Chat: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v15l4-3h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2ZM6 9h8v2H6V9Zm0-4h12v2H6V5Z"/>
@@ -78,7 +87,9 @@ export default function TopNav() {
       const raw = localStorage.getItem('CHAT_UNREAD_TOTAL');
       const n = raw ? parseInt(raw, 10) : 0;
       return Number.isFinite(n) ? n : 0;
-    } catch { return 0; }
+    } catch {
+      return 0;
+    }
   });
 
   const channelRef = useRef(null);
@@ -91,12 +102,17 @@ export default function TopNav() {
   };
 
   const refreshUnreadFromServer = async () => {
-    if (!uid) { setChatUnreadTotal(0); return; }
+    if (!uid) {
+      setChatUnreadTotal(0);
+      return;
+    }
     const { data, error } = await supabase.rpc('get_unread_by_chat');
     if (error) return;
     const sum = (data || []).reduce((s, r) => s + (Number(r.unread) || 0), 0);
     setChatUnreadTotal(sum);
-    try { localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum)); } catch {}
+    try {
+      localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum));
+    } catch {}
   };
 
   useEffect(() => {
@@ -110,7 +126,9 @@ export default function TopNav() {
 
   useEffect(() => {
     if (channelRef.current) {
-      try { supabase.removeChannel(channelRef.current); } catch {}
+      try {
+        supabase.removeChannel(channelRef.current);
+      } catch {}
       channelRef.current = null;
     }
     clearInterval(pollRef.current);
@@ -121,11 +139,13 @@ export default function TopNav() {
 
     const ch = supabase
       .channel('topnav-unread')
-      .on('postgres_changes',
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'chat_messages' },
         () => debounced(refreshUnreadFromServer)
       )
-      .on('postgres_changes',
+      .on(
+        'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `member_id=eq.${uid}` },
         () => debounced(refreshUnreadFromServer)
       )
@@ -133,7 +153,9 @@ export default function TopNav() {
     channelRef.current = ch;
 
     const onFocus = () => debounced(refreshUnreadFromServer, 50);
-    const onVisibility = () => { if (document.visibilityState === 'visible') onFocus(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') onFocus();
+    };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
 
@@ -145,7 +167,9 @@ export default function TopNav() {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
       clearInterval(pollRef.current);
-      try { if (channelRef.current) supabase.removeChannel(channelRef.current); } catch {}
+      try {
+        if (channelRef.current) supabase.removeChannel(channelRef.current);
+      } catch {}
       channelRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,8 +181,12 @@ export default function TopNav() {
   const [logoSrc, setLogoSrc] = useState(`${base}/logo_invoice_header.png`);
   const [triedFallback, setTriedFallback] = useState(false);
   const onLogoError = () => {
-    if (!triedFallback) { setLogoSrc(`${base}/logo192.png`); setTriedFallback(true); }
-    else { setLogoSrc(null); }
+    if (!triedFallback) {
+      setLogoSrc(`${base}/logo192.png`);
+      setTriedFallback(true);
+    } else {
+      setLogoSrc(null);
+    }
   };
 
   // Порядок ссылок
@@ -171,10 +199,12 @@ export default function TopNav() {
         { to: '/jobs/all', label: 'Все заявки', icon: <Icon.All /> },
         { to: '/calendar', label: 'Календарь', icon: <Icon.Calendar /> },
         { to: '/materials', label: 'Материалы', icon: <Icon.Materials /> },
+        // новая ссылка на техбиблиотеку
+        { to: '/tech-library', label: 'Тех. база', icon: <Icon.Library /> },
         { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },
         { to: '/map', label: 'Карта', icon: <Icon.Map /> },
         { to: '/email', label: 'Email', icon: <Icon.Email /> },
-        { to: '/chat', label: 'Чат', icon: <Icon.Chat /> },
+        { to: '/chat', label: 'Чат', icon: <Icon.Chat /> }
       );
     }
 
@@ -182,14 +212,18 @@ export default function TopNav() {
       arr.push(
         { to: '/technicians', label: 'Техники', icon: <Icon.Techs /> },
         { to: '/finance', label: 'Финансы', icon: <Icon.Money /> },
-        { to: '/chat-admin', label: 'Чат (админ)', icon: <Icon.AdminChat /> },
+        { to: '/chat-admin', label: 'Чат (админ)', icon: <Icon.AdminChat /> }
       );
     }
     return arr;
   }, [r]);
 
   const initials = useMemo(() => {
-    const name = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || '').trim();
+    const name =
+      (user?.user_metadata?.full_name ||
+        user?.user_metadata?.name ||
+        user?.email ||
+        '').trim();
     if (!name) return 'U';
     const parts = name.split(/\s+/);
     return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase();
@@ -218,8 +252,14 @@ export default function TopNav() {
               key={l.to}
               to={l.to}
               end={l.end}
-              className={({ isActive }) => 'tn__link' + (isActive ? ' is-active' : '')}
-              aria-label={`${l.label}${l.to === '/chat' && chatUnreadTotal ? `, ${chatUnreadTotal} непрочитанных` : ''}`}
+              className={({ isActive }) =>
+                'tn__link' + (isActive ? ' is-active' : '')
+              }
+              aria-label={`${l.label}${
+                l.to === '/chat' && chatUnreadTotal
+                  ? `, ${chatUnreadTotal} непрочитанных`
+                  : ''
+              }`}
             >
               <span className="tn__icon">{l.icon}</span>
               <span className="tn__text">{l.label}</span>
@@ -236,8 +276,12 @@ export default function TopNav() {
 
       <div className="tn__right">
         <span className={`tn__role tn__role--${r || 'none'}`}>{r || '...'}</span>
-        <div className="tn__avatar" title={user?.email || ''}>{initials}</div>
-        <button className="tn__btn" onClick={logout}>Выйти</button>
+        <div className="tn__avatar" title={user?.email || ''}>
+          {initials}
+        </div>
+        <button className="tn__btn" onClick={logout}>
+          Выйти
+        </button>
       </div>
 
       <style>{`
