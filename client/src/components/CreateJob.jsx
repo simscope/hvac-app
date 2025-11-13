@@ -97,14 +97,12 @@ export default function CreateJob({ onCreated }) {
   const onChangeField = (k) => (e) => {
     const v = e && e.target ? e.target.value : '';
     setForm((p) => ({ ...p, [k]: v }));
-    if (k === 'client_name') {
+
+    // при любом ручном вводе клиента сбрасываем привязку к существующему
+    if (k === 'client_name' || k === 'client_company' || k === 'client_phone') {
       setExistingClientId(null);
       setChosenClient(null);
-      setQ(v);
-    }
-    if (k === 'client_company') {
-      setExistingClientId(null);
-      setChosenClient(null);
+      setQ(v); // общая строка поиска для имени / компании / телефона
     }
   };
 
@@ -130,9 +128,10 @@ export default function CreateJob({ onCreated }) {
     setSuggestions([]);
     setOpen(false);
     setActiveIdx(-1);
+    setQ('');
   };
 
-  // load clients by name
+  // load clients by name/company/phone
   useEffect(() => {
     if (!q || q.trim().length < 2) {
       setSuggestions([]);
@@ -143,10 +142,13 @@ export default function CreateJob({ onCreated }) {
     setLoadingSug(true);
     const t = setTimeout(async () => {
       try {
+        const term = q.trim();
         const { data, error } = await supabase
           .from('clients')
           .select('*')
-          .ilike('full_name', `%${q.trim()}%`)
+          .or(
+            `full_name.ilike.%${term}%,company.ilike.%${term}%,phone.ilike.%${term}%`
+          )
           .order('full_name', { ascending: true })
           .limit(10);
         if (cancelled) return;
@@ -232,9 +234,24 @@ export default function CreateJob({ onCreated }) {
       let clientId = existingClientId || null;
 
       const hasAnyClientField =
-        (form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address).trim
-          ? (form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address).trim() !== ''
-          : Boolean(form.client_company || form.client_name || form.client_phone || form.client_email || form.client_address);
+        (form.client_company ||
+          form.client_name ||
+          form.client_phone ||
+          form.client_email ||
+          form.client_address).trim
+          ? (form.client_company ||
+              form.client_name ||
+              form.client_phone ||
+              form.client_email ||
+              form.client_address)
+              .trim() !== ''
+          : Boolean(
+              form.client_company ||
+                form.client_name ||
+                form.client_phone ||
+                form.client_email ||
+                form.client_address
+            );
 
       if (hasAnyClientField && !clientId) {
         const clientPayload = {
@@ -436,17 +453,33 @@ export default function CreateJob({ onCreated }) {
                         onMouseEnter={() => setActiveIdx(idx)}
                         onMouseLeave={() => setActiveIdx(-1)}
                         onClick={() => chooseClient(c)}
-                        title={`Company: ${c.company ?? '-'} • Phone: ${c.phone || '-'} • Email: ${c.email || '-'} • Address: ${c.address || '-'}${bl ? ` • BLACKLIST: ${note}` : ''}`}
+                        title={`Company: ${c.company ?? '-'} • Phone: ${c.phone || '-'} • Email: ${
+                          c.email || '-'
+                        } • Address: ${c.address || '-'}${
+                          bl ? ` • BLACKLIST: ${note}` : ''
+                        }`}
                       >
                         <div style={{ fontWeight: 600 }}>
                           {c.full_name || '—'} {c.company ? `• ${c.company}` : ''}
-                          {bl ? <span style={{ marginLeft: 8, fontSize: 11, color: '#b91c1c' }}>(чёрный список)</span> : null}
+                          {bl ? (
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                fontSize: 11,
+                                color: '#b91c1c',
+                              }}
+                            >
+                              (чёрный список)
+                            </span>
+                          ) : null}
                         </div>
                         <div style={{ fontSize: 12, color: '#6b7280' }}>
                           {c.phone || ''}
                           {c.email ? ` • ${c.email}` : ''}
                           {c.address ? ` • ${c.address}` : ''}
-                          {bl && note ? <span style={{ color: '#b91c1c' }}>{` • ${note}`}</span> : null}
+                          {bl && note ? (
+                            <span style={{ color: '#b91c1c' }}>{` • ${note}`}</span>
+                          ) : null}
                         </div>
                       </div>
                     );
