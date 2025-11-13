@@ -335,7 +335,6 @@ const JoAllJobsPage = () => {
     viewMode,
     invByJob,
     origJobs,
-    getClient,
     isFullyPaidNow,
     isRecall,
     isUnpaidNow,
@@ -343,6 +342,9 @@ const JoAllJobsPage = () => {
     persistedInWarranty,
     persistedInArchiveByWarranty,
     isDigits,
+    origById,
+    canonStatus,
+    getClient,
   ]);
 
   // Быстрые совпадения для выпадающего окна
@@ -400,7 +402,7 @@ const JoAllJobsPage = () => {
     });
 
     return uniq.slice(0, 10);
-  }, [invoiceQuery, invoices, jobs, invByJob, jobsById, isDigits, getClient]);
+  }, [invoiceQuery, invoices, jobs, invByJob, jobsById, isDigits]);
 
   const grouped = useMemo(() => {
     const g = {};
