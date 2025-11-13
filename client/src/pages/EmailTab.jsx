@@ -319,7 +319,11 @@ export default function EmailTab() {
       console.error(e); setList([]); setError(e.message || String(e));
     } finally { setListLoading(false); }
   }
-  useEffect(() => { loadList(); /* eslint-disable-line */ }, [folder]);
+
+  // 👉 загружаем список при смене папки И строки поиска
+  useEffect(() => {
+    loadList();
+  }, [folder, q]);
 
   // ► лениво догружаем "Кому" для отправленных, если в списке поле пустое
   useEffect(() => {
@@ -348,8 +352,7 @@ export default function EmailTab() {
         });
       } catch {}
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [folder, list]);
+  }, [folder, list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* OPEN / READ */
   async function openMail(id) {
