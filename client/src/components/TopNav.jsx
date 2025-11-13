@@ -32,7 +32,7 @@ const Icon = {
       <path fill="currentColor" d="M12 2 3 6.5V18l9 4 9-4V6.5L12 2Zm0 2.2 6.8 3.2L12 10.6 5.2 7.4 12 4.2ZM5 9.6l7 3.3v6.9l-7-3.1V9.6Zm9 10.2v-6.9l7-3.3v7.1l-7 3.1Z"/>
     </svg>
   ),
-  // Новая иконка для техбиблиотеки
+  // Иконка библиотеки
   Library: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path
@@ -189,7 +189,7 @@ export default function TopNav() {
     }
   };
 
-  // Порядок ссылок
+  // Порядок ссылок в топ-меню
   const links = useMemo(() => {
     // 🔴 ВАЖНО: end: true — точное совпадение пути для /jobs
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true }];
@@ -199,8 +199,6 @@ export default function TopNav() {
         { to: '/jobs/all', label: 'Все заявки', icon: <Icon.All /> },
         { to: '/calendar', label: 'Календарь', icon: <Icon.Calendar /> },
         { to: '/materials', label: 'Материалы', icon: <Icon.Materials /> },
-        // новая ссылка на техбиблиотеку
-        { to: '/tech-library', label: 'Тех. база', icon: <Icon.Library /> },
         { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },
         { to: '/map', label: 'Карта', icon: <Icon.Map /> },
         { to: '/email', label: 'Email', icon: <Icon.Email /> },
@@ -215,6 +213,12 @@ export default function TopNav() {
         { to: '/chat-admin', label: 'Чат (админ)', icon: <Icon.AdminChat /> }
       );
     }
+
+    // ✅ Тех. база — САМАЯ ПОСЛЕДНЯЯ кнопка для admin/manager
+    if (r === 'admin' || r === 'manager') {
+      arr.push({ to: '/tech-library', label: 'Тех. база', icon: <Icon.Library /> });
+    }
+
     return arr;
   }, [r]);
 
