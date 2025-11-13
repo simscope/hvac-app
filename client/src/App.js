@@ -33,6 +33,9 @@ import TasksTodayPage from './pages/TasksTodayPage.jsx';
 // 🔥 Новая страница: карта техников (живой GPS)
 import TechniciansMap from './pages/TechniciansMap.jsx';
 
+// 🔥 НОВАЯ страница: техбиблиотека
+import TechLibraryPage from './pages/TechLibraryPage.jsx';
+
 /* ───────────── Гард доступа к конкретной заявке (для техника) ───────────── */
 function JobAccess({ children }) {
   const { role, profile, user, loading } = useAuth();
@@ -151,6 +154,16 @@ function Shell() {
             element={
               <ProtectedRoute allow={['admin', 'manager']}>
                 <MaterialsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 🔥 Техбиблиотека — менеджер + админ */}
+          <Route
+            path="/tech-library"
+            element={
+              <ProtectedRoute allow={['admin', 'manager']}>
+                <TechLibraryPage />
               </ProtectedRoute>
             }
           />
