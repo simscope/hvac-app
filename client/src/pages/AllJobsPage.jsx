@@ -1,5 +1,5 @@
 // client/src/pages/AllJobsPage.jsx
-import React, { useEffect, useMemo, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
@@ -69,7 +69,11 @@ const AllJobsPage = () => {
     setLoading(false);
   };
 
-  const getClient = (id) => clients.find((c) => c.id === id);
+  // теперь через useCallback, чтобы eslint не ругался
+  const getClient = useCallback(
+    (id) => clients.find((c) => c.id === id),
+    [clients]
+  );
 
   const handleChange = (id, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
@@ -180,7 +184,7 @@ const AllJobsPage = () => {
 
   /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
-    const now = new Date(); // теперь внутри useMemo
+    const now = new Date(); // внутри useMemo
 
     return (jobs || [])
       .filter((j) => {
@@ -258,7 +262,7 @@ const AllJobsPage = () => {
     sortAsc,
     viewMode,
     invByJob,
-    getClient, // добавили в зависимости
+    getClient, // стабильный через useCallback
   ]);
 
   // Быстрые совпадения для выпадающего окна
