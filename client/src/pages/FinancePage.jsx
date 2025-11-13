@@ -4,6 +4,40 @@ import { supabase } from '../supabaseClient';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 
+/* ===== ВНЕШНИЕ ХЕЛПЕРЫ (стабильные, не зависят от стейта) ===== */
+
+// способ оплаты выбран?
+const methodChosen = (raw) => {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0';
+};
+
+// подпись способа оплаты
+const normalizePaymentLabel = (raw) => {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!v || v === '-' || v === 'none' || v === '0') return '—';
+  if (v === 'cash' || v === 'наличные') return 'Наличные';
+  if (v === 'zelle') return 'Zelle';
+  if (v === 'card' || v === 'карта') return 'Карта';
+  if (v === 'check' || v === 'чек') return 'Чек';
+  return String(raw);
+};
+
+// основной статус заявки — только jobs.status
+const getJobStatus = (j) => String(j?.status ?? '').trim();
+
+// показать статус для информации (один столбец)
+const showStatus = (j) => getJobStatus(j) || '—';
+
+// была ли какая-то клиентская оплата по заявке (SCF или Labor с выбранным методом)
+const hasClientPayment = (j) => {
+  const scf = Number(j.scf || 0);
+  const labor = Number(j.labor_price || 0);
+  const scfPaid = methodChosen(j.scf_payment_method) && scf > 0;
+  const laborPaid = methodChosen(j.labor_payment_method) && labor > 0;
+  return scfPaid || laborPaid;
+};
+
 const FinancePage = () => {
   const [jobs, setJobs] = useState([]);
   const [technicians, setTechnicians] = useState([]);
@@ -77,46 +111,14 @@ const FinancePage = () => {
     { label: 'Неоплаченные', value: 'none' },
   ];
 
-  // ===== helpers =====
-  // способ оплаты выбран?
-  const methodChosen = (raw) => {
-    const v = String(raw ?? '').trim().toLowerCase();
-    return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0';
-  };
-
-  // подпись способа оплаты
-  const normalizePaymentLabel = (raw) => {
-    const v = String(raw ?? '').trim().toLowerCase();
-    if (!v || v === '-' || v === 'none' || v === '0') return '—';
-    if (v === 'cash' || v === 'наличные') return 'Наличные';
-    if (v === 'zelle') return 'Zelle';
-    if (v === 'card' || v === 'карта') return 'Карта';
-    if (v === 'check' || v === 'чек') return 'Чек';
-    return String(raw);
-  };
-
   const formatMoney = (n) => `$${(Number.isFinite(Number(n)) ? Number(n) : 0).toFixed(2)}`;
   const getTechnicianName = (id) => {
     const tech = technicians.find((t) => String(t.id) === String(id));
     return tech ? tech.name : '—';
   };
 
-  // основной статус заявки — только jobs.status
-  const getJobStatus = (j) => String(j?.status ?? '').trim();
+  /* ===== загрузка данных ===== */
 
-  // показать статус для информации (один столбец)
-  const showStatus = (j) => getJobStatus(j) || '—';
-
-  // была ли какая-то клиентская оплата по заявке (SCF или Labor с выбранным методом)
-  const hasClientPayment = (j) => {
-    const scf = Number(j.scf || 0);
-    const labor = Number(j.labor_price || 0);
-    const scfPaid = methodChosen(j.scf_payment_method) && scf > 0;
-    const laborPaid = methodChosen(j.labor_payment_method) && labor > 0;
-    return scfPaid || laborPaid;
-  };
-
-  // ===== загрузка данных =====
   const fetchJobs = useCallback(async () => {
     const { data, error } = await supabase.from('jobs').select('*');
     if (error) console.error('Ошибка загрузки заявок:', error);
@@ -153,18 +155,22 @@ const FinancePage = () => {
     })();
   }, [fetchJobs, fetchTechnicians, fetchMaterialsSum]);
 
-  // ===== filters =====
-  const now = dayjs();
-  const inPeriod = (createdAt) => {
-    if (!createdAt) return filterPeriod === 'all';
-    const created = dayjs(createdAt);
-    if (!created.isValid()) return filterPeriod === 'all';
-    if (filterPeriod === 'all') return true;
-    if (filterPeriod === 'day') return created.isAfter(now.subtract(1, 'day'));
-    if (filterPeriod === 'week') return created.isAfter(now.subtract(7, 'day'));
-    if (filterPeriod === 'month') return created.isAfter(now.subtract(1, 'month'));
-    return true;
-  };
+  /* ===== filters ===== */
+
+  const inPeriod = useCallback(
+    (createdAt) => {
+      if (!createdAt) return filterPeriod === 'all';
+      const created = dayjs(createdAt);
+      if (!created.isValid()) return filterPeriod === 'all';
+
+      if (filterPeriod === 'all') return true;
+      if (filterPeriod === 'day') return created.isAfter(dayjs().subtract(1, 'day'));
+      if (filterPeriod === 'week') return created.isAfter(dayjs().subtract(7, 'day'));
+      if (filterPeriod === 'month') return created.isAfter(dayjs().subtract(1, 'month'));
+      return true;
+    },
+    [filterPeriod],
+  );
 
   // список статусов для селекта
   const statusOptions = useMemo(() => {
@@ -176,81 +182,80 @@ const FinancePage = () => {
     return ['all', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
   }, [jobs]);
 
-  const filteredJobs = useMemo(() => {
-    return jobs.filter((job) => {
-      const byTech = filterTech === 'all' || String(job.technician_id) === String(filterTech);
-      const byPeriod = inPeriod(job.created_at);
-      const byPaid =
-        filterPaid === 'all' ||
-        (filterPaid === 'paid' && job.salary_paid) ||
-        (filterPaid === 'unpaid' && !job.salary_paid);
-      const byStatus = filterStatus === 'all' || getJobStatus(job) === filterStatus;
+  const filteredJobs = useMemo(
+    () =>
+      jobs.filter((job) => {
+        const byTech = filterTech === 'all' || String(job.technician_id) === String(filterTech);
+        const byPeriod = inPeriod(job.created_at);
+        const byPaid =
+          filterPaid === 'all' ||
+          (filterPaid === 'paid' && job.salary_paid) ||
+          (filterPaid === 'unpaid' && !job.salary_paid);
+        const byStatus = filterStatus === 'all' || getJobStatus(job) === filterStatus;
 
-      const clientPaid = hasClientPayment(job);
-      const byClientPaid =
-        filterClientPaid === 'all' ||
-        (filterClientPaid === 'has' && clientPaid) ||
-        (filterClientPaid === 'none' && !clientPaid);
+        const clientPaid = hasClientPayment(job);
+        const byClientPaid =
+          filterClientPaid === 'all' ||
+          (filterClientPaid === 'has' && clientPaid) ||
+          (filterClientPaid === 'none' && !clientPaid);
 
-      return byTech && byPeriod && byPaid && byStatus && byClientPaid;
-    });
-  }, [
-    jobs,
-    filterTech,
-    filterPeriod,
-    filterPaid,
-    filterStatus,
-    filterClientPaid,
-    hasClientPayment,
-    inPeriod,
-  ]);
+        return byTech && byPeriod && byPaid && byStatus && byClientPaid;
+      }),
+    [jobs, filterTech, filterPaid, filterStatus, filterClientPaid, inPeriod],
+  );
 
-  // ===== row math =====
-  // Зарплата:
-  //   если payLabor == 0 и payScf > 0 -> 50
-  //   иначе 50% * max(0, (payLabor + payScf - materials))
-  // Учитываем только суммы с выбранным способом оплаты.
-  const calcRow = (j) => {
-    const scf = Number(j.scf || 0);
-    const labor = Number(j.labor_price || 0);
-    const materials = Number(materialsSum[j.id] || 0);
+  /* ===== row math (зависит от materialsSum) ===== */
 
-    const payLabor = methodChosen(j.labor_payment_method) ? labor : 0;
-    const payScf = methodChosen(j.scf_payment_method) ? scf : 0;
+  const calcRow = useCallback(
+    (j) => {
+      const scf = Number(j.scf || 0);
+      const labor = Number(j.labor_price || 0);
+      const materials = Number(materialsSum[j.id] || 0);
 
-    const onlyScf = payLabor === 0 && payScf > 0;
+      const payLabor = methodChosen(j.labor_payment_method) ? labor : 0;
+      const payScf = methodChosen(j.scf_payment_method) ? scf : 0;
 
-    const base = payLabor + payScf - materials;
-    const salary = onlyScf ? 50 : 0.5 * Math.max(0, base);
+      const onlyScf = payLabor === 0 && payScf > 0;
 
-    // "Итого (только с оплатой)" — без деталей
-    const totalCounted = payLabor + payScf;
+      const base = payLabor + payScf - materials;
+      const salary = onlyScf ? 50 : 0.5 * Math.max(0, base);
 
-    return { scf, labor, materials, total: totalCounted, salary, scfPart: onlyScf ? 50 : payScf };
-  };
+      // "Итого (только с оплатой)" — без деталей
+      const totalCounted = payLabor + payScf;
 
-  // ===== money report =====
+      return { scf, labor, materials, total: totalCounted, salary, scfPart: onlyScf ? 50 : payScf };
+    },
+    [materialsSum],
+  );
+
+  /* ===== money report ===== */
+
   // Учитываем только суммы, где выбран способ оплаты.
   const moneyReport = useMemo(() => {
-    const buckets = { 'Наличные': 0, Zelle: 0, 'Чек': 0, 'Карта': 0, 'Другое': 0 };
+    const buckets = { Наличные: 0, Zelle: 0, Чек: 0, Карта: 0, Другое: 0 };
+
     filteredJobs.forEach((j) => {
       const { scf, labor } = calcRow(j);
+
       if (methodChosen(j.scf_payment_method) && scf > 0) {
         const label = normalizePaymentLabel(j.scf_payment_method);
         if (buckets[label] !== undefined) buckets[label] += scf;
         else buckets.Другое += scf;
       }
+
       if (methodChosen(j.labor_payment_method) && labor > 0) {
         const label = normalizePaymentLabel(j.labor_payment_method);
         if (buckets[label] !== undefined) buckets[label] += labor;
         else buckets.Другое += labor;
       }
     });
+
     const total = Object.values(buckets).reduce((a, b) => a + b, 0);
     return { buckets, total };
-  }, [filteredJobs, calcRow, methodChosen, normalizePaymentLabel]);
+  }, [filteredJobs, calcRow]);
 
-  // ===== export =====
+  /* ===== export ===== */
+
   const handleExport = () => {
     const rows = filteredJobs.map((j) => {
       const { scf, labor, materials, total, salary, scfPart } = calcRow(j);
@@ -279,7 +284,8 @@ const FinancePage = () => {
     XLSX.writeFile(wb, 'finance_export.xlsx');
   };
 
-  // ===== pay flow =====
+  /* ===== pay flow ===== */
+
   const getCurrentUserName = async () => {
     try {
       const {
@@ -392,12 +398,15 @@ const FinancePage = () => {
     }
   };
 
-  // ===== selection =====
+  /* ===== selection ===== */
+
   const allVisibleIds = useMemo(() => new Set(filteredJobs.map((j) => j.id)), [filteredJobs]);
+
   const allVisibleSelected = useMemo(
     () => filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id)),
     [filteredJobs, selected],
   );
+
   const toggleSelectAllVisible = () => {
     if (allVisibleSelected) {
       const next = new Set(selected);
@@ -409,6 +418,7 @@ const FinancePage = () => {
       setSelected(next);
     }
   };
+
   const toggleRow = (id) => {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
@@ -416,13 +426,17 @@ const FinancePage = () => {
     setSelected(next);
   };
 
-  const selectedSalarySum = useMemo(() => {
-    return filteredJobs.reduce((acc, j) => {
-      if (!selected.has(j.id)) return acc;
-      const { salary } = calcRow(j);
-      return acc + salary;
-    }, 0);
-  }, [filteredJobs, selected, calcRow]);
+  const selectedSalarySum = useMemo(
+    () =>
+      filteredJobs.reduce((acc, j) => {
+        if (!selected.has(j.id)) return acc;
+        const { salary } = calcRow(j);
+        return acc + salary;
+      }, 0),
+    [filteredJobs, selected, calcRow],
+  );
+
+  /* ===== RENDER ===== */
 
   return (
     <div style={{ padding: 16 }}>
@@ -673,10 +687,10 @@ const FinancePage = () => {
             Zelle: <strong>{formatMoney(moneyReport.buckets.Zelle)}</strong>
           </li>
           <li>
-            Чек: <strong>{formatMoney(moneyReport.buckets['Чек'])}</strong>
+            Чек: <strong>{formatMoney(moneyReport.buckets.Чек)}</strong>
           </li>
           <li>
-            Карта: <strong>{formatMoney(moneyReport.buckets['Карта'])}</strong>
+            Карта: <strong>{formatMoney(moneyReport.buckets.Карта)}</strong>
           </li>
           {moneyReport.buckets.Другое > 0 && (
             <li>
