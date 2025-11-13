@@ -1,15 +1,15 @@
-// client/src/pages/JoAllJobsPage.jsx
+// client/src/pages/AllJobsPage.jsx
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 
-const JoAllJobsPage = () => {
+const AllJobsPage = () => {
   const [jobs, setJobs] = useState([]);
   const [origJobs, setOrigJobs] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [clients, setClients] = useState([]);
-  const [invoices, setInvoices] = useState([]); // ← тянем инвойсы из БД
+  const [invoices, setInvoices] = useState([]); // инвойсы из БД
 
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTech, setFilterTech] = useState('all');
@@ -33,34 +33,6 @@ const JoAllJobsPage = () => {
     'To finish',
     'Completed',
   ];
-
-  const canonStatus = (val) => {
-    const raw = String(val ?? '').toLowerCase();
-    const v = raw.replace(/[\s\-_]+/g, '');
-    if (!v) return '';
-    if (v.startsWith('rec')) return 'recall';
-    if (v === 'diagnosis') return 'diagnosis';
-    if (v === 'inprogress') return 'in progress';
-    if (v === 'partsordered') return 'parts ordered';
-    if (v === 'waitingforparts') return 'waiting for parts';
-    if (v === 'tofinish') return 'to finish';
-    if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
-    if (v === 'canceled' || v === 'cancelled') return 'canceled';
-    if (
-      [
-        'recall',
-        'diagnosis',
-        'in progress',
-        'parts ordered',
-        'waiting for parts',
-        'to finish',
-        'completed',
-        'canceled',
-      ].includes(raw)
-    )
-      return raw;
-    return v;
-  };
 
   useEffect(() => {
     fetchAll();
@@ -99,22 +71,6 @@ const JoAllJobsPage = () => {
 
   const getClient = (id) => clients.find((c) => c.id === id);
 
-  const formatAddress = (c) => {
-    if (!c) return '';
-    const parts = [
-      c.address,
-      c.address_line1,
-      c.address_line2,
-      c.street,
-      c.city,
-      c.state,
-      c.region,
-      c.zip,
-      c.postal_code,
-    ].filter(Boolean);
-    return parts.join(', ');
-  };
-
   const handleChange = (id, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
   };
@@ -128,60 +84,9 @@ const JoAllJobsPage = () => {
     return val;
   };
 
-  /* ====== Payments ====== */
-  const methodChosen = (raw) => {
-    const v = String(raw ?? '').trim().toLowerCase();
-    return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
-  };
-
-  const isFullyPaidNow = (j) => {
-    const scf = Number(j.scf || 0);
-    const labor = Number(j.labor_price || 0);
-    const scfOK = scf <= 0 || (scf > 0 && methodChosen(j.scf_payment_method));
-    const laborOK = labor <= 0 || (labor > 0 && methodChosen(j.labor_payment_method));
-    return scfOK && laborOK;
-  };
-  const isUnpaidNow = (j) => !isFullyPaidNow(j);
-  const needsScfPayment = (j) => Number(j.scf || 0) > 0 && !methodChosen(j.scf_payment_method);
-  const needsLaborPayment = (j) => Number(j.labor_price || 0) > 0 && !methodChosen(j.labor_payment_method);
-
-  /* ====== Warranty / Archive ====== */
-  const isDone = (s) => canonStatus(s) === 'completed';
-  const isRecall = (s) => canonStatus(s) === 'recall';
-  const origById = (id) => origJobs.find((x) => x.id === id) || null;
-
-  const persistedFullyPaid = (j) => {
-    const o = origById(j.id) || j;
-    const scfOK = Number(o.scf || 0) <= 0 || methodChosen(o.scf_payment_method);
-    const laborOK = Number(o.labor_price || 0) <= 0 || methodChosen(o.labor_payment_method);
-    return scfOK && laborOK;
-  };
-
-  const warrantyStart = (j) => {
-    const o = origById(j.id) || j;
-    if (o.completed_at) return new Date(o.completed_at);
-    if (isDone(o.status) && o.updated_at) return new Date(o.updated_at);
-    return null;
-  };
-  const warrantyEnd = (j) => {
-    const s = warrantyStart(j);
-    return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 days
-  };
-  const now = new Date();
-  const persistedInWarranty = (j) => {
-    const o = origById(j.id) || j;
-    if (isRecall(o.status)) return false;
-    return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now <= warrantyEnd(j);
-  };
-  const persistedInArchiveByWarranty = (j) => {
-    const o = origById(j.id) || j;
-    if (isRecall(o.status)) return false;
-    return isDone(o.status) && persistedFullyPaid(j) && warrantyStart(j) && now > warrantyEnd(j);
-  };
-
   /* ====== Save ====== */
   const handleSave = async (job) => {
-    const prev = origById(job.id) || {};
+    const prev = origById(job.id, origJobs) || {};
     const wasDone = isDone(prev.status);
     const willBeDone = isDone(job.status);
 
@@ -229,7 +134,6 @@ const JoAllJobsPage = () => {
     const m = new Map();
     for (const inv of invoices || []) {
       if (!inv.job_id) continue;
-      // если у работы несколько инвойсов — берём самый новый
       const old = m.get(inv.job_id);
       if (!old || new Date(inv.created_at) > new Date(old.created_at)) {
         m.set(inv.job_id, inv);
@@ -274,20 +178,26 @@ const JoAllJobsPage = () => {
     XLSX.writeFile(wb, 'jobs.xlsx');
   };
 
+  const now = new Date();
+
   /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
     return (jobs || [])
       .filter((j) => {
-        const o = origById(j.id) || j;
+        const o = origById(j.id, origJobs) || j;
         const recall = isRecall(o.status);
 
         if (viewMode === 'warranty') {
-          return !recall && !j.archived_at && persistedInWarranty(j);
+          return !recall && !j.archived_at && persistedInWarranty(j, origJobs, now);
         }
         if (viewMode === 'archive') {
-          return j.archived_at || (!recall && persistedInArchiveByWarranty(j));
+          return j.archived_at || (!recall && persistedInArchiveByWarranty(j, origJobs, now));
         }
-        return (recall || !(persistedInWarranty(j) || persistedInArchiveByWarranty(j))) && !j.archived_at;
+        // active
+        return (
+          (recall || !(persistedInWarranty(j, origJobs, now) || persistedInArchiveByWarranty(j, origJobs, now))) &&
+          !j.archived_at
+        );
       })
       .filter((j) =>
         filterStatus === 'all'
@@ -297,7 +207,7 @@ const JoAllJobsPage = () => {
           : canonStatus(j.status) === canonStatus(filterStatus),
       )
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
-      // поиск по invoice_no (если введён)
+      // поиск по invoice_no / job_number
       .filter((j) => {
         const q = invoiceQuery.trim();
         if (!q) return true;
@@ -336,26 +246,7 @@ const JoAllJobsPage = () => {
         const B = (b.job_number || b.id).toString();
         return sortAsc ? A.localeCompare(B) : B.localeCompare(A);
       });
-  }, [
-    jobs,
-    filterStatus,
-    filterTech,
-    filterPaid,
-    searchText,
-    invoiceQuery,
-    sortAsc,
-    viewMode,
-    invByJob,
-    isFullyPaidNow,
-    isUnpaidNow,
-    persistedInWarranty,
-    persistedInArchiveByWarranty,
-    isRecall,
-    canonStatus,
-    getClient,
-    formatAddress,
-    origById,
-  ]);
+  }, [jobs, origJobs, filterStatus, filterTech, filterPaid, searchText, invoiceQuery, sortAsc, viewMode, invByJob]);
 
   // Быстрые совпадения для выпадающего окна
   const invoiceMatches = useMemo(() => {
@@ -396,7 +287,7 @@ const JoAllJobsPage = () => {
       }
     }
 
-    // Уберём дубли по паре job.id + inv?.id
+    // убрать дубли
     const seen = new Set();
     const uniq = [];
     for (const item of list) {
@@ -407,7 +298,6 @@ const JoAllJobsPage = () => {
       }
     }
 
-    // Сначала те, у кого точное совпадение по inv/job номеру
     uniq.sort((a, b) => {
       const aKey = String(a.inv?.invoice_no ?? a.job.job_number ?? '');
       const bKey = String(b.inv?.invoice_no ?? b.job.job_number ?? '');
@@ -437,8 +327,8 @@ const JoAllJobsPage = () => {
 
   const openInvoiceForJob = (job) => {
     const inv = invByJob.get(job.id);
-    if (inv) navigate(`/invoice/${job.id}?invoice=${inv.id}`); // открыть существующий
-    else navigate(`/invoice/new?job=${job.id}`); // создать новый
+    if (inv) navigate(`/invoice/${job.id}?invoice=${inv.id}`);
+    else navigate(`/invoice/new?job=${job.id}`);
   };
 
   return (
@@ -664,7 +554,7 @@ const JoAllJobsPage = () => {
                   const client = getClient(job.client_id);
                   const rowClass = job.archived_at
                     ? ''
-                    : persistedInWarranty(job)
+                    : persistedInWarranty(job, origJobs, now)
                     ? 'warranty'
                     : isDone(job.status) && isUnpaidNow(job)
                     ? 'unpaid'
@@ -748,9 +638,7 @@ const JoAllJobsPage = () => {
                         <select
                           className={scfError ? 'error' : ''}
                           value={job.scf_payment_method || ''}
-                          onChange={(e) =>
-                            handleChange(job.id, 'scf_payment_method', e.target.value || null)
-                          }
+                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value || null)}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -851,11 +739,122 @@ const JoAllJobsPage = () => {
   );
 };
 
-export default JoAllJobsPage;
+export default AllJobsPage;
 
 /* ====== helpers outside component ====== */
 
-// строгая логика для числа: точное совпадение по номеру
+function canonStatus(val) {
+  const raw = String(val ?? '').toLowerCase();
+  const v = raw.replace(/[\s\-_]+/g, '');
+  if (!v) return '';
+  if (v.startsWith('rec')) return 'recall';
+  if (v === 'diagnosis') return 'diagnosis';
+  if (v === 'inprogress') return 'in progress';
+  if (v === 'partsordered') return 'parts ordered';
+  if (v === 'waitingforparts') return 'waiting for parts';
+  if (v === 'tofinish') return 'to finish';
+  if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
+  if (v === 'canceled' || v === 'cancelled') return 'canceled';
+  if (
+    [
+      'recall',
+      'diagnosis',
+      'in progress',
+      'parts ordered',
+      'waiting for parts',
+      'to finish',
+      'completed',
+      'canceled',
+    ].includes(raw)
+  )
+    return raw;
+  return v;
+}
+
+function isDone(status) {
+  return canonStatus(status) === 'completed';
+}
+
+function isRecall(status) {
+  return canonStatus(status) === 'recall';
+}
+
+function methodChosen(raw) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
+}
+
+function isFullyPaidNow(j) {
+  const scf = Number(j.scf || 0);
+  const labor = Number(j.labor_price || 0);
+  const scfOK = scf <= 0 || (scf > 0 && methodChosen(j.scf_payment_method));
+  const laborOK = labor <= 0 || (labor > 0 && methodChosen(j.labor_payment_method));
+  return scfOK && laborOK;
+}
+
+function isUnpaidNow(j) {
+  return !isFullyPaidNow(j);
+}
+
+function needsScfPayment(j) {
+  return Number(j.scf || 0) > 0 && !methodChosen(j.scf_payment_method);
+}
+
+function needsLaborPayment(j) {
+  return Number(j.labor_price || 0) > 0 && !methodChosen(j.labor_payment_method);
+}
+
+function origById(id, origJobs) {
+  return origJobs.find((x) => x.id === id) || null;
+}
+
+function persistedFullyPaid(j, origJobs) {
+  const o = origById(j.id, origJobs) || j;
+  const scfOK = Number(o.scf || 0) <= 0 || methodChosen(o.scf_payment_method);
+  const laborOK = Number(o.labor_price || 0) <= 0 || methodChosen(o.labor_payment_method);
+  return scfOK && laborOK;
+}
+
+function warrantyStart(j, origJobs) {
+  const o = origById(j.id, origJobs) || j;
+  if (o.completed_at) return new Date(o.completed_at);
+  if (isDone(o.status) && o.updated_at) return new Date(o.updated_at);
+  return null;
+}
+
+function warrantyEnd(j, origJobs) {
+  const s = warrantyStart(j, origJobs);
+  return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 дней
+}
+
+function persistedInWarranty(j, origJobs, now) {
+  const o = origById(j.id, origJobs) || j;
+  if (isRecall(o.status)) return false;
+  return isDone(o.status) && persistedFullyPaid(j, origJobs) && warrantyStart(j, origJobs) && now <= warrantyEnd(j, origJobs);
+}
+
+function persistedInArchiveByWarranty(j, origJobs, now) {
+  const o = origById(j.id, origJobs) || j;
+  if (isRecall(o.status)) return false;
+  return isDone(o.status) && persistedFullyPaid(j, origJobs) && warrantyStart(j, origJobs) && now > warrantyEnd(j, origJobs);
+}
+
+function formatAddress(c) {
+  if (!c) return '';
+  const parts = [
+    c.address,
+    c.address_line1,
+    c.address_line2,
+    c.street,
+    c.city,
+    c.state,
+    c.region,
+    c.zip,
+    c.postal_code,
+  ].filter(Boolean);
+  return parts.join(', ');
+}
+
 function isDigits(s) {
   return /^\d+$/.test(String(s).trim());
 }
