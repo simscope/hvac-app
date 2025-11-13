@@ -202,6 +202,32 @@ const normalizeStatusForDb = (s) => {
 const DONE_STATUSES = new Set(['completed', 'complete', 'done']);
 const isDone = (s) => DONE_STATUSES.has(String(s || '').toLowerCase().trim());
 
+/* ---------- Payment options block for emails ---------- */
+const PAYMENT_OPTIONS_TEXT =
+`Payment Options:
+💸 Zelle: 929-412-9042
+🏦 ACH Transfer
+Account number: 918130706
+Routing number: 021000021
+💳 Credit/Debit Card
+(5% processing fee applies)
+🧾 Check
+Payable to: Sim Scope Inc.
+Mailing address: 1587E 19th St Apt6F Brooklyn, NY 11230`;
+
+function stripPaymentOptionsBlock(msg) {
+  if (!msg) return '';
+  const marker = '\n\nPayment Options:';
+  const idx = msg.indexOf(marker);
+  if (idx === -1) return msg;
+  return msg.slice(0, idx).trimEnd();
+}
+function addPaymentOptionsBlock(msg) {
+  const base = stripPaymentOptionsBlock(msg || '');
+  if (!base.trim()) return PAYMENT_OPTIONS_TEXT;
+  return `${base}\n\n${PAYMENT_OPTIONS_TEXT}`;
+}
+
 /* ---------- HEIC → JPEG ---------- */
 const RU_MAP = {
   а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
@@ -311,6 +337,7 @@ export default function JobDetailsPage() {
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', message: '' });
   const [emailInvSelected, setEmailInvSelected] = useState(null);
+  const [includePaymentOptions, setIncludePaymentOptions] = useState(false);
 
   // email modal (multi)
   const [emailModalMultiOpen, setEmailModalMultiOpen] = useState(false);
@@ -447,23 +474,25 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-    const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
+    theIds: {
+      const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
 
-    const nameByUserId = {};
-    if (ids.length) {
-      const { data: techPeople } = await supabase
-        .from('technicians')
-        .select('auth_user_id, name')
-        .in('auth_user_id', ids);
-      (techPeople || []).forEach((t) => {
-        if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
-      });
-      const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
-      (profs || []).forEach((p) => {
-        if (p?.id && !nameByUserId[p.id] && p.full_name?.trim()) nameByUserId[p.id] = p.full_name.trim();
-      });
+      const nameByUserId = {};
+      if (ids.length) {
+        const { data: techPeople } = await supabase
+          .from('technicians')
+          .select('auth_user_id, name')
+          .in('auth_user_id', ids);
+        (techPeople || []).forEach((t) => {
+          if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
+        });
+        const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', ids);
+        (profs || []).forEach((p) => {
+          if (p?.id && !nameByUserId[p.id] && p.full_name?.trim()) nameByUserId[p.id] = p.full_name.trim();
+        });
+      }
+      setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
     }
-    setComments(list.map((c) => ({ ...c, author_name: nameByUserId[c.author_user_id] || null })));
     setCommentsLoading(false);
   };
 
@@ -1069,6 +1098,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
     const draft = buildDefaultEmailDraft(inv);
     setEmailDraft(draft);
     setEmailInvSelected(inv);
+    setIncludePaymentOptions(false);
     setEmailModalOpen(true);
   };
   const closeEmailModal = () => {
@@ -1677,6 +1707,25 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
                   Attachment: invoice PDF will be attached automatically
                 </div>
+                <div style={{ marginTop: 4 }}>
+                  <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={includePaymentOptions}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setIncludePaymentOptions(checked);
+                        setEmailDraft((d) => ({
+                          ...d,
+                          message: checked
+                            ? addPaymentOptionsBlock(d.message)
+                            : stripPaymentOptionsBlock(d.message),
+                        }));
+                      }}
+                    />
+                    <span>Add “Payment Options” block to email</span>
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -1780,4 +1829,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
