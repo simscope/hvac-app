@@ -447,7 +447,7 @@ export default function JobDetailsPage() {
     }
 
     const list = data || [];
-    const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
+    the const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
 
     const nameByUserId = {};
     if (ids.length) {
@@ -1037,19 +1037,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
     const subject = String(overrides.subject ?? draft.subject);
     const text = String(overrides.message ?? draft.message);
-    const html =
-`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
-  ${nl2brHtml(text)}
-  <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
-  <div style="font-size:12px;color:#334155">
-    <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
-    <div>📍 New York City, NY</div>
-    <div>📞 Phone: (929) 412-9042 Zelle</div>
-    <div>🌐 Website: <a href="https://appliance-hvac-repair.com" target="_blank">https://appliance-hvac-repair.com</a></div>
-    <div>HVAC • Appliance Repair</div>
-    <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
-  </div>
-</div>`.trim();
 
     const attachments = list.map((i) => {
       const invoiceNo = i?.invoice_no ? String(i.invoice_no) : null;
@@ -1062,15 +1049,15 @@ Services Licensed & Insured | Serving NYC and NJ`;
     });
 
     try {
-     await callEdgeAuth('gmail_send', {
-    to: [to],               // gmail_send ждёт массив получателей
-    subject,
-    text,                   // html можно не передавать — функция шлёт plain/text
-    attachments: attachments.map(a => ({
-      ...a,                 // { bucket, key, filename }
-      mimeType: 'application/pdf'
-    })),
-  });
+      await callEdgeAuth('gmail_send', {
+        to: [to],               // gmail_send ждёт массив получателей
+        subject,
+        text,                   // html не передаём — отправляем plain text
+        attachments: attachments.map(a => ({
+          ...a,                 // { bucket, key, filename }
+          mimeType: 'application/pdf',
+        })),
+      });
       alert(`Sent ${attachments.length} invoice(s) to ${to}`);
     } catch (e) {
       alert('Failed to send multiple invoices: ' + (e.message || e));
@@ -1793,4 +1780,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
