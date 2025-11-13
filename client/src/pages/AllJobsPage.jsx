@@ -178,10 +178,10 @@ const AllJobsPage = () => {
     XLSX.writeFile(wb, 'jobs.xlsx');
   };
 
-  const now = new Date();
-
   /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
+    const now = new Date(); // теперь внутри useMemo
+
     return (jobs || [])
       .filter((j) => {
         const o = origById(j.id, origJobs) || j;
@@ -195,7 +195,8 @@ const AllJobsPage = () => {
         }
         // active
         return (
-          (recall || !(persistedInWarranty(j, origJobs, now) || persistedInArchiveByWarranty(j, origJobs, now))) &&
+          (recall ||
+            !(persistedInWarranty(j, origJobs, now) || persistedInArchiveByWarranty(j, origJobs, now))) &&
           !j.archived_at
         );
       })
@@ -246,7 +247,19 @@ const AllJobsPage = () => {
         const B = (b.job_number || b.id).toString();
         return sortAsc ? A.localeCompare(B) : B.localeCompare(A);
       });
-  }, [jobs, origJobs, filterStatus, filterTech, filterPaid, searchText, invoiceQuery, sortAsc, viewMode, invByJob]);
+  }, [
+    jobs,
+    origJobs,
+    filterStatus,
+    filterTech,
+    filterPaid,
+    searchText,
+    invoiceQuery,
+    sortAsc,
+    viewMode,
+    invByJob,
+    getClient, // добавили в зависимости
+  ]);
 
   // Быстрые совпадения для выпадающего окна
   const invoiceMatches = useMemo(() => {
@@ -554,7 +567,7 @@ const AllJobsPage = () => {
                   const client = getClient(job.client_id);
                   const rowClass = job.archived_at
                     ? ''
-                    : persistedInWarranty(job, origJobs, now)
+                    : persistedInWarranty(job, origJobs, new Date())
                     ? 'warranty'
                     : isDone(job.status) && isUnpaidNow(job)
                     ? 'unpaid'
@@ -830,13 +843,23 @@ function warrantyEnd(j, origJobs) {
 function persistedInWarranty(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
-  return isDone(o.status) && persistedFullyPaid(j, origJobs) && warrantyStart(j, origJobs) && now <= warrantyEnd(j, origJobs);
+  return (
+    isDone(o.status) &&
+    persistedFullyPaid(j, origJobs) &&
+    warrantyStart(j, origJobs) &&
+    now <= warrantyEnd(j, origJobs)
+  );
 }
 
 function persistedInArchiveByWarranty(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
-  return isDone(o.status) && persistedFullyPaid(j, origJobs) && warrantyStart(j, origJobs) && now > warrantyEnd(j, origJobs);
+  return (
+    isDone(o.status) &&
+    persistedFullyPaid(j, origJobs) &&
+    warrantyStart(j, origJobs) &&
+    now > warrantyEnd(j, origJobs)
+  );
 }
 
 function formatAddress(c) {
