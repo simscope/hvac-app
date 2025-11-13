@@ -48,8 +48,8 @@ const JoAllJobsPage = () => {
     if (v === 'canceled' || v === 'cancelled') return 'canceled';
     if (
       [
-        'recall','diagnosis','in progress','parts ordered',
-        'waiting for parts','to finish','completed','canceled',
+        'recall', 'diagnosis', 'in progress', 'parts ordered',
+        'waiting for parts', 'to finish', 'completed', 'canceled',
       ].includes(raw)
     ) return raw;
     return v;
@@ -259,8 +259,6 @@ const JoAllJobsPage = () => {
   };
 
   /* ====== Search helpers ====== */
-  const normalize = (v) => String(v ?? '').trim().toLowerCase();
-
   // строгая логика для числа: точное совпадение по номеру
   const isDigits = (s) => /^\d+$/.test(String(s).trim());
 
@@ -327,9 +325,24 @@ const JoAllJobsPage = () => {
         return sortAsc ? A.localeCompare(B) : B.localeCompare(A);
       });
   }, [
-    jobs, technicians, clients, invoices,
-    filterStatus, filterTech, filterPaid,
-    searchText, invoiceQuery, sortAsc, viewMode, origJobs,
+    jobs,
+    filterStatus,
+    filterTech,
+    filterPaid,
+    searchText,
+    invoiceQuery,
+    sortAsc,
+    viewMode,
+    invByJob,
+    origJobs,
+    getClient,
+    isFullyPaidNow,
+    isRecall,
+    isUnpaidNow,
+    formatAddress,
+    persistedInWarranty,
+    persistedInArchiveByWarranty,
+    isDigits,
   ]);
 
   // Быстрые совпадения для выпадающего окна
@@ -387,7 +400,7 @@ const JoAllJobsPage = () => {
     });
 
     return uniq.slice(0, 10);
-  }, [invoiceQuery, invoices, jobs, invByJob, jobsById]);
+  }, [invoiceQuery, invoices, jobs, invByJob, jobsById, isDigits, getClient]);
 
   const grouped = useMemo(() => {
     const g = {};
