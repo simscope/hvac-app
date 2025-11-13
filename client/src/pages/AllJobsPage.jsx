@@ -48,14 +48,23 @@ const JoAllJobsPage = () => {
     if (v === 'canceled' || v === 'cancelled') return 'canceled';
     if (
       [
-        'recall', 'diagnosis', 'in progress', 'parts ordered',
-        'waiting for parts', 'to finish', 'completed', 'canceled',
+        'recall',
+        'diagnosis',
+        'in progress',
+        'parts ordered',
+        'waiting for parts',
+        'to finish',
+        'completed',
+        'canceled',
       ].includes(raw)
-    ) return raw;
+    )
+      return raw;
     return v;
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => {
+    fetchAll();
+  }, []);
 
   useEffect(() => {
     const onClickOutside = (e) => {
@@ -93,8 +102,15 @@ const JoAllJobsPage = () => {
   const formatAddress = (c) => {
     if (!c) return '';
     const parts = [
-      c.address, c.address_line1, c.address_line2, c.street,
-      c.city, c.state, c.region, c.zip, c.postal_code,
+      c.address,
+      c.address_line1,
+      c.address_line2,
+      c.street,
+      c.city,
+      c.state,
+      c.region,
+      c.zip,
+      c.postal_code,
     ].filter(Boolean);
     return parts.join(', ');
   };
@@ -258,10 +274,6 @@ const JoAllJobsPage = () => {
     XLSX.writeFile(wb, 'jobs.xlsx');
   };
 
-  /* ====== Search helpers ====== */
-  // строгая логика для числа: точное совпадение по номеру
-  const isDigits = (s) => /^\d+$/.test(String(s).trim());
-
   /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
     return (jobs || [])
@@ -282,7 +294,7 @@ const JoAllJobsPage = () => {
           ? true
           : filterStatus === 'ReCall'
           ? isRecall(j.status)
-          : canonStatus(j.status) === canonStatus(filterStatus)
+          : canonStatus(j.status) === canonStatus(filterStatus),
       )
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
       // поиск по invoice_no (если введён)
@@ -293,12 +305,12 @@ const JoAllJobsPage = () => {
         if (isDigits(q)) {
           const qn = Number(q);
           const jobNo = Number(j.job_number || NaN);
-          return (inv?.invoice_no === qn) || (jobNo === qn);
+          return inv?.invoice_no === qn || jobNo === qn;
         }
         const ql = q.toLowerCase();
         const invTxt = inv?.invoice_no != null ? String(inv.invoice_no).toLowerCase() : '';
         const jobTxt = j.job_number != null ? String(j.job_number).toLowerCase() : '';
-        return (invTxt.includes(ql) || jobTxt.includes(ql));
+        return invTxt.includes(ql) || jobTxt.includes(ql);
       })
       // общий поиск по клиенту/адресу
       .filter((j) => {
@@ -334,17 +346,15 @@ const JoAllJobsPage = () => {
     sortAsc,
     viewMode,
     invByJob,
-    origJobs,
     isFullyPaidNow,
-    isRecall,
     isUnpaidNow,
-    formatAddress,
     persistedInWarranty,
     persistedInArchiveByWarranty,
-    isDigits,
-    origById,
+    isRecall,
     canonStatus,
     getClient,
+    formatAddress,
+    origById,
   ]);
 
   // Быстрые совпадения для выпадающего окна
@@ -391,7 +401,10 @@ const JoAllJobsPage = () => {
     const uniq = [];
     for (const item of list) {
       const key = `${item.job.id}:${item.inv?.id || 'noinv'}`;
-      if (!seen.has(key)) { seen.add(key); uniq.push(item); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniq.push(item);
+      }
     }
 
     // Сначала те, у кого точное совпадение по inv/job номеру
@@ -402,7 +415,7 @@ const JoAllJobsPage = () => {
     });
 
     return uniq.slice(0, 10);
-  }, [invoiceQuery, invoices, jobs, invByJob, jobsById, isDigits]);
+  }, [invoiceQuery, invoices, jobs, invByJob, jobsById]);
 
   const grouped = useMemo(() => {
     const g = {};
@@ -425,7 +438,7 @@ const JoAllJobsPage = () => {
   const openInvoiceForJob = (job) => {
     const inv = invByJob.get(job.id);
     if (inv) navigate(`/invoice/${job.id}?invoice=${inv.id}`); // открыть существующий
-    else navigate(`/invoice/new?job=${job.id}`);                // создать новый
+    else navigate(`/invoice/new?job=${job.id}`); // создать новый
   };
 
   return (
@@ -472,11 +485,29 @@ const JoAllJobsPage = () => {
       {viewMode === 'active' && (
         <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
-            <span style={{ display: 'inline-block', width: 12, height: 12, background: '#fee2e2', border: '1px solid #fca5a5' }} />
-            <span>red — <b>COMPLETED</b> but <b>NOT PAID</b> (amounts &gt; 0 without a selected payment method)</span>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 12,
+                height: 12,
+                background: '#fee2e2',
+                border: '1px solid #fca5a5',
+              }}
+            />
+            <span>
+              red — <b>COMPLETED</b> but <b>NOT PAID</b> (amounts &gt; 0 without a selected payment method)
+            </span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ display: 'inline-block', width: 12, height: 12, background: '#dcfce7', border: '1px solid #86efac' }} />
+            <span
+              style={{
+                display: 'inline-block',
+                width: 12,
+                height: 12,
+                background: '#dcfce7',
+                border: '1px solid #86efac',
+              }}
+            />
             <span>green — jobs under 60-day warranty</span>
           </span>
         </div>
@@ -485,12 +516,20 @@ const JoAllJobsPage = () => {
       <div className="filters">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All statuses</option>
-          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+          {statuses.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
         </select>
 
         <select value={filterTech} onChange={(e) => setFilterTech(e.target.value)}>
           <option value="all">All technicians</option>
-          {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          {technicians.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
         </select>
 
         <select value={filterPaid} onChange={(e) => setFilterPaid(e.target.value)}>
@@ -516,7 +555,10 @@ const JoAllJobsPage = () => {
         <div className="inv-search-wrap" ref={invoiceBoxRef}>
           <input
             value={invoiceQuery}
-            onChange={(e) => { setInvoiceQuery(e.target.value); setShowInvoiceList(true); }}
+            onChange={(e) => {
+              setInvoiceQuery(e.target.value);
+              setShowInvoiceList(true);
+            }}
             onFocus={() => setShowInvoiceList(true)}
             onKeyDown={openSingleMatchOnEnter}
             placeholder="Invoice # or Job #"
@@ -544,9 +586,10 @@ const JoAllJobsPage = () => {
                       </button>
                       <button
                         className="btn-link secondary"
-                        onClick={() => inv
-                          ? navigate(`/invoice/${job.id}?invoice=${inv.id}`)
-                          : navigate(`/invoice/new?job=${job.id}`)
+                        onClick={() =>
+                          inv
+                            ? navigate(`/invoice/${job.id}?invoice=${inv.id}`)
+                            : navigate(`/invoice/new?job=${job.id}`)
                         }
                       >
                         {inv ? 'Инвойс' : 'Создать'}
@@ -621,11 +664,11 @@ const JoAllJobsPage = () => {
                   const client = getClient(job.client_id);
                   const rowClass = job.archived_at
                     ? ''
-                    : (persistedInWarranty(job)
-                        ? 'warranty'
-                        : (isDone(job.status) && isUnpaidNow(job))
-                        ? 'unpaid'
-                        : '');
+                    : persistedInWarranty(job)
+                    ? 'warranty'
+                    : isDone(job.status) && isUnpaidNow(job)
+                    ? 'unpaid'
+                    : '';
                   const scfError = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
 
@@ -653,7 +696,13 @@ const JoAllJobsPage = () => {
                       style={{ cursor: 'pointer' }}
                     >
                       <td>
-                        <div className="cell-wrap" onClick={(e) => { e.stopPropagation(); navigate(`/job/${job.id}`); }}>
+                        <div
+                          className="cell-wrap"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/job/${job.id}`);
+                          }}
+                        >
                           <span className="num-link">{job.job_number || job.id}</span>
                         </div>
                       </td>
@@ -673,10 +722,18 @@ const JoAllJobsPage = () => {
                         </div>
                       </td>
 
-                      <td><div className="cell-wrap">{client?.phone || '—'}</div></td>
-                      <td><div className="cell-wrap">{formatAddress(client) || '—'}</div></td>
-                      <td><div className="cell-wrap">{job.system_type || '—'}</div></td>
-                      <td><div className="cell-wrap">{job.issue || '—'}</div></td>
+                      <td>
+                        <div className="cell-wrap">{client?.phone || '—'}</div>
+                      </td>
+                      <td>
+                        <div className="cell-wrap">{formatAddress(client) || '—'}</div>
+                      </td>
+                      <td>
+                        <div className="cell-wrap">{job.system_type || '—'}</div>
+                      </td>
+                      <td>
+                        <div className="cell-wrap">{job.issue || '—'}</div>
+                      </td>
 
                       <td>
                         <input
@@ -691,7 +748,9 @@ const JoAllJobsPage = () => {
                         <select
                           className={scfError ? 'error' : ''}
                           value={job.scf_payment_method || ''}
-                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value || null)}
+                          onChange={(e) =>
+                            handleChange(job.id, 'scf_payment_method', e.target.value || null)
+                          }
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -716,7 +775,9 @@ const JoAllJobsPage = () => {
                         <select
                           className={laborError ? 'error' : ''}
                           value={job.labor_payment_method || ''}
-                          onChange={(e) => handleChange(job.id, 'labor_payment_method', e.target.value || null)}
+                          onChange={(e) =>
+                            handleChange(job.id, 'labor_payment_method', e.target.value || null)
+                          }
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -735,24 +796,46 @@ const JoAllJobsPage = () => {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
-                          {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                          {statuses.map((s) => (
+                            <option key={s} value={s}>
+                              {s}
+                            </option>
+                          ))}
                         </select>
                       </td>
 
                       <td className="center">{isFullyPaidNow(job) ? '✔️' : ''}</td>
 
                       <td className="center">
-                        <button title="Save" onClick={(e) => { e.stopPropagation(); handleSave(job); }}>
+                        <button
+                          title="Save"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSave(job);
+                          }}
+                        >
                           💾
                         </button>
                       </td>
                       <td className="center">
-                        <button title="Edit" onClick={(e) => { e.stopPropagation(); navigate(`/job/${job.id}`); }}>
+                        <button
+                          title="Edit"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/job/${job.id}`);
+                          }}
+                        >
                           ✏️
                         </button>
                       </td>
                       <td className="center">
-                        <button title="Invoice" onClick={(e) => { e.stopPropagation(); openInvoiceForJob(job); }}>
+                        <button
+                          title="Invoice"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openInvoiceForJob(job);
+                          }}
+                        >
                           📄
                         </button>
                       </td>
@@ -769,3 +852,10 @@ const JoAllJobsPage = () => {
 };
 
 export default JoAllJobsPage;
+
+/* ====== helpers outside component ====== */
+
+// строгая логика для числа: точное совпадение по номеру
+function isDigits(s) {
+  return /^\d+$/.test(String(s).trim());
+}
