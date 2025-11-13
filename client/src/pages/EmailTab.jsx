@@ -6,6 +6,17 @@ import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
 const SIGNATURE =
   `\n\n—\nSim HVAC & Appliance repair\n📍 New York City, NY\n📞 Phone: (929) 412-9042\n🌐 Website: https://appliance-hvac-repair.com\nHVAC • Appliance Repair\nServices Licensed & Insured | Serving NYC and NJ`;
 
+const PAYMENT_OPTIONS =
+  `\n\nPayment Options:
+💸 Zelle: 929-412-9042
+🏦 ACH Transfer
+Account number 918130706
+Routing number 021000021
+💳 Credit/Debit Card (5% processing fee)
+🧾 Check
+Payable to: Sim Scope Inc.
+Mailing address: 1587E 19th St Apt6F Brooklyn, NY 11230`;
+
 const ACCOUNT_EMAIL = 'simscope.office@gmail.com';
 
 /* ====== СТИЛИ ====== */
@@ -254,6 +265,7 @@ export default function EmailTab() {
   // compose
   const [composeOpen, setComposeOpen] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(true);
+  const [includePaymentOptions, setIncludePaymentOptions] = useState(false);
   const toRef = useRef(); const subjectRef = useRef(); const textRef = useRef(); const filesRef = useRef();
 
   // read
@@ -553,8 +565,18 @@ export default function EmailTab() {
                 const to = (toRef.current?.value || '').split(',').map(s => s.trim()).filter(Boolean);
                 const subject = subjectRef.current?.value || '';
                 const baseText = textRef.current?.value || '';
-                const append = includeSignature && !baseText.includes('Sim HVAC & Appliance repair');
-                const text = append ? `${baseText}${SIGNATURE}` : baseText;
+
+                let text = baseText;
+
+                // подпись компании
+                if (includeSignature && !text.includes('Sim HVAC & Appliance repair')) {
+                  text = `${text}${SIGNATURE}`;
+                }
+                // блок со способами оплаты (отдельно от подписи)
+                if (includePaymentOptions && !text.includes('Payment Options:')) {
+                  text = `${text}${PAYMENT_OPTIONS}`;
+                }
+
                 const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
                 const files = Array.from(filesRef.current?.files || []);
                 const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
@@ -583,10 +605,28 @@ export default function EmailTab() {
                 <div>Текст</div>
                 <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
                 <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
-                  <input type="checkbox" checked={includeSignature} onChange={(e)=>setIncludeSignature(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={includeSignature}
+                    onChange={(e)=>setIncludeSignature(e.target.checked)}
+                  />
                   Добавлять подпись компании
                 </label>
-                <div style={styles.signatureHint}>Подпись будет добавлена в конец письма:{SIGNATURE}</div>
+                <div style={styles.signatureHint}>
+                  Подпись будет добавлена в конец письма:{SIGNATURE}
+                </div>
+
+                <label style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
+                  <input
+                    type="checkbox"
+                    checked={includePaymentOptions}
+                    onChange={(e)=>setIncludePaymentOptions(e.target.checked)}
+                  />
+                  Добавлять блок со способами оплаты
+                </label>
+                <div style={styles.signatureHint}>
+                  Блок способов оплаты (будет после подписи):{PAYMENT_OPTIONS}
+                </div>
               </div>
               <div style={styles.formRow}><div>Вложения</div><input ref={filesRef} type="file" multiple /></div>
               <div style={styles.btnLine}>
