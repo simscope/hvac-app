@@ -260,6 +260,8 @@ export default function EmailTab() {
   const [list, setList] = useState([]);
   const [connected, setConnected] = useState(true);
   const [listLoading, setListLoading] = useState(false);
+  const [appending, setAppending] = useState(false);
+  const [nextPageToken, setNextPageToken] = useState(null);
   const [error, setError] = useState('');
 
   // compose
@@ -303,26 +305,49 @@ export default function EmailTab() {
     return fetch(url, { ...options, headers });
   }
 
-  async function loadList() {
+  async function loadList({ append = false, pageToken = null } = {}) {
     try {
-      setError(''); setListLoading(true);
-      const r = await authedFetch(API.list, { method: 'POST', body: JSON.stringify({ folder, q }) });
+      setError('');
+      if (append) setAppending(true); else { setListLoading(true); setNextPageToken(null); }
+
+      const r = await authedFetch(API.list, {
+        method: 'POST',
+        body: JSON.stringify({ folder, q, pageToken }),
+      });
+
       if (!r.ok) {
         const txt = await r.text();
-        if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) { setConnected(false); throw new Error('Аккаунт Gmail не привязан.'); }
+        if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) {
+          setConnected(false);
+          throw new Error('Аккаунт Gmail не привязан.');
+        }
         throw new Error(`gmail_list: ${r.status} ${txt}`);
       }
+
       const data = await r.json();
-      setList(Array.isArray(data?.emails) ? data.emails : []);
+      const emails = Array.isArray(data?.emails) ? data.emails : [];
+      const token = data?.nextPageToken || null;
+
+      if (append) {
+        setList(prev => [...prev, ...emails]);
+      } else {
+        setList(emails);
+      }
+      setNextPageToken(token);
       setConnected(true);
     } catch (e) {
-      console.error(e); setList([]); setError(e.message || String(e));
-    } finally { setListLoading(false); }
+      console.error(e);
+      if (!append) setList([]);
+      setError(e.message || String(e));
+    } finally {
+      if (append) setAppending(false); else setListLoading(false);
+    }
   }
 
-  // 👉 загружаем список при смене папки И строки поиска
+  // при смене папки или поисковой строки — загружаем первую страницу
   useEffect(() => {
-    loadList();
+    loadList({ append: false, pageToken: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, q]);
 
   // ► лениво догружаем "Кому" для отправленных, если в списке поле пустое
@@ -352,7 +377,8 @@ export default function EmailTab() {
         });
       } catch {}
     })();
-  }, [folder, list]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folder, list]);
 
   /* OPEN / READ */
   async function openMail(id) {
@@ -501,10 +527,16 @@ export default function EmailTab() {
               placeholder="Поиск (gmail: from:, to:, subject:, has:attachment …)"
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && loadList()}
+              onKeyDown={(e) => e.key === 'Enter' && loadList({ append: false, pageToken: null })}
             />
           </div>
-          <button style={styles.btn} onClick={loadList} disabled={listLoading}>Обновить</button>
+          <button
+            style={styles.btn}
+            onClick={() => loadList({ append: false, pageToken: null })}
+            disabled={listLoading}
+          >
+            Обновить
+          </button>
         </div>
 
         <div style={styles.listHead}>
@@ -512,47 +544,65 @@ export default function EmailTab() {
         </div>
 
         <div style={styles.table}>
-          {listLoading ? (
+          {listLoading && !appending ? (
             <div style={{ padding: 16, color: colors.subtext }}>Загрузка…</div>
           ) : (list.length === 0 ? (
             <div style={{ padding: 16, color: colors.subtext }}>Писем нет</div>
           ) : (
-            (['inbox','sent'].includes(folder) && !q) ? (
-              <>
-                <div style={styles.sectionTitle}>
-                  Сегодня {today.length ? `(${today.length})` : ''}
-                </div>
-                {today.length === 0 ? (
-                  <div style={{ padding: 12, color: colors.muted }}>Нет писем за сегодня</div>
-                ) : (
-                  today.map(m => <MailRow key={m.id} m={m} />)
-                )}
+            <>
+              {(['inbox','sent'].includes(folder) && !q) ? (
+                <>
+                  <div style={styles.sectionTitle}>
+                    Сегодня {today.length ? `(${today.length})` : ''}
+                  </div>
+                  {today.length === 0 ? (
+                    <div style={{ padding: 12, color: colors.muted }}>Нет писем за сегодня</div>
+                  ) : (
+                    today.map(m => <MailRow key={m.id} m={m} />)
+                  )}
 
-                {months.map(g => {
-                  const expanded = expandedSet.has(g.key);
-                  return (
-                    <div key={g.key}>
-                      <div
-                        style={styles.collapsibleHead}
-                        onClick={() => toggleMonth(g.key)}
-                        role="button"
-                        title={expanded ? 'Свернуть' : 'Развернуть'}
-                      >
-                        <span style={styles.caret}>{expanded ? '▾' : '▸'}</span>
-                        <span>{g.title} {g.items.length ? `(${g.items.length})` : ''}</span>
+                  {months.map(g => {
+                    const expanded = expandedSet.has(g.key);
+                    return (
+                      <div key={g.key}>
+                        <div
+                          style={styles.collapsibleHead}
+                          onClick={() => toggleMonth(g.key)}
+                          role="button"
+                          title={expanded ? 'Свернуть' : 'Развернуть'}
+                        >
+                          <span style={styles.caret}>{expanded ? '▾' : '▸'}</span>
+                          <span>{g.title} {g.items.length ? `(${g.items.length})` : ''}</span>
+                        </div>
+                        {expanded && (
+                          g.items.length === 0
+                            ? <div style={{ padding: 12, color: colors.muted }}>Нет писем</div>
+                            : g.items.map(m => <MailRow key={m.id} m={m} />)
+                        )}
                       </div>
-                      {expanded && (
-                        g.items.length === 0
-                          ? <div style={{ padding: 12, color: colors.muted }}>Нет писем</div>
-                          : g.items.map(m => <MailRow key={m.id} m={m} />)
-                      )}
-                    </div>
-                  );
-                })}
-              </>
-            ) : (
-              list.slice().sort((a,b)=>new Date(b.date||0)-new Date(a.date||0)).map(m => <MailRow key={m.id} m={m} />)
-            )
+                    );
+                  })}
+                </>
+              ) : (
+                list
+                  .slice()
+                  .sort((a,b)=>new Date(b.date||0)-new Date(a.date||0))
+                  .map(m => <MailRow key={m.id} m={m} />)
+              )}
+
+              {/* КНОПКА ПОДГРУЗКИ СЛЕДУЮЩЕЙ СТРАНИЦЫ */}
+              {nextPageToken && (
+                <div style={{ padding: 12, textAlign: 'center' }}>
+                  <button
+                    style={styles.btn}
+                    onClick={() => loadList({ append: true, pageToken: nextPageToken })}
+                    disabled={appending}
+                  >
+                    {appending ? 'Загрузка…' : 'Загрузить ещё письма'}
+                  </button>
+                </div>
+              )}
+            </>
           ))}
         </div>
       </section>
@@ -596,7 +646,7 @@ export default function EmailTab() {
                   body: JSON.stringify({ to, subject, text, html, attachments })
                 });
                 if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
-                setComposeOpen(false); setFolder('sent'); loadList();
+                setComposeOpen(false); setFolder('sent'); loadList({ append: false, pageToken: null });
               } catch (err) { alert(err.message || String(err)); }
             }}>
               <div style={styles.formRow}><div>От</div><input value={ACCOUNT_EMAIL} disabled style={styles.input} /></div>
