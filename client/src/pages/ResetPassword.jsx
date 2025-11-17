@@ -1,5 +1,4 @@
-// client/src/pages/ResetPassword.jsx
-
+// src/pages/ResetPassword.jsx
 import React, { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
 
@@ -8,12 +7,12 @@ export default function ResetPassword() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
 
-  // Проверка: Supabase должен автоматически логинить пользователя через URL токен
+  // Проверка наличия access_token в ссылке
   useEffect(() => {
     const url = new URL(window.location.href);
-    const access_token = url.searchParams.get("access_token");
+    const token = url.searchParams.get("access_token");
 
-    if (!access_token) {
+    if (!token) {
       setError("Ссылка недействительна или устарела.");
     }
   }, []);
@@ -36,9 +35,9 @@ export default function ResetPassword() {
   if (done) {
     return (
       <div style={{ padding: 30 }}>
-        <h2>Пароль успешно изменён 🎉</h2>
-        <p>Теперь можешь войти под новым паролем.</p>
-        <a href="/">Перейти на страницу входа</a>
+        <h2>Пароль обновлён ✔</h2>
+        <p>Теперь можно войти в систему под новым паролем.</p>
+        <a href="/login">Перейти к логину</a>
       </div>
     );
   }
@@ -48,7 +47,7 @@ export default function ResetPassword() {
       <h2>Создать новый пароль</h2>
 
       {error && (
-        <div style={{ color: "red", marginBottom: 10 }}>{error}</div>
+        <p style={{ color: "red", marginBottom: 10 }}>{error}</p>
       )}
 
       <form onSubmit={handleSubmit}>
@@ -65,6 +64,7 @@ export default function ResetPassword() {
           }}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          required
         />
 
         <button
