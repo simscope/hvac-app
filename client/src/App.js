@@ -27,14 +27,13 @@ import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
 
-// Задачи
 import TasksTodayPage from './pages/TasksTodayPage.jsx';
 
-// 🔥 Новая страница: карта техников (живой GPS)
 import TechniciansMap from './pages/TechniciansMap.jsx';
-
-// 🔥 НОВАЯ страница: техбиблиотека
 import TechLibraryPage from './pages/TechLibraryPage.jsx';
+
+// 🔥 НОВАЯ страница — Reset Password
+import ResetPassword from './pages/ResetPassword.jsx';
 
 /* ───────────── Гард доступа к конкретной заявке (для техника) ───────────── */
 function JobAccess({ children }) {
@@ -96,7 +95,7 @@ function JobAccess({ children }) {
 /* ─────────────────────────── Оболочка с верхним меню ─────────────────────── */
 function Shell() {
   const { pathname } = useLocation();
-  const hideNav = pathname === '/login' || pathname === '/no-access';
+  const hideNav = pathname === '/login' || pathname === '/no-access' || pathname === '/reset-password';
 
   return (
     <div className="app-shell">
@@ -106,6 +105,9 @@ function Shell() {
           {/* Публичные */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/no-access" element={<NoAccessPage />} />
+
+          {/* 🔥 Страница смены пароля */}
+          <Route path="/reset-password" element={<ResetPassword />} />
 
           {/* Задачи — менеджер + админ */}
           <Route
@@ -168,7 +170,7 @@ function Shell() {
             }
           />
 
-          {/* Чат (операционный) — менеджер + админ */}
+          {/* Чат — менеджер + админ */}
           <Route
             path="/chat"
             element={
@@ -224,7 +226,7 @@ function Shell() {
             }
           />
 
-          {/* 🔥 Новые маршруты: живая карта техников */}
+          {/* Живая карта техников */}
           <Route
             path="/map"
             element={
@@ -233,13 +235,9 @@ function Shell() {
               </ProtectedRoute>
             }
           />
-          {/* Алиас, если удобно */}
-          <Route
-            path="/live"
-            element={<Navigate to="/map" replace />}
-          />
+          <Route path="/live" element={<Navigate to="/map" replace />} />
 
-          {/* Детали заявки: admin/manager — всегда; tech — только свою */}
+          {/* Детали заявки */}
           <Route
             path="/jobs/:id"
             element={
@@ -250,7 +248,7 @@ function Shell() {
               </ProtectedRoute>
             }
           />
-          {/* Алиас для старых ссылок */}
+
           <Route
             path="/job/:id"
             element={
