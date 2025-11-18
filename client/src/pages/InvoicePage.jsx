@@ -7,7 +7,8 @@ import autoTable from 'jspdf-autotable';
 
 /* ---------------- helpers ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
-const toInputDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const toInputDate = (d) =>
+  `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const fromInputDate = (s) => {
   if (!s) return new Date();
   const [y, m, day] = s.split('-').map(Number);
@@ -15,7 +16,20 @@ const fromInputDate = (s) => {
 };
 const human = (d) => {
   const dt = new Date(d);
-  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const M = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   return `${pad(dt.getDate())} ${M[dt.getMonth()]} ${dt.getFullYear()}`;
 };
 const N = (v) => Number(v || 0);
@@ -25,34 +39,21 @@ const clean = (v) => {
 };
 function composeAddress(o = {}) {
   const parts = [
-    o.address, o.address_line1, o.address_line2,
-    o.street, o.street1, o.street2,
-    o.city, o.state, o.region, o.zip, o.postal_code,
-  ].map(clean).filter(Boolean);
+    o.address,
+    o.address_line1,
+    o.address_line2,
+    o.street,
+    o.street1,
+    o.street2,
+    o.city,
+    o.state,
+    o.region,
+    o.zip,
+    o.postal_code,
+  ]
+    .map(clean)
+    .filter(Boolean);
   return [...new Set(parts)].join(', ');
-}
-const nowMinusSecISO = (sec = 45) =>
-  new Date(Date.now() - sec * 1000).toISOString();
-
-async function loadLogoDataURL(timeoutMs = 2500) {
-  try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
-    const res = await fetch('/logo_invoice_header.png', {
-      cache: 'force-cache',
-      signal: ac.signal,
-    });
-    clearTimeout(t);
-    if (!res.ok) throw new Error('logo fetch failed');
-    const blob = await res.blob();
-    return await new Promise((resolve) => {
-      const fr = new FileReader();
-      fr.onloadend = () => resolve(fr.result);
-      fr.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
 }
 
 /* ---------------- styles (UI) ---------------- */
@@ -265,18 +266,40 @@ export default function InvoicePage() {
         ]);
       }
 
-      // Next invoice no
+      // ----- Invoice number -----
       try {
-        const { data: last } = await supabase
-          .from('invoices')
-          .select('invoice_no')
-          .order('invoice_no', { ascending: false })
-          .limit(1);
+        // 1) Пытаемся найти уже существующий инвойс для этой заявки
+        let jobInvoiceNo = null;
+        if (id) {
+          const { data: jobInv } = await supabase
+            .from('invoices')
+            .select('invoice_no')
+            .eq('job_id', id)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          if (jobInv && jobInv[0]) {
+            jobInvoiceNo = N(jobInv[0].invoice_no) || null;
+          }
+        }
+
         if (!alive) return;
-        const next = (N(last && last[0] && last[0].invoice_no) || 0) + 1;
-        setInvoiceNo(String(next));
+
+        if (jobInvoiceNo != null) {
+          // Если инвойс уже есть — показываем его номер (режим "receipt")
+          setInvoiceNo(String(jobInvoiceNo));
+        } else {
+          // Если инвойса ещё не было — берём следующий глобальный номер
+          const { data: last } = await supabase
+            .from('invoices')
+            .select('invoice_no')
+            .order('invoice_no', { ascending: false })
+            .limit(1);
+          const next = (N(last && last[0] && last[0].invoice_no) || 0) + 1;
+          setInvoiceNo(String(next));
+        }
       } catch {
         const ts = Date.now().toString().slice(-6);
+        if (!alive) return;
         setInvoiceNo(ts);
       }
 
@@ -336,22 +359,27 @@ export default function InvoicePage() {
     if (saving) return;
     setSaving(true);
     try {
-      // номер/антидубль
+      // номер: если уже есть инвойс для этого job — переиспользуем
       let thisInvoiceNo = null;
-      const recentFrom = nowMinusSecISO(45);
-      const recentQ = await supabase
+      let existingInvoiceId = null;
+
+      const invQ = await supabase
         .from('invoices')
-        .select('invoice_no, created_at')
+        .select('id, invoice_no')
         .eq('job_id', id || null)
-        .gte('created_at', recentFrom)
         .order('created_at', { ascending: false })
         .limit(1);
 
-      if (!recentQ.error && recentQ.data && recentQ.data.length > 0) {
-        const n = Number(recentQ.data[0].invoice_no);
-        if (!Number.isNaN(n) && n > 0) thisInvoiceNo = n;
+      if (!invQ.error && invQ.data && invQ.data.length > 0) {
+        const n = Number(invQ.data[0].invoice_no);
+        if (!Number.isNaN(n) && n > 0) {
+          thisInvoiceNo = n;
+          existingInvoiceId = invQ.data[0].id;
+        }
       }
+
       if (thisInvoiceNo == null) {
+        // инвойса нет — создаём новый
         const payload = {
           job_id: id || null,
           labor_cost: Number(laborTotal) || 0,
@@ -364,6 +392,16 @@ export default function InvoicePage() {
           .single();
         if (error) throw error;
         thisInvoiceNo = Number(inserted.invoice_no);
+        existingInvoiceId = inserted.id;
+      } else if (existingInvoiceId) {
+        // инвойс уже есть — просто обновляем суммы
+        await supabase
+          .from('invoices')
+          .update({
+            labor_cost: Number(laborTotal) || 0,
+            parts_cost: Number(partsTotal) || 0,
+          })
+          .eq('id', existingInvoiceId);
       }
 
       // PDF
@@ -409,8 +447,8 @@ export default function InvoicePage() {
       rightY += 16;
 
       // Capsule
-      const pillW = 200,
-        pillH = 40;
+      const pillW = 200;
+      const pillH = 40;
       doc.setDrawColor(229, 231, 235);
       doc.setFillColor(246, 247, 251);
       doc.roundedRect(
@@ -426,9 +464,14 @@ export default function InvoicePage() {
       doc.setTextColor(70);
       doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
       doc.setTextColor(0);
-      doc.text(`$${N(balanceDue).toFixed(2)}`, pageW - marginX - 12, rightY + 26, {
-        align: 'right',
-      });
+      doc.text(
+        `$${N(balanceDue).toFixed(2)}`,
+        pageW - marginX - 12,
+        rightY + 26,
+        {
+          align: 'right',
+        }
+      );
       rightY += pillH + 18;
 
       // Company block aligned with Bill To
@@ -562,9 +605,14 @@ export default function InvoicePage() {
       endY += 16;
 
       if (N(discount) > 0) {
-        doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, {
-          align: 'right',
-        });
+        doc.text(
+          `Discount: -$${N(discount).toFixed(2)}`,
+          totalsRightX,
+          endY,
+          {
+            align: 'right',
+          }
+        );
         endY += 18;
       }
 
@@ -579,11 +627,7 @@ export default function InvoicePage() {
         const maxW = pageW - marginX * 2;
         doc.setFontSize(10);
         doc.setFont(undefined, 'bold');
-        doc.text(
-          `Warranty (${Number(warrantyDays)} days):`,
-          marginX,
-          endY
-        );
+        doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY);
         endY += 12;
         doc.setFont(undefined, 'normal');
         const txt =
@@ -628,7 +672,9 @@ export default function InvoicePage() {
         console.warn('PDF upload error:', e);
       }
 
-      setInvoiceNo(String((Number(thisInvoiceNo) || 0) + 1));
+      // ВАЖНО: НЕ увеличиваем номер — оставляем текущий,
+      // чтобы повторное открытие было как "receipt", а не новый инвойс
+      setInvoiceNo(String(thisInvoiceNo));
     } catch (e) {
       console.error('saveAndDownload error:', e);
       alert(`Failed to save or download invoice: ${e.message || e}`);
@@ -800,9 +846,7 @@ export default function InvoicePage() {
                         borderColor: '#dfe3ea',
                       }}
                       value={
-                        dueOverride === ''
-                          ? N(total).toFixed(2)
-                          : dueOverride
+                        dueOverride === '' ? N(total).toFixed(2) : dueOverride
                       }
                       onChange={(e) => setDueOverride(e.target.value)}
                       onFocus={() => {
@@ -922,9 +966,7 @@ export default function InvoicePage() {
             </div>
             <div style={{ ...S.totalsLine, marginTop: 4 }}>
               <div style={S.totalsStrong}>Total:</div>
-              <div style={S.totalsStrong}>
-                ${N(total).toFixed(2)}
-              </div>
+              <div style={S.totalsStrong}>${N(total).toFixed(2)}</div>
             </div>
           </div>
         </div>
@@ -941,9 +983,7 @@ export default function InvoicePage() {
             <input
               type="checkbox"
               checked={includeWarranty}
-              onChange={(e) =>
-                setIncludeWarranty(e.target.checked)
-              }
+              onChange={(e) => setIncludeWarranty(e.target.checked)}
             />
             Include warranty
           </label>
