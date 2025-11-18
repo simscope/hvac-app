@@ -56,6 +56,28 @@ function composeAddress(o = {}) {
   return [...new Set(parts)].join(', ');
 }
 
+// === ВОТ ЭТА ФУНКЦИЯ ПРОПАДАЛА ===
+async function loadLogoDataURL(timeoutMs = 2500) {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    const res = await fetch('/logo_invoice_header.png', {
+      cache: 'force-cache',
+      signal: ac.signal,
+    });
+    clearTimeout(t);
+    if (!res.ok) throw new Error('logo fetch failed');
+    const blob = await res.blob();
+    return await new Promise((resolve) => {
+      const fr = new FileReader();
+      fr.onloadend = () => resolve(fr.result);
+      fr.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
 /* ---------------- styles (UI) ---------------- */
 const BORDER = '#d1d5db';
 const BORDER_SOFT = '#e2e8f0';
@@ -672,8 +694,7 @@ export default function InvoicePage() {
         console.warn('PDF upload error:', e);
       }
 
-      // ВАЖНО: НЕ увеличиваем номер — оставляем текущий,
-      // чтобы повторное открытие было как "receipt", а не новый инвойс
+      // НЕ увеличиваем номер — квитанция всегда с тем же invoice_no
       setInvoiceNo(String(thisInvoiceNo));
     } catch (e) {
       console.error('saveAndDownload error:', e);
