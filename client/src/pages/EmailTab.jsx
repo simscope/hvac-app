@@ -120,8 +120,9 @@ const styles = {
     padding: 24,
     overflow: 'auto',
   },
-  readOverlay: { zIndex: 50 },
-  composeOverlay: { zIndex: 60 },
+  // подняли z-index, чтобы быть выше TopNav
+  readOverlay: { zIndex: 200 },
+  composeOverlay: { zIndex: 210 },
 
   composeModal: {
     width: 720, maxWidth: '90vw',
