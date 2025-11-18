@@ -333,7 +333,7 @@ export default function JobDetailsPage() {
   // to avoid auto-archive loop
   const autoArchivedOnce = useRef(false);
 
-  // email modal (single)
+  // email modal (single / generic)
   const [emailModalOpen, setEmailModalOpen] = useState(false);
   const [emailDraft, setEmailDraft] = useState({ to: '', subject: '', message: '' });
   const [emailInvSelected, setEmailInvSelected] = useState(null);
@@ -948,8 +948,42 @@ export default function JobDetailsPage() {
       .replace(/'/g,'&#39;');
   }
   const nl2brHtml = (s) => `<p>${escapeHtml(String(s || '').trim()).replace(/\n{2,}/g, '\n\n').split('\n').join('<br/>')}</p>`;
+  const buildHtmlFromText = (text) =>
+`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
+  ${nl2brHtml(text)}
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
+  <div style="font-size:12px;color:#334155">
+    <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
+    <div>📍 New York City, NY</div>
+    <div>📞 Phone: (929) 412-9042 Zelle</div>
+    <div>🌐 Website: <a href="https://appliance-hvac-repair.com" target="_blank">https://appliance-hvac-repair.com</a></div>
+    <div>HVAC • Appliance Repair</div>
+    <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
+  </div>
+</div>`.trim();
 
-  // Build default email draft (single)
+  // Build default email draft (generic "write to client")
+  const buildDefaultEmailDraftSimple = () => {
+    const to = normalizeEmail(client?.email) || '';
+    const subject = `Message about your service job ${job?.job_number ? '#' + job.job_number : ''} — Sim Scope Inc.`;
+    const message =
+`Hello${client?.full_name ? ' ' + client.full_name : ''},
+
+This is Sim HVAC & Appliance repair regarding your recent service job ${job?.job_number ? '#' + job.job_number : ''}.
+
+If you have any questions, just reply to this email.
+
+—
+Sim HVAC & Appliance repair
+New York City, NY
+Phone: (929) 412-9042 Zelle
+Website: https://appliance-hvac-repair.com
+HVAC • Appliance Repair
+Services Licensed & Insured | Serving NYC and NJ`;
+    return { to, subject, message };
+  };
+
+  // Build default email draft (single invoice)
   const buildDefaultEmailDraft = (inv) => {
     const to = normalizeEmail(client?.email) || '';
     const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
@@ -1011,19 +1045,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
     const subject = String(overrides.subject ?? draft.subject);
     const text = String(overrides.message ?? draft.message);
-    const html =
-`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
-  ${nl2brHtml(text)}
-  <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
-  <div style="font-size:12px;color:#334155">
-    <div><strong>Sim HVAC &amp; Appliance repair</strong></div>
-    <div>📍 New York City, NY</div>
-    <div>📞 Phone: (929) 412-9042 Zelle</div>
-    <div>🌐 Website: <a href="https://appliance-hvac-repair.com" target="_blank">https://appliance-hvac-repair.com</a></div>
-    <div>HVAC • Appliance Repair</div>
-    <div>Services Licensed &amp; Insured | Serving NYC and NJ</div>
-  </div>
-</div>`.trim();
+    const html = buildHtmlFromText(text);
 
     try {
       setSendingInvId(keyOfInv(inv));
@@ -1090,7 +1112,15 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // Modal open/close + send (single)
+  // Modal open/close + send (single / generic)
+  const openClientEmailModal = () => {
+    const draft = buildDefaultEmailDraftSimple();
+    setEmailDraft(draft);
+    setEmailInvSelected(null);    // generic mode (no invoice)
+    setIncludePaymentOptions(false);
+    setEmailModalOpen(true);
+  };
+
   const openEmailModal = (inv) => {
     const draft = buildDefaultEmailDraft(inv);
     setEmailDraft(draft);
@@ -1103,13 +1133,42 @@ Services Licensed & Insured | Serving NYC and NJ`;
     setEmailInvSelected(null);
   };
   const confirmSendEmailFromModal = async () => {
-    if (!emailInvSelected) return;
-    await sendInvoiceEmail(emailInvSelected, {
-      to: emailDraft.to,
-      subject: emailDraft.subject,
-      message: emailDraft.message,
-    });
-    closeEmailModal();
+    // invoice mode
+    if (emailInvSelected) {
+      await sendInvoiceEmail(emailInvSelected, {
+        to: emailDraft.to,
+        subject: emailDraft.subject,
+        message: emailDraft.message,
+      });
+      closeEmailModal();
+      return;
+    }
+
+    // generic "write to client" mode
+    const to = normalizeEmail(emailDraft.to);
+    if (!to) {
+      alert('Client email is empty. Please fill it in.');
+      return;
+    }
+    const subject = String(emailDraft.subject || '');
+    const text = String(emailDraft.message || '');
+    const html = buildHtmlFromText(text);
+
+    try {
+      setSendingInvId('generic');
+      await callEdgeAuth('gmail_send', {
+        to: [to],
+        subject,
+        text,
+        html,
+      });
+      alert('Email sent to ' + to);
+    } catch (e) {
+      alert('Failed to send email: ' + (e.message || e));
+    } finally {
+      setSendingInvId(null);
+      closeEmailModal();
+    }
   };
 
   // Modal open/close + send (multi)
@@ -1134,6 +1193,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
   const isUnpaidSCF = (toNum(job?.scf) || 0) > 0 && isPmUnpaid(job?.scf_payment_method);
   const isRecall = String(job?.status || '').toLowerCase().trim() === 'recall';
   const isArchived = !!job?.archived_at;
+  const isInvoiceEmail = !!emailInvSelected;
 
   if (loading) {
     return (
@@ -1349,7 +1409,21 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 </button>
                 {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
               </div>
-              {job?.client_id && <div style={{ ...MUTED, fontSize: 12 }}>Linked client_id: {String(job.client_id)}</div>}
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button
+                  style={BTN}
+                  onClick={openClientEmailModal}
+                  disabled={!normalizeEmail(client?.email)}
+                  title={normalizeEmail(client?.email) ? 'Send email to this client' : 'Fill client email above to send'}
+                >
+                  Написать клиенту
+                </button>
+                {!normalizeEmail(client?.email) && (
+                  <div style={{ ...MUTED, fontSize: 12, alignSelf: 'center' }}>
+                    Fill client email above to enable sending
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1667,12 +1741,12 @@ Services Licensed & Insured | Serving NYC and NJ`;
         </div>
       </div>
 
-      {/* === Email Compose Modal (single) === */}
+      {/* === Email Compose Modal (single / generic) === */}
       {emailModalOpen && (
         <div style={MODAL_BACKDROP} onClick={(e) => { if (e.target === e.currentTarget) closeEmailModal(); }}>
           <div style={MODAL_BOX}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ ...H2, margin: 0 }}>Send invoice email</div>
+              <div style={{ ...H2, margin: 0 }}>{isInvoiceEmail ? 'Send invoice email' : 'Send email to client'}</div>
               <button style={BTN} onClick={closeEmailModal}>✕</button>
             </div>
 
@@ -1701,9 +1775,15 @@ Services Licensed & Insured | Serving NYC and NJ`;
                   value={emailDraft.message}
                   onChange={(e) => setEmailDraft((d) => ({ ...d, message: e.target.value }))}
                 />
-                <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
-                  Attachment: invoice PDF will be attached automatically
-                </div>
+                {isInvoiceEmail ? (
+                  <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
+                    Attachment: invoice PDF will be attached automatically
+                  </div>
+                ) : (
+                  <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
+                    This email will be sent without attachments.
+                  </div>
+                )}
                 <div style={{ marginTop: 4 }}>
                   <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                     <input
@@ -1826,4 +1906,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
