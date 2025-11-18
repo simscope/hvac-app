@@ -870,19 +870,6 @@ export default function JobDetailsPage() {
     else window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
-  // === НОВОЕ: открыть тот же инвойс как Receipt (mode=receipt) ===
-  const openReceipt = (item) => {
-    const params = new URLSearchParams();
-    if (item?.invoice_no) params.set('no', String(item.invoice_no));
-    params.set('mode', 'receipt');
-    const qs = params.toString();
-    window.open(
-      makeFrontUrl(`/invoice/${jobId}${qs ? `?${qs}` : ''}`),
-      '_blank',
-      'noopener,noreferrer'
-    );
-  };
-
   const downloadInvoice = async (item) => {
     if (!item?.hasFile) return;
     const { data, error } = await invStorage().download(`${jobId}/${item.name}`);
@@ -1449,10 +1436,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
                         <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
                           Open PDF
                         </button>
-                        {/* НОВАЯ КНОПКА: открыть тот же инвойс как Receipt */}
-                        <button type="button" style={BTN} onClick={() => openReceipt(inv)}>
-                          Receipt
-                        </button>
                         <button
                           type="button"
                           style={{ ...BTN, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
@@ -1843,3 +1826,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
