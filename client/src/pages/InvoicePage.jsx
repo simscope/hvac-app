@@ -7,56 +7,42 @@ import autoTable from 'jspdf-autotable';
 
 /* ---------------- helpers ---------------- */
 const pad = (n) => String(n).padStart(2, '0');
+
 const toInputDate = (d) =>
   `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
 const fromInputDate = (s) => {
   if (!s) return new Date();
   const [y, m, day] = s.split('-').map(Number);
   return new Date(y, (m || 1) - 1, day || 1);
 };
+
 const human = (d) => {
   const dt = new Date(d);
-  const M = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
+  const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return `${pad(dt.getDate())} ${M[dt.getMonth()]} ${dt.getFullYear()}`;
 };
+
 const N = (v) => Number(v || 0);
+
 const clean = (v) => {
   const s = String(v ?? '').trim();
   return s && s.toLowerCase() !== 'empty' ? s : '';
 };
+
 function composeAddress(o = {}) {
   const parts = [
-    o.address,
-    o.address_line1,
-    o.address_line2,
-    o.street,
-    o.street1,
-    o.street2,
-    o.city,
-    o.state,
-    o.region,
-    o.zip,
-    o.postal_code,
-  ]
-    .map(clean)
-    .filter(Boolean);
+    o.address, o.address_line1, o.address_line2,
+    o.street, o.street1, o.street2,
+    o.city, o.state, o.region, o.zip, o.postal_code,
+  ].map(clean).filter(Boolean);
   return [...new Set(parts)].join(', ');
 }
 
-// === ВОТ ЭТА ФУНКЦИЯ ПРОПАДАЛА ===
+const nowMinusSecISO = (sec = 45) =>
+  new Date(Date.now() - sec * 1000).toISOString();
+
+/** Логотип для PDF/UI */
 async function loadLogoDataURL(timeoutMs = 2500) {
   try {
     const ac = new AbortController();
@@ -81,13 +67,14 @@ async function loadLogoDataURL(timeoutMs = 2500) {
 /* ---------------- styles (UI) ---------------- */
 const BORDER = '#d1d5db';
 const BORDER_SOFT = '#e2e8f0';
+
 const S = {
   page: { maxWidth: 1000, margin: '24px auto 80px', padding: '0 16px' },
   bar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 },
   primary: {
     padding: '10px 16px',
     borderRadius: 10,
-    border: `1px solid #2563eb`,
+    border: '1px solid #2563eb',
     background: '#2563eb',
     color: '#fff',
     cursor: 'pointer',
@@ -113,7 +100,6 @@ const S = {
     alignItems: 'center',
     gap: 12,
   },
-  brandName: { fontWeight: 700, fontSize: 16 },
   invoiceTitle: {
     fontWeight: 800,
     fontSize: 30,
@@ -190,6 +176,259 @@ function autoResizeTextarea(el) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
+/* -------- Общая функция рендера PDF (INVOICE / RECEIPT) -------- */
+async function renderInvoiceLikePdf(doc, opts) {
+  const {
+    title,              // 'INVOICE' или 'RECEIPT'
+    invoiceNo,
+    invoiceDate,
+    balanceDueValue,    // число, что показывать в Balance Due
+    rows,
+    subtotal,
+    discount,
+    total,
+    includeWarranty,
+    warrantyDays,
+    billCompany,
+    billName,
+    billAddress,
+    billPhone,
+    billEmail,
+    logoDataURL,
+  } = opts;
+
+  const pageW = 612;
+  const marginX = 40;
+
+  // Title
+  doc.setFontSize(30);
+  doc.setFont(undefined, 'bold');
+  doc.text(title, pageW - marginX, 48, { align: 'right' });
+  doc.setFontSize(10);
+  doc.setFont(undefined, 'normal');
+  doc.setTextColor(100);
+  doc.text(`# ${invoiceNo}`, pageW - marginX, 66, { align: 'right' });
+
+  // Logo + company
+  let logoBottom = 24;
+  try {
+    const logo = logoDataURL || (await loadLogoDataURL());
+    if (logo) {
+      doc.addImage(logo, 'PNG', marginX, 24, 150, 150);
+      logoBottom = 24 + 150;
+    }
+  } catch {
+    // без логотипа переживём
+  }
+
+  // Right column: Date + Balance Due + Bill To
+  const rightColW = 200;
+  let rightY = 110;
+  doc.setFont(undefined, 'bold');
+  doc.setTextColor(80);
+  doc.text('Date:', pageW - marginX - rightColW, rightY);
+  doc.setFont(undefined, 'normal');
+  doc.setTextColor(0);
+  doc.text(human(invoiceDate), pageW - marginX - rightColW + 40, rightY);
+  rightY += 16;
+
+  // Capsule Balance Due
+  const pillW = 200;
+  const pillH = 40;
+  doc.setDrawColor(229, 231, 235);
+  doc.setFillColor(246, 247, 251);
+  doc.roundedRect(
+    pageW - marginX - pillW,
+    rightY,
+    pillW,
+    pillH,
+    8,
+    8,
+    'FD'
+  );
+  doc.setFont(undefined, 'bold');
+  doc.setTextColor(70);
+  doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
+  doc.setTextColor(0);
+  doc.text(
+    `$${N(balanceDueValue).toFixed(2)}`,
+    pageW - marginX - 12,
+    rightY + 26,
+    { align: 'right' }
+  );
+  rightY += pillH + 18;
+
+  // Company block aligned with Bill To
+  const alignY = rightY;
+  let compTop = Math.max(logoBottom + 8, alignY) + 12;
+  doc.setTextColor(0);
+  doc.setFont(undefined, 'bold');
+  doc.text('Sim Scope Inc.', marginX, compTop);
+  compTop += 14;
+  doc.setFont(undefined, 'normal');
+  [
+    '1587 E 19th St',
+    'Brooklyn, NY 11230',
+    '(929) 412-9042 Zelle',
+    'simscope.office@gmail.com',
+  ].forEach((t) => {
+    doc.text(t, marginX, compTop);
+    compTop += 14;
+  });
+
+  // Bill To
+  doc.setFont(undefined, 'bold');
+  doc.text('Bill To:', pageW - marginX - pillW, rightY);
+  rightY += 16;
+  doc.setFont(undefined, billCompany ? 'bold' : 'normal');
+  if (billCompany) {
+    doc.text(String(billCompany), pageW - marginX - pillW, rightY);
+    rightY += 14;
+  }
+  doc.setFont(undefined, 'normal');
+  [billName, billAddress, billPhone, billEmail]
+    .filter(Boolean)
+    .forEach((line) => {
+      doc.text(String(line), pageW - marginX - pillW, rightY);
+      rightY += 14;
+    });
+
+  // Table
+  const tableStartY = Math.max(compTop, rightY) + 16;
+
+  const toPdfRow = (r) => {
+    const qtyNum = N(r.qty);
+    const priceNum = N(r.price);
+    const qtyCell = qtyNum === 0 ? '' : String(qtyNum);
+    const priceCell = priceNum === 0 ? '' : `$${priceNum.toFixed(2)}`;
+    const amountCell =
+      qtyNum === 0 || priceNum === 0
+        ? ''
+        : `$${(qtyNum * priceNum).toFixed(2)}`;
+    return [
+      r.name || (r.type === 'service' ? 'Service' : 'Item'),
+      qtyCell,
+      priceCell,
+      amountCell,
+    ];
+  };
+
+  const services = rows.filter((r) => r.type === 'service');
+  const materials = rows.filter((r) => r.type === 'material');
+
+  const body = [];
+  if (services.length) {
+    body.push([
+      {
+        content: 'Services',
+        colSpan: 4,
+        styles: {
+          fillColor: [238, 242, 247],
+          fontStyle: 'bold',
+          halign: 'left',
+        },
+      },
+    ]);
+    services.forEach((r) => body.push(toPdfRow(r)));
+  }
+  if (materials.length) {
+    if (services.length) {
+      body.push([
+        {
+          content: ' ',
+          colSpan: 4,
+          styles: { fillColor: [255, 255, 255], lineWidth: 0 },
+        },
+      ]);
+    }
+    body.push([
+      {
+        content: 'Materials',
+        colSpan: 4,
+        styles: {
+          fillColor: [238, 242, 247],
+          fontStyle: 'bold',
+          halign: 'left',
+        },
+      },
+    ]);
+    materials.forEach((r) => body.push(toPdfRow(r)));
+  }
+
+  autoTable(doc, {
+    startY: tableStartY,
+    head: [['Description', 'Qty', 'Unit Price', 'Amount']],
+    body,
+    styles: {
+      fontSize: 10,
+      cellPadding: 6,
+      lineWidth: 0.1,
+      textColor: [60, 60, 60],
+    },
+    headStyles: {
+      fillColor: [60, 60, 60],
+      textColor: 255,
+      fontStyle: 'bold',
+    },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+    margin: { left: marginX, right: marginX },
+    columnStyles: {
+      0: { cellWidth: 360 },
+      1: { cellWidth: 40, halign: 'center' },
+      2: { cellWidth: 80, halign: 'right' },
+      3: { cellWidth: 80, halign: 'right' },
+    },
+  });
+
+  // Totals
+  let endY = doc.lastAutoTable.finalY + 10;
+  const totalsRightX = pageW - marginX;
+
+  doc.setFont(undefined, 'bold');
+  doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, {
+    align: 'right',
+  });
+  endY += 16;
+
+  if (N(discount) > 0) {
+    doc.text(`Discount: -$${N(discount).toFixed(2)}`, totalsRightX, endY, {
+      align: 'right',
+    });
+    endY += 18;
+  }
+
+  doc.setFontSize(12);
+  doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, {
+    align: 'right',
+  });
+  endY += 22;
+
+  // Warranty
+  if (includeWarranty && Number(warrantyDays) > 0) {
+    const maxW = pageW - marginX * 2;
+    doc.setFontSize(10);
+    doc.setFont(undefined, 'bold');
+    doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY);
+    endY += 12;
+    doc.setFont(undefined, 'normal');
+    const txt =
+      `A ${Number(
+        warrantyDays
+      )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
+      `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors ` +
+      `(impacts, moisture, power surges, etc.), or any third-party tampering. The warranty starts on the job completion date and is valid only ` +
+      `when the invoice is paid in full.`;
+    const lines = doc.splitTextToSize(txt, maxW);
+    doc.text(lines, marginX, endY + 2);
+  }
+
+  // footer
+  doc.setFontSize(10);
+  doc.text('Thank you for your business!', pageW - marginX, 760, {
+    align: 'right',
+  });
+}
+
 /* ---------------- компонент ---------------- */
 export default function InvoicePage() {
   const { id } = useParams(); // job id (uuid)
@@ -228,8 +467,10 @@ export default function InvoicePage() {
 
   useEffect(() => {
     let alive = true;
+
     (async () => {
       let j = null;
+
       if (id) {
         const { data } = await supabase
           .from('jobs')
@@ -263,6 +504,7 @@ export default function InvoicePage() {
         };
       }
       if (!alive) return;
+
       setBillCompany(clean(clientData.company));
       setBillName(clean(clientData.full_name));
       setBillPhone(clean(clientData.phone));
@@ -288,45 +530,24 @@ export default function InvoicePage() {
         ]);
       }
 
-      // ----- Invoice number -----
+      // Next invoice no (UI; реальный номер всё равно задаёт insert)
       try {
-        // 1) Пытаемся найти уже существующий инвойс для этой заявки
-        let jobInvoiceNo = null;
-        if (id) {
-          const { data: jobInv } = await supabase
-            .from('invoices')
-            .select('invoice_no')
-            .eq('job_id', id)
-            .order('created_at', { ascending: false })
-            .limit(1);
-          if (jobInv && jobInv[0]) {
-            jobInvoiceNo = N(jobInv[0].invoice_no) || null;
-          }
-        }
-
+        const { data: last } = await supabase
+          .from('invoices')
+          .select('invoice_no')
+          .order('invoice_no', { ascending: false })
+          .limit(1);
         if (!alive) return;
-
-        if (jobInvoiceNo != null) {
-          // Если инвойс уже есть — показываем его номер (режим "receipt")
-          setInvoiceNo(String(jobInvoiceNo));
-        } else {
-          // Если инвойса ещё не было — берём следующий глобальный номер
-          const { data: last } = await supabase
-            .from('invoices')
-            .select('invoice_no')
-            .order('invoice_no', { ascending: false })
-            .limit(1);
-          const next = (N(last && last[0] && last[0].invoice_no) || 0) + 1;
-          setInvoiceNo(String(next));
-        }
+        const next = (N(last && last[0] && last[0].invoice_no) || 0) + 1;
+        setInvoiceNo(String(next));
       } catch {
         const ts = Date.now().toString().slice(-6);
-        if (!alive) return;
         setInvoiceNo(ts);
       }
 
       setInvoiceDate(new Date());
     })();
+
     return () => {
       alive = false;
     };
@@ -337,6 +558,7 @@ export default function InvoicePage() {
     () => rows.reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
+
   const laborTotal = useMemo(
     () =>
       rows
@@ -344,6 +566,7 @@ export default function InvoicePage() {
         .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
+
   const partsTotal = useMemo(
     () =>
       rows
@@ -351,6 +574,7 @@ export default function InvoicePage() {
         .reduce((s, r) => s + N(r.qty) * N(r.price), 0),
     [rows]
   );
+
   const total = useMemo(
     () => Math.max(0, N(subtotal) - N(discount)),
     [subtotal, discount]
@@ -372,36 +596,35 @@ export default function InvoicePage() {
       return cp;
     });
   };
+
   const addRow = () =>
     setRows((p) => [...p, { type: 'material', name: '', qty: 1, price: 0 }]);
-  const delRow = (i) => setRows((p) => p.filter((_, idx) => idx !== i));
+
+  const delRow = (i) =>
+    setRows((p) => p.filter((_, idx) => idx !== i));
 
   /* ----------- PDF ----------- */
   async function saveAndDownload() {
     if (saving) return;
     setSaving(true);
     try {
-      // номер: если уже есть инвойс для этого job — переиспользуем
+      // номер/антидубль для ИНВОЙСА
       let thisInvoiceNo = null;
-      let existingInvoiceId = null;
-
-      const invQ = await supabase
+      const recentFrom = nowMinusSecISO(45);
+      const recentQ = await supabase
         .from('invoices')
-        .select('id, invoice_no')
+        .select('invoice_no, created_at')
         .eq('job_id', id || null)
+        .gte('created_at', recentFrom)
         .order('created_at', { ascending: false })
         .limit(1);
 
-      if (!invQ.error && invQ.data && invQ.data.length > 0) {
-        const n = Number(invQ.data[0].invoice_no);
-        if (!Number.isNaN(n) && n > 0) {
-          thisInvoiceNo = n;
-          existingInvoiceId = invQ.data[0].id;
-        }
+      if (!recentQ.error && recentQ.data && recentQ.data.length > 0) {
+        const n = Number(recentQ.data[0].invoice_no);
+        if (!Number.isNaN(n) && n > 0) thisInvoiceNo = n;
       }
 
       if (thisInvoiceNo == null) {
-        // инвойса нет — создаём новый
         const payload = {
           job_id: id || null,
           labor_cost: Number(laborTotal) || 0,
@@ -414,19 +637,9 @@ export default function InvoicePage() {
           .single();
         if (error) throw error;
         thisInvoiceNo = Number(inserted.invoice_no);
-        existingInvoiceId = inserted.id;
-      } else if (existingInvoiceId) {
-        // инвойс уже есть — просто обновляем суммы
-        await supabase
-          .from('invoices')
-          .update({
-            labor_cost: Number(laborTotal) || 0,
-            parts_cost: Number(partsTotal) || 0,
-          })
-          .eq('id', existingInvoiceId);
       }
 
-      // PDF
+      /* ===== 1) PDF INVOICE ===== */
       const doc = new jsPDF({
         unit: 'pt',
         format: 'letter',
@@ -434,245 +647,29 @@ export default function InvoicePage() {
         putOnlyUsedFonts: true,
       });
 
-      const pageW = 612;
-      const marginX = 40;
-
-      // Title
-      doc.setFontSize(30);
-      doc.setFont(undefined, 'bold');
-      doc.text('INVOICE', pageW - marginX, 48, { align: 'right' });
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
-      doc.setTextColor(100);
-      doc.text(`# ${thisInvoiceNo}`, pageW - marginX, 66, { align: 'right' });
-
-      // Logo + company
-      let logoBottom = 24;
-      try {
-        const logo = logoDataURL || (await loadLogoDataURL());
-        if (logo) {
-          // ★ LOGO SIZE: увеличен логотип в PDF
-          doc.addImage(logo, 'PNG', marginX, 24, 150, 150);
-          logoBottom = 24 + 150;
-        }
-      } catch {}
-
-      // Right column: Date + Balance Due + Bill To
-      const rightColW = 200;
-      let rightY = 110;
-      doc.setFont(undefined, 'bold');
-      doc.setTextColor(80);
-      doc.text('Date:', pageW - marginX - rightColW, rightY);
-      doc.setFont(undefined, 'normal');
-      doc.setTextColor(0);
-      doc.text(human(invoiceDate), pageW - marginX - rightColW + 40, rightY);
-      rightY += 16;
-
-      // Capsule
-      const pillW = 200;
-      const pillH = 40;
-      doc.setDrawColor(229, 231, 235);
-      doc.setFillColor(246, 247, 251);
-      doc.roundedRect(
-        pageW - marginX - pillW,
-        rightY,
-        pillW,
-        pillH,
-        8,
-        8,
-        'FD'
-      );
-      doc.setFont(undefined, 'bold');
-      doc.setTextColor(70);
-      doc.text('Balance Due:', pageW - marginX - pillW + 12, rightY + 26);
-      doc.setTextColor(0);
-      doc.text(
-        `$${N(balanceDue).toFixed(2)}`,
-        pageW - marginX - 12,
-        rightY + 26,
-        {
-          align: 'right',
-        }
-      );
-      rightY += pillH + 18;
-
-      // Company block aligned with Bill To
-      const alignY = rightY;
-      let compTop = Math.max(logoBottom + 8, alignY) + 12;
-      doc.setTextColor(0);
-      doc.setFont(undefined, 'bold');
-      doc.text('Sim Scope Inc.', marginX, compTop);
-      compTop += 14;
-      doc.setFont(undefined, 'normal');
-      [
-        '1587 E 19th St',
-        'Brooklyn, NY 11230',
-        '(929) 412-9042 Zelle',
-        'simscope.office@gmail.com',
-      ].forEach((t) => {
-        doc.text(t, marginX, compTop);
-        compTop += 14;
-      });
-
-      // Bill To
-      doc.setFont(undefined, 'bold');
-      doc.text('Bill To:', pageW - marginX - pillW, rightY);
-      rightY += 16;
-      doc.setFont(undefined, billCompany ? 'bold' : 'normal'); // компания жирным
-      if (billCompany) {
-        doc.text(String(billCompany), pageW - marginX - pillW, rightY);
-        rightY += 14;
-      }
-      doc.setFont(undefined, 'normal');
-      [billName, billAddress, billPhone, billEmail]
-        .filter(Boolean)
-        .forEach((line) => {
-          doc.text(String(line), pageW - marginX - pillW, rightY);
-          rightY += 14;
-        });
-
-      // Table
-      const tableStartY = Math.max(compTop, rightY) + 16;
-
-      const toPdfRow = (r) => {
-        const qtyNum = N(r.qty);
-        const priceNum = N(r.price);
-        const qtyCell = qtyNum === 0 ? '' : String(qtyNum);
-        const priceCell = priceNum === 0 ? '' : `$${priceNum.toFixed(2)}`;
-        const amountCell =
-          qtyNum === 0 || priceNum === 0
-            ? ''
-            : `$${(qtyNum * priceNum).toFixed(2)}`;
-        return [
-          r.name || (r.type === 'service' ? 'Service' : 'Item'),
-          qtyCell,
-          priceCell,
-          amountCell,
-        ];
-      };
-
-      const services = rows.filter((r) => r.type === 'service');
-      const materials = rows.filter((r) => r.type === 'material');
-
-      const body = [];
-      if (services.length) {
-        body.push([
-          {
-            content: 'Services',
-            colSpan: 4,
-            styles: {
-              fillColor: [238, 242, 247],
-              fontStyle: 'bold',
-              halign: 'left',
-            },
-          },
-        ]);
-        services.forEach((r) => body.push(toPdfRow(r)));
-      }
-      if (materials.length) {
-        if (services.length)
-          body.push([
-            {
-              content: ' ',
-              colSpan: 4,
-              styles: { fillColor: [255, 255, 255], lineWidth: 0 },
-            },
-          ]);
-        body.push([
-          {
-            content: 'Materials',
-            colSpan: 4,
-            styles: {
-              fillColor: [238, 242, 247],
-              fontStyle: 'bold',
-              halign: 'left',
-            },
-          },
-        ]);
-        materials.forEach((r) => body.push(toPdfRow(r)));
-      }
-
-      autoTable(doc, {
-        startY: tableStartY,
-        head: [['Description', 'Qty', 'Unit Price', 'Amount']],
-        body,
-        styles: {
-          fontSize: 10,
-          cellPadding: 6,
-          lineWidth: 0.1,
-          textColor: [60, 60, 60],
-        },
-        headStyles: {
-          fillColor: [60, 60, 60],
-          textColor: 255,
-          fontStyle: 'bold',
-        },
-        alternateRowStyles: { fillColor: [249, 250, 251] },
-        margin: { left: marginX, right: marginX },
-        columnStyles: {
-          0: { cellWidth: 360 },
-          1: { cellWidth: 40, halign: 'center' },
-          2: { cellWidth: 80, halign: 'right' },
-          3: { cellWidth: 80, halign: 'right' },
-        },
-      });
-
-      // Totals
-      let endY = doc.lastAutoTable.finalY + 10;
-      const totalsRightX = pageW - marginX;
-      doc.setFont(undefined, 'bold');
-      doc.text(`Subtotal: $${N(subtotal).toFixed(2)}`, totalsRightX, endY, {
-        align: 'right',
-      });
-      endY += 16;
-
-      if (N(discount) > 0) {
-        doc.text(
-          `Discount: -$${N(discount).toFixed(2)}`,
-          totalsRightX,
-          endY,
-          {
-            align: 'right',
-          }
-        );
-        endY += 18;
-      }
-
-      doc.setFontSize(12);
-      doc.text(`Total: $${N(total).toFixed(2)}`, totalsRightX, endY, {
-        align: 'right',
-      });
-      endY += 22;
-
-      // Warranty
-      if (includeWarranty && Number(warrantyDays) > 0) {
-        const maxW = pageW - marginX * 2;
-        doc.setFontSize(10);
-        doc.setFont(undefined, 'bold');
-        doc.text(`Warranty (${Number(warrantyDays)} days):`, marginX, endY);
-        endY += 12;
-        doc.setFont(undefined, 'normal');
-        const txt =
-          `A ${Number(
-            warrantyDays
-          )}-day limited warranty applies ONLY to the work performed and/or parts installed by Sim Scope Inc. ` +
-          `The warranty does not cover other components or the appliance as a whole, normal wear, consumables, damage caused by external factors ` +
-          `(impacts, moisture, power surges, etc.), or any third-party tampering. The warranty starts on the job completion date and is valid only ` +
-          `when the invoice is paid in full.`;
-        const lines = doc.splitTextToSize(txt, maxW);
-        doc.text(lines, marginX, endY + 2);
-      }
-
-      // footer
-      doc.setFontSize(10);
-      doc.text('Thank you for your business!', pageW - marginX, 760, {
-        align: 'right',
+      await renderInvoiceLikePdf(doc, {
+        title: 'INVOICE',
+        invoiceNo: thisInvoiceNo,
+        invoiceDate,
+        balanceDueValue: balanceDue,
+        rows,
+        subtotal,
+        discount,
+        total,
+        includeWarranty,
+        warrantyDays,
+        billCompany,
+        billName,
+        billAddress,
+        billPhone,
+        billEmail,
+        logoDataURL,
       });
 
       const filename = `invoice_${thisInvoiceNo}.pdf`;
       doc.save(filename);
 
-      // upload storage + записываем file_key в таблицу
+      // upload invoice + обновить file_key
       try {
         const pdfBlob = doc.output('blob');
         const storageKey = `${id}/${filename}`;
@@ -691,11 +688,58 @@ export default function InvoicePage() {
           .eq('job_id', id || null)
           .eq('invoice_no', thisInvoiceNo);
       } catch (e) {
-        console.warn('PDF upload error:', e);
+        console.warn('PDF upload error (invoice):', e);
       }
 
-      // НЕ увеличиваем номер — квитанция всегда с тем же invoice_no
-      setInvoiceNo(String(thisInvoiceNo));
+      /* ===== 2) PDF RECEIPT (автоматом, Balance Due = 0) ===== */
+      try {
+        const receiptDoc = new jsPDF({
+          unit: 'pt',
+          format: 'letter',
+          compress: true,
+          putOnlyUsedFonts: true,
+        });
+
+        await renderInvoiceLikePdf(receiptDoc, {
+          title: 'RECEIPT',
+          invoiceNo: thisInvoiceNo,
+          invoiceDate,
+          balanceDueValue: 0,
+          rows,
+          subtotal,
+          discount,
+          total,
+          includeWarranty,
+          warrantyDays,
+          billCompany,
+          billName,
+          billAddress,
+          billPhone,
+          billEmail,
+          logoDataURL,
+        });
+
+        const receiptFilename = `receipt_${thisInvoiceNo}.pdf`;
+        const receiptBlob = receiptDoc.output('blob');
+        const receiptKey = `${id}/${receiptFilename}`;
+
+        const upR = await supabase.storage
+          .from('invoices')
+          .upload(receiptKey, receiptBlob, {
+            cacheControl: '3600',
+            contentType: 'application/pdf',
+            upsert: true,
+          });
+        if (upR.error) {
+          console.warn('Upload receipt PDF failed:', upR.error);
+        }
+        // в таблицу invoices ничего не дописываем — хватит одной записи
+      } catch (e) {
+        console.warn('PDF upload error (receipt):', e);
+      }
+
+      // UI – следующий номер
+      setInvoiceNo(String((Number(thisInvoiceNo) || 0) + 1));
     } catch (e) {
       console.error('saveAndDownload error:', e);
       alert(`Failed to save or download invoice: ${e.message || e}`);
@@ -707,7 +751,7 @@ export default function InvoicePage() {
   /* ---------------- таблица UI ---------------- */
   const tableRow = (r, i) => (
     <tr key={i}>
-      {/* Узкая колонка Type */}
+      {/* Type */}
       <td style={{ ...S.td, width: 110 }}>
         <select
           style={{ ...S.select, height: 34 }}
@@ -719,7 +763,7 @@ export default function InvoicePage() {
         </select>
       </td>
 
-      {/* ШИРОКАЯ колонка Name/Description */}
+      {/* Name / Description */}
       <td style={{ ...S.td, width: '52%' }}>
         <textarea
           style={{
@@ -743,7 +787,7 @@ export default function InvoicePage() {
         />
       </td>
 
-      {/* Qty/Price/Amount/× */}
+      {/* Qty */}
       <td style={{ ...S.td, width: 70, ...S.taCenter }}>
         <input
           type="number"
@@ -753,6 +797,7 @@ export default function InvoicePage() {
         />
       </td>
 
+      {/* Price */}
       <td style={{ ...S.td, width: 90, ...S.taRight }}>
         <input
           type="number"
@@ -762,10 +807,12 @@ export default function InvoicePage() {
         />
       </td>
 
+      {/* Amount */}
       <td style={{ ...S.td, width: 100, ...S.taRight }}>
         ${((N(r.qty) || 0) * (N(r.price) || 0)).toFixed(2)}
       </td>
 
+      {/* Delete */}
       <td style={{ ...S.td, width: 50, ...S.taCenter }}>
         <button
           style={{
@@ -797,7 +844,6 @@ export default function InvoicePage() {
         <div style={S.header}>
           <div>
             {logoDataURL ? (
-              // ★ LOGO SIZE: увеличен логотип в UI
               <img
                 src={logoDataURL}
                 alt="logo"
@@ -840,7 +886,7 @@ export default function InvoicePage() {
               />
             </div>
 
-            {/* ====== РЕДАКТИРУЕМЫЙ Balance Due ====== */}
+            {/* РЕДАКТИРУЕМЫЙ Balance Due (только для ИНВОЙСА) */}
             <div style={{ ...S.pill, marginTop: 8 }}>
               <div style={S.pillRow}>
                 <div style={S.pillCellLeft}>Balance Due:</div>
@@ -867,12 +913,15 @@ export default function InvoicePage() {
                         borderColor: '#dfe3ea',
                       }}
                       value={
-                        dueOverride === '' ? N(total).toFixed(2) : dueOverride
+                        dueOverride === ''
+                          ? N(total).toFixed(2)
+                          : dueOverride
                       }
                       onChange={(e) => setDueOverride(e.target.value)}
                       onFocus={() => {
-                        if (dueOverride === '')
+                        if (dueOverride === '') {
                           setDueOverride(N(total).toFixed(2));
+                        }
                       }}
                       title="Можно отредактировать вручную; ↺ — сброс к авто"
                     />
@@ -953,6 +1002,7 @@ export default function InvoicePage() {
             <tbody>{rows.map(tableRow)}</tbody>
           </table>
         </div>
+
         <div style={{ marginTop: 10 }}>
           <button style={S.ghost} onClick={addRow}>
             + Add row
@@ -987,7 +1037,9 @@ export default function InvoicePage() {
             </div>
             <div style={{ ...S.totalsLine, marginTop: 4 }}>
               <div style={S.totalsStrong}>Total:</div>
-              <div style={S.totalsStrong}>${N(total).toFixed(2)}</div>
+              <div style={S.totalsStrong}>
+                ${N(total).toFixed(2)}
+              </div>
             </div>
           </div>
         </div>
@@ -1004,7 +1056,9 @@ export default function InvoicePage() {
             <input
               type="checkbox"
               checked={includeWarranty}
-              onChange={(e) => setIncludeWarranty(e.target.checked)}
+              onChange={(e) =>
+                setIncludeWarranty(e.target.checked)
+              }
             />
             Include warranty
           </label>
