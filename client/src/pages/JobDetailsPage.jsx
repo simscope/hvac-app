@@ -1416,7 +1416,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                   disabled={!normalizeEmail(client?.email)}
                   title={normalizeEmail(client?.email) ? 'Send email to this client' : 'Fill client email above to send'}
                 >
-                  Написать клиенту
+                  Write to the client
                 </button>
                 {!normalizeEmail(client?.email) && (
                   <div style={{ ...MUTED, fontSize: 12, alignSelf: 'center' }}>
@@ -1906,3 +1906,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
