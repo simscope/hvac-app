@@ -435,6 +435,9 @@ export default function InvoicePage() {
 
   const [logoDataURL, setLogoDataURL] = useState(null);
 
+  // Тип документа: invoice / receipt
+  const [docType, setDocType] = useState('invoice');
+
   // Bill To
   const [billCompany, setBillCompany] = useState('');
   const [billName, setBillName] = useState('');
@@ -455,7 +458,7 @@ export default function InvoicePage() {
   const [includeWarranty, setIncludeWarranty] = useState(true);
   const [warrantyDays, setWarrantyDays] = useState(60);
 
-  // Переопределение Balance Due (пустая строка = auto от total)
+  // Переопределение Balance Due (для инвойса; пустая строка = auto от total)
   const [dueOverride, setDueOverride] = useState('');
 
   const [saving, setSaving] = useState(false);
@@ -530,7 +533,7 @@ export default function InvoicePage() {
         ]);
       }
 
-      // Next invoice no (UI; реальный номер всё равно задаёт insert)
+      // Следующий номер инвойса (для UI; реальный номер всё равно даёт insert)
       try {
         const { data: last } = await supabase
           .from('invoices')
@@ -608,7 +611,64 @@ export default function InvoicePage() {
     if (saving) return;
     setSaving(true);
     try {
-      // номер/антидубль для ИНВОЙСА
+      /* ====== РЕЖИМ RECEIPT ====== */
+      if (docType === 'receipt') {
+        const no = String(invoiceNo || '').trim();
+        if (!no) {
+          throw new Error('Введите номер инвойса для квитанции (Receipt).');
+        }
+
+        const receiptDoc = new jsPDF({
+          unit: 'pt',
+          format: 'letter',
+          compress: true,
+          putOnlyUsedFonts: true,
+        });
+
+        await renderInvoiceLikePdf(receiptDoc, {
+          title: 'RECEIPT',
+          invoiceNo: no,
+          invoiceDate,
+          balanceDueValue: 0,
+          rows,
+          subtotal,
+          discount,
+          total,
+          includeWarranty,
+          warrantyDays,
+          billCompany,
+          billName,
+          billAddress,
+          billPhone,
+          billEmail,
+          logoDataURL,
+        });
+
+        const filename = `receipt_${no}.pdf`;
+        receiptDoc.save(filename);
+
+        // Заливаем в storage, но БД invoices НЕ трогаем
+        try {
+          const pdfBlob = receiptDoc.output('blob');
+          const storageKey = `${id}/${filename}`;
+          const up = await supabase.storage
+            .from('invoices')
+            .upload(storageKey, pdfBlob, {
+              cacheControl: '3600',
+              contentType: 'application/pdf',
+              upsert: true,
+            });
+          if (up.error) {
+            console.warn('Upload receipt PDF failed:', up.error);
+          }
+        } catch (e) {
+          console.warn('Receipt PDF upload error:', e);
+        }
+
+        return;
+      }
+
+      /* ====== РЕЖИМ INVOICE ====== */
       let thisInvoiceNo = null;
       const recentFrom = nowMinusSecISO(45);
       const recentQ = await supabase
@@ -639,7 +699,6 @@ export default function InvoicePage() {
         thisInvoiceNo = Number(inserted.invoice_no);
       }
 
-      /* ===== 1) PDF INVOICE ===== */
       const doc = new jsPDF({
         unit: 'pt',
         format: 'letter',
@@ -691,58 +750,11 @@ export default function InvoicePage() {
         console.warn('PDF upload error (invoice):', e);
       }
 
-      /* ===== 2) PDF RECEIPT (автоматом, Balance Due = 0) ===== */
-      try {
-        const receiptDoc = new jsPDF({
-          unit: 'pt',
-          format: 'letter',
-          compress: true,
-          putOnlyUsedFonts: true,
-        });
-
-        await renderInvoiceLikePdf(receiptDoc, {
-          title: 'RECEIPT',
-          invoiceNo: thisInvoiceNo,
-          invoiceDate,
-          balanceDueValue: 0,
-          rows,
-          subtotal,
-          discount,
-          total,
-          includeWarranty,
-          warrantyDays,
-          billCompany,
-          billName,
-          billAddress,
-          billPhone,
-          billEmail,
-          logoDataURL,
-        });
-
-        const receiptFilename = `receipt_${thisInvoiceNo}.pdf`;
-        const receiptBlob = receiptDoc.output('blob');
-        const receiptKey = `${id}/${receiptFilename}`;
-
-        const upR = await supabase.storage
-          .from('invoices')
-          .upload(receiptKey, receiptBlob, {
-            cacheControl: '3600',
-            contentType: 'application/pdf',
-            upsert: true,
-          });
-        if (upR.error) {
-          console.warn('Upload receipt PDF failed:', upR.error);
-        }
-        // в таблицу invoices ничего не дописываем — хватит одной записи
-      } catch (e) {
-        console.warn('PDF upload error (receipt):', e);
-      }
-
-      // UI – следующий номер
+      // UI – показать следующий номер как подсказку
       setInvoiceNo(String((Number(thisInvoiceNo) || 0) + 1));
     } catch (e) {
       console.error('saveAndDownload error:', e);
-      alert(`Failed to save or download invoice: ${e.message || e}`);
+      alert(`Failed to save or download document: ${e.message || e}`);
     } finally {
       setSaving(false);
     }
@@ -842,6 +854,7 @@ export default function InvoicePage() {
 
       <div style={S.card}>
         <div style={S.header}>
+          {/* Левая колонка: лого + компания */}
           <div>
             {logoDataURL ? (
               <img
@@ -872,9 +885,58 @@ export default function InvoicePage() {
 
           <div />
 
-          <div style={{ textAlign: 'right', justifySelf: 'end', width: 300 }}>
-            <div style={S.invoiceTitle}>INVOICE</div>
-            <div style={S.invoiceNo}># {invoiceNo || '—'}</div>
+          {/* Правая колонка: заголовок, тип, номер, дата, Balance Due, Bill To */}
+          <div style={{ textAlign: 'right', justifySelf: 'end', width: 320 }}>
+            {/* Выбор типа документа */}
+            <div style={{ marginBottom: 4, textAlign: 'right' }}>
+              <label style={{ fontSize: 12, marginRight: 8 }}>Document type:</label>
+              <select
+                value={docType}
+                onChange={(e) => setDocType(e.target.value)}
+                style={{
+                  ...S.select,
+                  width: 130,
+                  height: 32,
+                  padding: '4px 8px',
+                  display: 'inline-block',
+                }}
+              >
+                <option value="invoice">Invoice</option>
+                <option value="receipt">Receipt</option>
+              </select>
+            </div>
+
+            <div style={S.invoiceTitle}>
+              {docType === 'invoice' ? 'INVOICE' : 'RECEIPT'}
+            </div>
+
+            {docType === 'invoice' ? (
+              <div style={S.invoiceNo}># {invoiceNo || '—'}</div>
+            ) : (
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: 12,
+                  color: '#374151',
+                  textAlign: 'right',
+                }}
+              >
+                Invoice #:&nbsp;
+                <input
+                  type="text"
+                  style={{
+                    ...S.input,
+                    width: 120,
+                    height: 32,
+                    display: 'inline-block',
+                    padding: '4px 8px',
+                  }}
+                  value={invoiceNo}
+                  onChange={(e) => setInvoiceNo(e.target.value)}
+                  placeholder="1234"
+                />
+              </div>
+            )}
 
             <div style={{ marginTop: 10, color: '#6b7280', fontWeight: 600 }}>
               Date:&nbsp;
@@ -886,61 +948,65 @@ export default function InvoicePage() {
               />
             </div>
 
-            {/* РЕДАКТИРУЕМЫЙ Balance Due (только для ИНВОЙСА) */}
+            {/* ====== Balance Due ====== */}
             <div style={{ ...S.pill, marginTop: 8 }}>
               <div style={S.pillRow}>
                 <div style={S.pillCellLeft}>Balance Due:</div>
                 <div style={S.pillCellRight}>
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                    }}
-                  >
-                    <span style={{ opacity: 0.7 }}>$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
+                  {docType === 'invoice' ? (
+                    <div
                       style={{
-                        ...S.input,
-                        width: 120,
-                        height: 32,
-                        textAlign: 'right',
-                        padding: '4px 8px',
-                        background: '#fff',
-                        borderColor: '#dfe3ea',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
                       }}
-                      value={
-                        dueOverride === ''
-                          ? N(total).toFixed(2)
-                          : dueOverride
-                      }
-                      onChange={(e) => setDueOverride(e.target.value)}
-                      onFocus={() => {
-                        if (dueOverride === '') {
-                          setDueOverride(N(total).toFixed(2));
-                        }
-                      }}
-                      title="Можно отредактировать вручную; ↺ — сброс к авто"
-                    />
-                    {dueOverride !== '' && (
-                      <button
-                        type="button"
-                        onClick={() => setDueOverride('')}
+                    >
+                      <span style={{ opacity: 0.7 }}>$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
                         style={{
-                          ...S.ghost,
+                          ...S.input,
+                          width: 120,
                           height: 32,
-                          lineHeight: '20px',
+                          textAlign: 'right',
                           padding: '4px 8px',
+                          background: '#fff',
+                          borderColor: '#dfe3ea',
                         }}
-                        title="Сбросить к авто (из Total)"
-                      >
-                        ↺
-                      </button>
-                    )}
-                  </div>
+                        value={
+                          dueOverride === ''
+                            ? N(total).toFixed(2)
+                            : dueOverride
+                        }
+                        onChange={(e) => setDueOverride(e.target.value)}
+                        onFocus={() => {
+                          if (dueOverride === '') {
+                            setDueOverride(N(total).toFixed(2));
+                          }
+                        }}
+                        title="Можно отредактировать вручную; ↺ — сброс к авто"
+                      />
+                      {dueOverride !== '' && (
+                        <button
+                          type="button"
+                          onClick={() => setDueOverride('')}
+                          style={{
+                            ...S.ghost,
+                            height: 32,
+                            lineHeight: '20px',
+                            padding: '4px 8px',
+                          }}
+                          title="Сбросить к авто (из Total)"
+                        >
+                          ↺
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontWeight: 700 }}>$0.00</div>
+                  )}
                 </div>
               </div>
             </div>
