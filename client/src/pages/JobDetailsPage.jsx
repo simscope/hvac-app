@@ -870,6 +870,19 @@ export default function JobDetailsPage() {
     else window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
+  // === НОВОЕ: открыть тот же инвойс как Receipt (mode=receipt) ===
+  const openReceipt = (item) => {
+    const params = new URLSearchParams();
+    if (item?.invoice_no) params.set('no', String(item.invoice_no));
+    params.set('mode', 'receipt');
+    const qs = params.toString();
+    window.open(
+      makeFrontUrl(`/invoice/${jobId}${qs ? `?${qs}` : ''}`),
+      '_blank',
+      'noopener,noreferrer'
+    );
+  };
+
   const downloadInvoice = async (item) => {
     if (!item?.hasFile) return;
     const { data, error } = await invStorage().download(`${jobId}/${item.name}`);
@@ -1435,6 +1448,10 @@ Services Licensed & Insured | Serving NYC and NJ`;
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
                           Open PDF
+                        </button>
+                        {/* НОВАЯ КНОПКА: открыть тот же инвойс как Receipt */}
+                        <button type="button" style={BTN} onClick={() => openReceipt(inv)}>
+                          Receipt
                         </button>
                         <button
                           type="button"
