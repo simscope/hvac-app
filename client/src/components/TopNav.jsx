@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../supabaseClient';
+import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
 
 const norm = (r) => {
   if (!r) return null;
@@ -37,7 +37,7 @@ const Icon = {
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path
         fill="currentColor"
-        d="M4 3h6a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V3Zm10 0h4a2 2 0 0 1 2 2v15h-6V5a2 2 0 0 0-2-2h2Zm-8 2v13h6V5H6Zm10 0v13h4V5h-4Z"
+        d="M4 3h6a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V3Zm10 3V5a2 2 0 0 0-2-2h2Zm0-3h4a2 2 0 0 1 2 2v15h-6Z"
       />
     </svg>
   ),
@@ -78,6 +78,26 @@ const Icon = {
   ),
 };
 
+// Вспомогательный вызов Edge-функции для Gmail
+const callGmailFn = async (fn, body) => {
+  const res = await fetch(`${FUNCTIONS_URL}/${fn}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
+    body: JSON.stringify(body || {}),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gmail fn ${fn} failed: ${res.status} ${text}`);
+  }
+
+  return res.json();
+};
+
 export default function TopNav() {
   const { user, role, logout } = useAuth();
   const uid = user?.id || null;
@@ -91,6 +111,9 @@ export default function TopNav() {
       return 0;
     }
   });
+
+  // 🔔 Непрочитанные Gmail-письма
+  const [gmailUnread, setGmailUnread] = useState(0);
 
   const channelRef = useRef(null);
   const debounceRef = useRef(null);
@@ -121,7 +144,8 @@ export default function TopNav() {
       if (typeof n === 'number') setChatUnreadTotal(n);
     };
     window.addEventListener('chat-unread-changed', onLocalChanged);
-    return () => window.removeEventListener('chat-unread-changed', onLocalChanged);
+    return () =>
+      window.removeEventListener('chat-unread-changed', onLocalChanged);
   }, []);
 
   useEffect(() => {
@@ -146,7 +170,12 @@ export default function TopNav() {
       )
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'chat_members', filter: `member_id=eq.${uid}` },
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chat_members',
+          filter: `member_id=eq.${uid}`,
+        },
         () => debounced(refreshUnreadFromServer)
       )
       .subscribe();
@@ -175,6 +204,52 @@ export default function TopNav() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
+  // 🔔 Подтягиваем непрочитанные письма из Gmail через edge-функцию gmail-list
+  useEffect(() => {
+    if (!user) {
+      setGmailUnread(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadUnread = async () => {
+      try {
+        const json = await callGmailFn('gmail-list', {
+          query: 'in:inbox is:unread',
+          maxResults: 50,
+        });
+
+        // Согласуй эту строку с форматом ответа твоей функции
+        // (если там не json.messages, поменяй на нужное поле)
+        const items = Array.isArray(json.messages)
+          ? json.messages
+          : Array.isArray(json)
+          ? json
+          : [];
+
+        const count =
+          items.length ||
+          (typeof json.total === 'number' ? json.total : 0) ||
+          0;
+
+        if (!cancelled) {
+          setGmailUnread(count);
+        }
+      } catch (e) {
+        console.error('Failed to load Gmail unread count', e);
+      }
+    };
+
+    loadUnread();
+    const timer = setInterval(loadUnread, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user]);
+
   const r = useMemo(() => norm(role), [role]);
 
   const base = process.env.PUBLIC_URL || '';
@@ -192,7 +267,9 @@ export default function TopNav() {
   // Порядок ссылок в топ-меню
   const links = useMemo(() => {
     // 🔴 ВАЖНО: end: true — точное совпадение пути для /jobs
-    const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true }];
+    const arr = [
+      { to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true },
+    ];
 
     if (r === 'admin' || r === 'manager') {
       arr.push(
@@ -216,7 +293,11 @@ export default function TopNav() {
 
     // ✅ Тех. база — САМАЯ ПОСЛЕДНЯЯ кнопка для admin/manager
     if (r === 'admin' || r === 'manager') {
-      arr.push({ to: '/tech-library', label: 'Тех. база', icon: <Icon.Library /> });
+      arr.push({
+        to: '/tech-library',
+        label: 'Тех. база',
+        icon: <Icon.Library />,
+      });
     }
 
     return arr;
@@ -263,6 +344,10 @@ export default function TopNav() {
                 l.to === '/chat' && chatUnreadTotal
                   ? `, ${chatUnreadTotal} непрочитанных`
                   : ''
+              }${
+                l.to === '/email' && gmailUnread
+                  ? `, ${gmailUnread} новых писем`
+                  : ''
               }`}
             >
               <span className="tn__icon">{l.icon}</span>
@@ -273,13 +358,21 @@ export default function TopNav() {
                   {chatUnreadTotal > 99 ? '99+' : chatUnreadTotal}
                 </span>
               )}
+
+              {l.to === '/email' && gmailUnread > 0 && (
+                <span className="tn__badge tn__badge--email" aria-hidden="true">
+                  {gmailUnread > 99 ? '99+' : gmailUnread}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
       </div>
 
       <div className="tn__right">
-        <span className={`tn__role tn__role--${r || 'none'}`}>{r || '...'}</span>
+        <span className={`tn__role tn__role--${r || 'none'}`}>
+          {r || '...'}
+        </span>
         <div className="tn__avatar" title={user?.email || ''}>
           {initials}
         </div>
@@ -338,6 +431,9 @@ export default function TopNav() {
           user-select: none;
           margin-left: 6px;
           box-shadow: 0 1px 2px rgba(0,0,0,.25);
+        }
+        .tn__badge--email {
+          /* можно оставить тот же цвет, либо, если хочешь, сделать другой */
         }
 
         .tn__right { display:flex; align-items:center; gap: 10px; }
