@@ -32,12 +32,12 @@ const Icon = {
       <path fill="currentColor" d="M12 2 3 6.5V18l9 4 9-4V6.5L12 2Zm0 2.2 6.8 3.2L12 10.6 5.2 7.4 12 4.2ZM5 9.6l7 3.3v6.9l-7-3.1V9.6Zm9 10.2v-6.9l7-3.3v7.1l-7 3.1Z"/>
     </svg>
   ),
-  // Иконка библиотеки
+  // Иконка библиотеки — вернул твою оригинальную
   Library: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path
         fill="currentColor"
-        d="M4 3h6a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V3Zm10 3V5a2 2 0 0 0-2-2h2Zm0-3h4a2 2 0 0 1 2 2v15h-6Z"
+        d="M4 3h6a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V3Zm10 0h4a2 2 0 0 1 2 2v15h-6V5a2 2 0 0 0-2-2h2Zm-8 2v13h6V5H6Zm10 0v13h4V5h-4Z"
       />
     </svg>
   ),
@@ -78,23 +78,25 @@ const Icon = {
   ),
 };
 
-// Вспомогательный вызов Edge-функции для Gmail
-const callGmailFn = async (fn, body) => {
+// 🔐 Как в EmailTab: Edge-функции с auth-токеном пользователя
+const callEdgeAuth = async (fn, payload) => {
+  const { data } = await supabase.auth.getSession();
+  const access = data?.session?.access_token || SUPABASE_ANON_KEY;
+
   const res = await fetch(`${FUNCTIONS_URL}/${fn}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      Authorization: `Bearer ${access}`,
     },
-    body: JSON.stringify(body || {}),
+    body: JSON.stringify(payload || {}),
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Gmail fn ${fn} failed: ${res.status} ${text}`);
+    throw new Error(`Edge ${fn} failed: ${res.status} ${text}`);
   }
-
   return res.json();
 };
 
@@ -112,7 +114,7 @@ export default function TopNav() {
     }
   });
 
-  // 🔔 Непрочитанные Gmail-письма
+  // 🔔 Gmail непрочитанные
   const [gmailUnread, setGmailUnread] = useState(0);
 
   const channelRef = useRef(null);
@@ -204,7 +206,7 @@ export default function TopNav() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
-  // 🔔 Подтягиваем непрочитанные письма из Gmail через edge-функцию gmail-list
+  // 🔔 Gmail unread через edge-функцию gmail-list
   useEffect(() => {
     if (!user) {
       setGmailUnread(0);
@@ -215,29 +217,30 @@ export default function TopNav() {
 
     const loadUnread = async () => {
       try {
-        const json = await callGmailFn('gmail-list', {
+        const json = await callEdgeAuth('gmail-list', {
           query: 'in:inbox is:unread',
           maxResults: 50,
         });
 
-        // Согласуй эту строку с форматом ответа твоей функции
-        // (если там не json.messages, поменяй на нужное поле)
-        const items = Array.isArray(json.messages)
-          ? json.messages
-          : Array.isArray(json)
-          ? json
-          : [];
+        // Пытаемся аккуратно вытащить число из разных форматов
+        let count = 0;
 
-        const count =
-          items.length ||
-          (typeof json.total === 'number' ? json.total : 0) ||
-          0;
+        if (typeof json?.resultSizeEstimate === 'number') {
+          count = json.resultSizeEstimate;
+        } else if (Array.isArray(json?.messages)) {
+          count = json.messages.length;
+        } else if (Array.isArray(json)) {
+          count = json.length;
+        } else if (typeof json?.total === 'number') {
+          count = json.total;
+        }
 
         if (!cancelled) {
-          setGmailUnread(count);
+          setGmailUnread(count || 0);
         }
       } catch (e) {
         console.error('Failed to load Gmail unread count', e);
+        if (!cancelled) setGmailUnread(0);
       }
     };
 
@@ -266,7 +269,6 @@ export default function TopNav() {
 
   // Порядок ссылок в топ-меню
   const links = useMemo(() => {
-    // 🔴 ВАЖНО: end: true — точное совпадение пути для /jobs
     const arr = [
       { to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true },
     ];
@@ -291,7 +293,6 @@ export default function TopNav() {
       );
     }
 
-    // ✅ Тех. база — САМАЯ ПОСЛЕДНЯЯ кнопка для admin/manager
     if (r === 'admin' || r === 'manager') {
       arr.push({
         to: '/tech-library',
@@ -433,7 +434,7 @@ export default function TopNav() {
           box-shadow: 0 1px 2px rgba(0,0,0,.25);
         }
         .tn__badge--email {
-          /* можно оставить тот же цвет, либо, если хочешь, сделать другой */
+          /* если захочешь другой цвет для email — можно здесь поменять */
         }
 
         .tn__right { display:flex; align-items:center; gap: 10px; }
