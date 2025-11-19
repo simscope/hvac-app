@@ -808,6 +808,12 @@ export default function JobDetailsPage() {
     for (const n of names) await downloadOne(n);
   };
 
+  // *** НОВОЕ: открытие фото / PDF по клику ***
+  const openPhoto = (url) => {
+    if (!url) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   /* ---------- invoices ---------- */
   const loadInvoices = async () => {
     setInvoicesLoading(true);
@@ -1716,7 +1722,9 @@ Services Licensed & Insured | Serving NYC and NJ`;
                     background: '#f1f5f9',
                     borderRadius: 8,
                     marginBottom: 6,
+                    cursor: 'pointer',
                   }}
+                  onClick={() => openPhoto(p.url)}
                 >
                   📄 PDF
                 </div>
@@ -1724,7 +1732,16 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 <img
                   src={p.url}
                   alt={p.name}
-                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6 }}
+                  style={{
+                    width: '100%',
+                    height: 120,
+                    objectFit: 'cover',
+                    borderRadius: 8,
+                    display: 'block',
+                    marginBottom: 6,
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => openPhoto(p.url)}
                 />
               )}
 
@@ -1906,4 +1923,3 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
-
