@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable react-hooks-exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import dayjs from 'dayjs';
@@ -334,7 +334,7 @@ const JobLink = ({ id, number }) => {
   if (!id) return null;
   return (
     <a
-      href={`#/jobs/${id}`}
+      href={`/jobs/${id}`}
       target="_blank"
       rel="noopener noreferrer"
       style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}
