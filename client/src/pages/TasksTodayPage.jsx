@@ -1,4 +1,3 @@
-// client/src/pages/TasksTodayPage.jsx
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
@@ -159,7 +158,7 @@ export default function TasksTodayPage() {
     }
   }, [me?.id]);
 
-  useEffect(() => { if (me) load(); }, [me]);
+  useEffect(() => { if (me) load(); }, [me, load]);
 
   /* ----- REALTIME ----- */
   useEffect(() => {
@@ -334,7 +333,12 @@ const TagList = ({ tags }) => !Array.isArray(tags) || tags.length === 0 ? null :
 const JobLink = ({ id, number }) => {
   if (!id) return null;
   return (
-    <a href={`#/jobs/${id}`} style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}>
+    <a
+      href={`#/jobs/${id}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{ fontSize: 12, color: '#2563eb', textDecoration: 'underline' }}
+    >
       Заявка #{number || String(id).slice(0, 8)}
     </a>
   );
