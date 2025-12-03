@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks-exhaustive-deps */
+//client/src/pages/TasksTodayPage.jsx
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import dayjs from 'dayjs';
