@@ -1,352 +1,340 @@
 // client/src/components/UploadTechDoc.jsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-const inputStyle = {
+const overlay = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15,23,42,0.45)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 50,
+};
+
+const modal = {
+  background: '#ffffff',
+  borderRadius: 16,
+  padding: '18px 20px',
+  width: '100%',
+  maxWidth: 560,
+  boxShadow: '0 20px 40px rgba(15,23,42,0.3)',
+};
+
+const headerRow = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 12,
+};
+
+const titleStyle = {
+  margin: 0,
+  fontSize: 18,
+  fontWeight: 600,
+};
+
+const closeBtn = {
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  fontSize: 18,
+  lineHeight: 1,
+};
+
+const formGrid = {
+  display: 'grid',
+  gridTemplateColumns: '1fr',
+  gap: 10,
+};
+
+const label = {
+  fontSize: 12,
+  fontWeight: 500,
+  color: '#374151',
+};
+
+const input = {
   width: '100%',
   padding: '8px 10px',
-  borderRadius: 8,
-  border: '1px solid #e5e7eb',
-  boxSizing: 'border-box',
-  height: 36,
-};
-
-const labelStyle = {
+  borderRadius: 10,
+  border: '1px solid #d1d5db',
   fontSize: 13,
-  fontWeight: 500,
-  marginBottom: 4,
 };
 
-const rowStyle = {
-  display: 'grid',
-  gridTemplateColumns: '140px 1fr',
-  gap: 10,
-  alignItems: 'center',
-  marginBottom: 10,
+const select = {
+  ...input,
 };
 
-const btnBase = {
+const textarea = {
+  ...input,
+  minHeight: 60,
+  resize: 'vertical',
+};
+
+const footer = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: 8,
+  marginTop: 12,
+};
+
+const btnGhost = {
   padding: '8px 14px',
   borderRadius: 999,
-  border: 'none',
+  border: '1px solid #d1d5db',
+  background: '#ffffff',
   cursor: 'pointer',
-  fontSize: 14,
-};
-
-const primaryBtn = {
-  ...btnBase,
-  background: '#2563eb',
-  color: '#fff',
-};
-
-const secondaryBtn = {
-  ...btnBase,
-  background: '#f3f4f6',
-  color: '#111827',
-};
-
-const errorStyle = {
-  color: '#b91c1c',
   fontSize: 13,
-  marginTop: 6,
 };
 
-const docTypes = [
-  { value: 'manual', label: 'Service manual' },
-  { value: 'wiring', label: 'Wiring diagram' },
-  { value: 'parts', label: 'Parts list' },
-  { value: 'spec', label: 'Spec sheet' },
-  { value: 'other', label: 'Other' },
-];
+const btnPrimary = {
+  padding: '8px 16px',
+  borderRadius: 999,
+  border: 'none',
+  background: '#2563eb',
+  color: '#ffffff',
+  cursor: 'pointer',
+  fontSize: 13,
+};
 
-function slugify(s) {
-  return (s || '')
-    .toString()
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'misc';
-}
-
-/**
- * Модалка загрузки техдокумента:
- * - выбираем файл
- * - категория / бренд / модель / title / type / описание
- * - upload в bucket "unit-docs"
- * - вставка строки в таблицу "unit_docs"
- *
- * props:
- *   onClose()   — закрыть модалку
- *   onSaved(row) — колбэк после успешного сохранения
- */
 export default function UploadTechDoc({ onClose, onSaved }) {
+  const [role, setRole] = useState(null);
+  const isTech = role === 'tech';
+
   const [file, setFile] = useState(null);
   const [category, setCategory] = useState('');
   const [brand, setBrand] = useState('');
   const [model, setModel] = useState('');
   const [title, setTitle] = useState('');
-  const [docType, setDocType] = useState('manual');
+  const [docType, setDocType] = useState('manual'); // manual | wiring | parts | spec | other | company
   const [description, setDescription] = useState('');
 
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
 
-  const onFileChange = (e) => {
-    const f = e.target.files?.[0] || null;
-    setFile(f);
-    if (f && !title) {
-      // если title пустой — заполним из имени файла
-      const withoutExt = f.name.replace(/\.[^.]+$/, '');
-      setTitle(withoutExt);
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('profile');
+      if (stored) {
+        const profile = JSON.parse(stored);
+        if (profile?.role) setRole(profile.role);
+      }
+    } catch (e) {
+      console.warn('Не удалось прочитать профиль из localStorage', e);
     }
-  };
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErr('');
 
     if (!file) {
-      setErr('Выберите файл.');
+      setErr('Выберите файл (PDF или другой документ).');
       return;
     }
     if (!brand.trim() || !model.trim() || !title.trim()) {
-      setErr('Бренд, модель и название документа обязательны.');
+      setErr('Заполните Бренд, Модель и Название документа.');
       return;
     }
 
-    setLoading(true);
+    setSaving(true);
     try {
-      const safeBrand = slugify(brand);
-      const safeModel = slugify(model);
-      const extMatch = file.name.match(/\.([^.]+)$/);
-      const ext = extMatch ? extMatch[1].toLowerCase() : 'pdf';
+      const fileExt = file.name.split('.').pop();
+      const filePath = `${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2)}.${fileExt}`;
 
-      const path = `${safeBrand}/${safeModel}/${Date.now()}-${slugify(
-        title || file.name
-      )}.${ext}`;
-
-      // 1) upload в bucket "unit-docs"
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      // загружаем в bucket unit-docs (как и раньше)
+      const { error: uploadError } = await supabase.storage
         .from('unit-docs')
-        .upload(path, file);
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+        });
 
       if (uploadError) {
         console.error(uploadError);
         throw new Error(uploadError.message || 'Ошибка загрузки файла');
       }
 
-      // 2) Получаем public URL
-      const { data: urlData } = supabase.storage
+      const { data: publicUrlData } = supabase.storage
         .from('unit-docs')
-        .getPublicUrl(uploadData.path);
+        .getPublicUrl(filePath);
 
-      const fileUrl = urlData?.publicUrl;
+      const fileUrl = publicUrlData?.publicUrl;
       if (!fileUrl) {
-        throw new Error('Не удалось получить ссылку на файл.');
+        throw new Error('Не удалось получить публичный URL файла.');
       }
 
-      // 3) Запись в таблицу unit_docs
-      const payload = {
-        category: category?.trim() || null,
-        brand: brand.trim(),
-        model: model.trim(),
-        title: title.trim(),
-        doc_type: docType || null,
-        description: description?.trim() || null,
-        file_url: fileUrl,
-      };
+      // "Документы фирмы" — это docType === 'company'
+      const isCompany = docType === 'company';
 
-      const { data: inserted, error: insertError } = await supabase
+      const { data, error: insertError } = await supabase
         .from('unit_docs')
-        .insert(payload)
+        .insert([
+          {
+            category: category || null,
+            brand: brand.trim(),
+            model: model.trim(),
+            title: title.trim(),
+            doc_type: docType,
+            description: description || null,
+            file_url: fileUrl,
+            is_company: isCompany,
+          },
+        ])
         .select('*')
-        .maybeSingle();
+        .single();
 
       if (insertError) {
         console.error(insertError);
-        throw new Error(insertError.message || 'Ошибка сохранения в unit_docs');
+        throw new Error(insertError.message || 'Ошибка сохранения документа');
       }
 
-      if (onSaved) onSaved(inserted);
+      if (onSaved) onSaved(data);
       if (onClose) onClose();
     } catch (e2) {
       console.error(e2);
-      setErr(e2.message || 'Ошибка при сохранении документа.');
+      setErr(e2.message || 'Ошибка сохранения.');
     } finally {
-      setLoading(false);
+      setSaving(false);
+    }
+  };
+
+  const handleOverlayClick = (e) => {
+    if (e.target === e.currentTarget) {
+      if (!saving && onClose) onClose();
     }
   };
 
   return (
-    <div className="utd-backdrop">
-      <div className="utd-modal">
-        <div className="utd-header">
-          <h2>Добавить документ</h2>
-          <button
-            type="button"
-            className="utd-close"
-            onClick={onClose}
-            disabled={loading}
-          >
+    <div style={overlay} onClick={handleOverlayClick}>
+      <div style={modal} onClick={(e) => e.stopPropagation()}>
+        <div style={headerRow}>
+          <h2 style={titleStyle}>Добавить документ</h2>
+          <button type="button" style={closeBtn} onClick={onClose} disabled={saving}>
             ×
           </button>
         </div>
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} style={formGrid}>
           {/* Файл */}
-          <div style={{ ...rowStyle, marginTop: 10 }}>
-            <div style={labelStyle}>Файл (PDF)</div>
+          <div>
+            <div style={label}>Файл (PDF / Excel / др.)</div>
             <input
               type="file"
-              accept="application/pdf,application/*"
-              onChange={onFileChange}
-              style={{ ...inputStyle, padding: 6, height: 'auto' }}
+              style={input}
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+              disabled={saving}
             />
           </div>
 
           {/* Категория */}
-          <div style={rowStyle}>
-            <div style={labelStyle}>Категория</div>
+          <div>
+            <div style={label}>Категория</div>
             <input
-              style={inputStyle}
+              style={input}
               placeholder="Например: Dishwasher, Washer, Mini-split..."
               value={category}
               onChange={(e) => setCategory(e.target.value)}
+              disabled={saving}
             />
           </div>
 
           {/* Бренд */}
-          <div style={rowStyle}>
-            <div style={labelStyle}>Бренд *</div>
+          <div>
+            <div style={label}>Бренд *</div>
             <input
-              style={inputStyle}
+              style={input}
               placeholder="Hobart, Samsung, Trane..."
               value={brand}
               onChange={(e) => setBrand(e.target.value)}
-              required
+              disabled={saving}
             />
           </div>
 
           {/* Модель */}
-          <div style={rowStyle}>
-            <div style={labelStyle}>Модель *</div>
+          <div>
+            <div style={label}>Модель *</div>
             <input
-              style={inputStyle}
+              style={input}
               placeholder="LXe, AJ036TXS4CHAA..."
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              required
+              disabled={saving}
             />
           </div>
 
           {/* Название документа */}
-          <div style={rowStyle}>
-            <div style={labelStyle}>Название документа *</div>
+          <div>
+            <div style={label}>Название документа *</div>
             <input
-              style={inputStyle}
+              style={input}
               placeholder="Service manual, Wiring diagram..."
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              required
+              disabled={saving}
             />
           </div>
 
           {/* Тип документа */}
-          <div style={rowStyle}>
-            <div style={labelStyle}>Тип</div>
+          <div>
+            <div style={label}>Тип</div>
             <select
-              style={inputStyle}
+              style={select}
               value={docType}
               onChange={(e) => setDocType(e.target.value)}
+              disabled={saving}
             >
-              {docTypes.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
+              <option value="manual">Service manual</option>
+              <option value="wiring">Wiring diagram</option>
+              <option value="parts">Parts list</option>
+              <option value="spec">Spec sheet</option>
+              <option value="other">Other</option>
+              {!isTech && (
+                <option value="company">Документы фирмы</option>
+              )}
             </select>
           </div>
 
           {/* Описание */}
-          <div style={rowStyle}>
-            <div style={labelStyle}>Описание</div>
+          <div>
+            <div style={label}>Описание</div>
             <textarea
-              style={{ ...inputStyle, minHeight: 60, height: 'auto', resize: 'vertical' }}
+              style={textarea}
               placeholder="Коротко: undercounter dishwasher 208-240V, steam, etc."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              disabled={saving}
             />
           </div>
 
-          {err && <div style={errorStyle}>{err}</div>}
+          {err && (
+            <div style={{ fontSize: 12, color: '#b91c1c' }}>
+              {err}
+            </div>
+          )}
 
-          <div
-            style={{
-              marginTop: 16,
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: 10,
-            }}
-          >
+          <div style={footer}>
             <button
               type="button"
-              style={secondaryBtn}
+              style={btnGhost}
               onClick={onClose}
-              disabled={loading}
+              disabled={saving}
             >
               Отмена
             </button>
-            <button type="submit" style={primaryBtn} disabled={loading}>
-              {loading ? 'Сохраняю...' : 'Сохранить'}
+            <button
+              type="submit"
+              style={btnPrimary}
+              disabled={saving}
+            >
+              {saving ? 'Сохранение...' : 'Сохранить'}
             </button>
           </div>
         </form>
       </div>
-
-      <style>{`
-        .utd-backdrop {
-          position: fixed;
-          inset: 0;
-          background: rgba(15,23,42,0.65);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 9999;
-        }
-        .utd-modal {
-          background: #ffffff;
-          border-radius: 16px;
-          padding: 18px 18px 16px;
-          width: 520px;
-          max-width: 95vw;
-          box-shadow: 0 20px 45px rgba(15,23,42,0.45);
-          color: #111827;
-        }
-        .utd-header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 10px;
-        }
-        .utd-header h2 {
-          margin: 0;
-          font-size: 18px;
-          font-weight: 600;
-        }
-        .utd-close {
-          border: none;
-          background: transparent;
-          font-size: 22px;
-          line-height: 1;
-          cursor: pointer;
-          padding: 2px 6px;
-          border-radius: 999px;
-        }
-        .utd-close:hover {
-          background: #f3f4f6;
-        }
-      `}</style>
     </div>
   );
 }
