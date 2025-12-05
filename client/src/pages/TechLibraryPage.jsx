@@ -93,6 +93,7 @@ const badgeDocType = (t) => {
   if (t === 'wiring') return { ...base, background: '#fee2e2', color: '#b91c1c' };
   if (t === 'parts') return { ...base, background: '#dcfce7', color: '#15803d' };
   if (t === 'spec') return { ...base, background: '#fef9c3', color: '#854d0e' };
+  if (t === 'company') return { ...base, background: '#e0f2fe', color: '#0369a1' };
   return { ...base, background: '#e5e7eb', color: '#111827' };
 };
 
@@ -167,7 +168,6 @@ export default function TechLibraryPage() {
 
   const [showUpload, setShowUpload] = useState(false);
 
-  // роль пользователя из localStorage.profile.role
   const [role, setRole] = useState(null);
   const isAdmin = role === 'admin';
   const isTech = role === 'tech';
@@ -212,16 +212,16 @@ export default function TechLibraryPage() {
     loadDocs();
   }, []);
 
-  // фирменные документы (для блока наверху)
+  // фирменные документы (только is_company = true)
   const companyDocs = useMemo(
     () => (docs || []).filter((d) => d.is_company),
     [docs]
   );
 
-  // документы, которые показываем в таблице/поиске
+  // документы, которые показываем в таблице: только НЕ фирменные
   const visibleDocs = useMemo(
-    () => (docs || []).filter((d) => !d.is_company || !isTech),
-    [docs, isTech]
+    () => (docs || []).filter((d) => !d.is_company),
+    [docs]
   );
 
   const categories = useMemo(() => {
@@ -285,7 +285,7 @@ export default function TechLibraryPage() {
 
   return (
     <div style={pageWrap}>
-      {/* ===== блок "Документы фирмы" сверху (менеджеры/админы) ===== */}
+      {/* ===== блок "Документы фирмы" сверху — только для менеджеров/админов ===== */}
       {!isTech && (
         <div style={companyBlockWrap}>
           <div style={companyHeaderRow}>
@@ -299,7 +299,7 @@ export default function TechLibraryPage() {
 
           {companyDocs.length === 0 ? (
             <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>
-              Пока нет документов фирмы. При добавлении выбери раздел "Документы фирмы".
+              Пока нет документов фирмы. При добавлении выберите тип "Документы фирмы".
             </p>
           ) : (
             <div style={companyDocsRowWrap}>
@@ -321,7 +321,7 @@ export default function TechLibraryPage() {
         </div>
       )}
 
-      {/* ===== основная часть: тех. библиотека ===== */}
+      {/* ===== основная часть: тех. база ===== */}
       <div style={topBar}>
         <div>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Техническая база</h1>
@@ -418,7 +418,8 @@ export default function TechLibraryPage() {
                       >
                         Открыть
                       </button>
-                      {/* Удалять фирменный документ может только админ */}
+                      {/* Удалять фирменные доки — только админ, но сюда они уже не попадают;
+                          проверка оставлена для обычных доков */}
                       {(!isCompanyDoc || isAdmin) && (
                         <button
                           type="button"
