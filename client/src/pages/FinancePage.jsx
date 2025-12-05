@@ -20,6 +20,7 @@ const normalizePaymentLabel = (raw) => {
   if (v === 'zelle') return 'Zelle';
   if (v === 'card' || v === 'карта') return 'Карта';
   if (v === 'check' || v === 'чек') return 'Чек';
+  if (v === 'ACH' || v === 'ACH') return 'ACH';
   return String(raw);
 };
 
@@ -232,7 +233,7 @@ const FinancePage = () => {
 
   // Учитываем только суммы, где выбран способ оплаты.
   const moneyReport = useMemo(() => {
-    const buckets = { Наличные: 0, Zelle: 0, Чек: 0, Карта: 0, Другое: 0 };
+    const buckets = { Наличные: 0, Zelle: 0, Чек: 0, Карта: 0, ACH: 0 };
 
     filteredJobs.forEach((j) => {
       const { scf, labor } = calcRow(j);
@@ -693,9 +694,9 @@ const FinancePage = () => {
             Карта: <strong>{formatMoney(moneyReport.buckets.Карта)}</strong>
           </li>
           {moneyReport.buckets.Другое > 0 && (
-            <li>
-              Другое: <strong>{formatMoney(moneyReport.buckets.Другое)}</strong>
-            </li>
+           <li>
+            ACH: <strong>{formatMoney(moneyReport.buckets.ACH)}</strong>
+           </li>
           )}
         </ul>
       </div>
@@ -721,3 +722,4 @@ const FinancePage = () => {
 };
 
 export default FinancePage;
+
