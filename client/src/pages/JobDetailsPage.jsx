@@ -155,7 +155,7 @@ const STATUS_OPTIONS = [
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Payments ---------- */
-const PM_ALLOWED = ['cash', 'zelle', 'card', 'check'];
+const PM_ALLOWED = ['cash', 'zelle', 'card', 'check','ACH'];
 const pmToSelect = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
@@ -1313,7 +1313,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                     value={pmToSelect(job.scf_payment_method)}
                     onChange={(e) => setField('scf_payment_method', pmToSave(e.target.value))}
                   >
-                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (
+                    {['-', 'cash', 'zelle', 'card', 'check','ACH'].map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
@@ -1345,7 +1345,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                     value={pmToSelect(job.labor_payment_method)}
                     onChange={(e) => setField('labor_payment_method', pmToSave(e.target.value))}
                   >
-                    {['-', 'cash', 'zelle', 'card', 'check'].map((p) => (
+                    {['-', 'cash', 'zelle', 'card', 'check', 'ACH'].map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
@@ -1923,3 +1923,4 @@ function Td({ children, center }) {
     <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
   );
 }
+
