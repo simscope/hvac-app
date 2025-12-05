@@ -167,17 +167,17 @@ export default function TechLibraryPage() {
 
   const [showUpload, setShowUpload] = useState(false);
 
-  // роль пользователя (читаем из localStorage, чтобы не тянуть лишние хуки)
-  const [isAdmin, setIsAdmin] = useState(false);
+  // роль пользователя из localStorage.profile.role
+  const [role, setRole] = useState(null);
+  const isAdmin = role === 'admin';
+  const isTech = role === 'tech';
 
   useEffect(() => {
     try {
       const stored = localStorage.getItem('profile');
       if (stored) {
         const profile = JSON.parse(stored);
-        if (profile?.role === 'admin') {
-          setIsAdmin(true);
-        }
+        if (profile?.role) setRole(profile.role);
       }
     } catch (e) {
       console.warn('Не удалось прочитать профиль из localStorage', e);
@@ -212,23 +212,29 @@ export default function TechLibraryPage() {
     loadDocs();
   }, []);
 
-  const categories = useMemo(() => {
-    const set = new Set();
-    (docs || []).forEach((d) => {
-      if (d.category) set.add(d.category);
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [docs]);
-
-  // фирменные документы: category === 'company'
+  // фирменные документы (для блока наверху)
   const companyDocs = useMemo(
-    () => (docs || []).filter((d) => d.category === 'company'),
+    () => (docs || []).filter((d) => d.is_company),
     [docs]
   );
 
+  // документы, которые показываем в таблице/поиске
+  const visibleDocs = useMemo(
+    () => (docs || []).filter((d) => !d.is_company || !isTech),
+    [docs, isTech]
+  );
+
+  const categories = useMemo(() => {
+    const set = new Set();
+    (visibleDocs || []).forEach((d) => {
+      if (d.category) set.add(d.category);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [visibleDocs]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (docs || []).filter((d) => {
+    return (visibleDocs || []).filter((d) => {
       if (categoryFilter !== 'all' && d.category !== categoryFilter) return false;
 
       if (!q) return true;
@@ -243,7 +249,7 @@ export default function TechLibraryPage() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [docs, search, categoryFilter]);
+  }, [visibleDocs, search, categoryFilter]);
 
   const handleOpenFile = (url) => {
     if (!url) return;
@@ -279,39 +285,41 @@ export default function TechLibraryPage() {
 
   return (
     <div style={pageWrap}>
-      {/* ===== блок "Документы фирмы" сверху ===== */}
-      <div style={companyBlockWrap}>
-        <div style={companyHeaderRow}>
-          <div>
-            <h2 style={companyHeaderTitle}>Документы фирмы</h2>
-            <p style={companyHeaderSub}>
-              Общие документы для всех: W-9, страховка, лицензии, формы и т.д.
-            </p>
+      {/* ===== блок "Документы фирмы" сверху (менеджеры/админы) ===== */}
+      {!isTech && (
+        <div style={companyBlockWrap}>
+          <div style={companyHeaderRow}>
+            <div>
+              <h2 style={companyHeaderTitle}>Документы фирмы</h2>
+              <p style={companyHeaderSub}>
+                Общие документы: W-9, страховка, лицензии, формы и т.д.
+              </p>
+            </div>
           </div>
-        </div>
 
-        {companyDocs.length === 0 ? (
-          <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>
-            Пока нет общих документов фирмы (используй категорию <b>company</b> при добавлении).
-          </p>
-        ) : (
-          <div style={companyDocsRowWrap}>
-            {companyDocs.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                style={companyDocBtn}
-                onClick={() => handleOpenFile(d.file_url)}
-              >
-                <span style={companyDocTitle}>{d.title || 'Без названия'}</span>
-                {d.description && (
-                  <span style={companyDocDesc}>{d.description}</span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+          {companyDocs.length === 0 ? (
+            <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>
+              Пока нет документов фирмы. При добавлении выбери раздел "Документы фирмы".
+            </p>
+          ) : (
+            <div style={companyDocsRowWrap}>
+              {companyDocs.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  style={companyDocBtn}
+                  onClick={() => handleOpenFile(d.file_url)}
+                >
+                  <span style={companyDocTitle}>{d.title || 'Без названия'}</span>
+                  {d.description && (
+                    <span style={companyDocDesc}>{d.description}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ===== основная часть: тех. библиотека ===== */}
       <div style={topBar}>
@@ -379,7 +387,7 @@ export default function TechLibraryPage() {
               </tr>
             )}
             {filtered.map((d) => {
-              const isCompanyDoc = d.category === 'company';
+              const isCompanyDoc = d.is_company;
               return (
                 <tr key={d.id}>
                   <td style={tdStyle}>{d.category || '—'}</td>
@@ -410,7 +418,7 @@ export default function TechLibraryPage() {
                       >
                         Открыть
                       </button>
-                      {/* Удалить фирменный документ может только админ */}
+                      {/* Удалять фирменный документ может только админ */}
                       {(!isCompanyDoc || isAdmin) && (
                         <button
                           type="button"
