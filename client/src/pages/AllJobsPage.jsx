@@ -166,7 +166,7 @@ const AllJobsPage = () => {
         Phone: client?.phone || '',
         Address: formatAddress(client),
         SCF: job.scf,
-        'SCF payment': job.scf_payment_method,
+        'SCF': job.scf_payment_method,
         Labor: job.labor_price,
         'Labor payment': job.labor_payment_method,
         Status: job.status,
@@ -663,6 +663,7 @@ const AllJobsPage = () => {
                           <option value="zelle">Zelle</option>
                           <option value="card">card</option>
                           <option value="check">check</option>
+                          <option value="ACH">ACH</option>
                           <option value="-">-</option>
                         </select>
                       </td>
@@ -690,6 +691,7 @@ const AllJobsPage = () => {
                           <option value="zelle">Zelle</option>
                           <option value="card">card</option>
                           <option value="check">check</option>
+                          <option value="ACH">ACH</option>
                           <option value="-">-</option>
                         </select>
                       </td>
@@ -885,3 +887,4 @@ function formatAddress(c) {
 function isDigits(s) {
   return /^\d+$/.test(String(s).trim());
 }
+
