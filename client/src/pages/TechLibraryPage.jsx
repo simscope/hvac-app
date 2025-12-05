@@ -96,6 +96,67 @@ const badgeDocType = (t) => {
   return { ...base, background: '#e5e7eb', color: '#111827' };
 };
 
+/* ===== стили блока "Документы фирмы" ===== */
+
+const companyBlockWrap = {
+  marginBottom: 16,
+  padding: '12px 14px',
+  borderRadius: 12,
+  border: '1px solid #e5e7eb',
+  background: '#ffffff',
+};
+
+const companyHeaderRow = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: 8,
+  marginBottom: 8,
+};
+
+const companyHeaderTitle = {
+  margin: 0,
+  fontSize: 16,
+  fontWeight: 600,
+};
+
+const companyHeaderSub = {
+  margin: 0,
+  fontSize: 12,
+  color: '#6b7280',
+};
+
+const companyDocsRowWrap = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+};
+
+const companyDocBtn = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  justifyContent: 'center',
+  padding: '6px 10px',
+  borderRadius: 999,
+  border: '1px solid #d1d5db',
+  background: '#f9fafb',
+  cursor: 'pointer',
+  fontSize: 12,
+  minWidth: 160,
+  maxWidth: 260,
+};
+
+const companyDocTitle = {
+  fontWeight: 500,
+};
+
+const companyDocDesc = {
+  fontSize: 11,
+  color: '#6b7280',
+  marginTop: 2,
+};
+
 export default function TechLibraryPage() {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,6 +166,11 @@ export default function TechLibraryPage() {
   const [categoryFilter, setCategoryFilter] = useState('all');
 
   const [showUpload, setShowUpload] = useState(false);
+
+  // ===== документы фирмы =====
+  const [companyDocs, setCompanyDocs] = useState([]);
+  const [loadingCompany, setLoadingCompany] = useState(true);
+  const [errCompany, setErrCompany] = useState('');
 
   const loadDocs = async () => {
     setLoading(true);
@@ -130,8 +196,32 @@ export default function TechLibraryPage() {
     }
   };
 
+  const loadCompanyDocs = async () => {
+    setLoadingCompany(true);
+    setErrCompany('');
+    try {
+      const { data, error } = await supabase
+        .from('company_docs') // <--- таблица с документами фирмы
+        .select('*')
+        .order('title', { ascending: true });
+
+      if (error) {
+        console.error(error);
+        throw new Error(error.message || 'Ошибка загрузки company_docs');
+      }
+      setCompanyDocs(data || []);
+    } catch (e) {
+      console.error(e);
+      setErrCompany(e.message || 'Ошибка загрузки документов фирмы.');
+    } finally {
+      setLoadingCompany(false);
+    }
+  };
+
   useEffect(() => {
+    // грузим и техдоки, и документы фирмы
     loadDocs();
+    loadCompanyDocs();
   }, []);
 
   const categories = useMemo(() => {
@@ -196,6 +286,45 @@ export default function TechLibraryPage() {
 
   return (
     <div style={pageWrap}>
+      {/* ===== блок "Документы фирмы" сверху ===== */}
+      <div style={companyBlockWrap}>
+        <div style={companyHeaderRow}>
+          <div>
+            <h2 style={companyHeaderTitle}>Документы фирмы</h2>
+            <p style={companyHeaderSub}>
+              Общие документы для всех: W-9, страховка, лицензии, формы и т.д.
+            </p>
+          </div>
+          <div style={{ fontSize: 12 }}>
+            {loadingCompany && <span style={{ color: '#6b7280' }}>Загрузка...</span>}
+            {errCompany && <span style={{ color: '#b91c1c' }}>{errCompany}</span>}
+          </div>
+        </div>
+
+        {companyDocs.length === 0 && !loadingCompany && !errCompany ? (
+          <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>
+            Пока нет общих документов фирмы.
+          </p>
+        ) : (
+          <div style={companyDocsRowWrap}>
+            {companyDocs.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                style={companyDocBtn}
+                onClick={() => handleOpenFile(d.file_url)}
+              >
+                <span style={companyDocTitle}>{d.title || 'Без названия'}</span>
+                {d.description && (
+                  <span style={companyDocDesc}>{d.description}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ===== основная часть: тех. библиотека ===== */}
       <div style={topBar}>
         <div>
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Техническая база</h1>
