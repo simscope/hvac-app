@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import UploadTechDoc from '../components/UploadTechDoc.jsx';
+import { useAuth } from '../hooks/useAuth'; // <-- если у тебя другой хук, замени импорт
 
 const pageWrap = {
   padding: '16px 18px',
@@ -167,10 +168,10 @@ export default function TechLibraryPage() {
 
   const [showUpload, setShowUpload] = useState(false);
 
-  // ===== документы фирмы =====
-  const [companyDocs, setCompanyDocs] = useState([]);
-  const [loadingCompany, setLoadingCompany] = useState(true);
-  const [errCompany, setErrCompany] = useState('');
+  // роль пользователя
+  const { profile } = useAuth(); // profile.role должен быть 'admin' | 'manager' | 'tech'
+  const role = profile?.role;
+  const isAdmin = role === 'admin';
 
   const loadDocs = async () => {
     setLoading(true);
@@ -196,32 +197,8 @@ export default function TechLibraryPage() {
     }
   };
 
-  const loadCompanyDocs = async () => {
-    setLoadingCompany(true);
-    setErrCompany('');
-    try {
-      const { data, error } = await supabase
-        .from('company_docs') // <--- таблица с документами фирмы
-        .select('*')
-        .order('title', { ascending: true });
-
-      if (error) {
-        console.error(error);
-        throw new Error(error.message || 'Ошибка загрузки company_docs');
-      }
-      setCompanyDocs(data || []);
-    } catch (e) {
-      console.error(e);
-      setErrCompany(e.message || 'Ошибка загрузки документов фирмы.');
-    } finally {
-      setLoadingCompany(false);
-    }
-  };
-
   useEffect(() => {
-    // грузим и техдоки, и документы фирмы
     loadDocs();
-    loadCompanyDocs();
   }, []);
 
   const categories = useMemo(() => {
@@ -231,6 +208,12 @@ export default function TechLibraryPage() {
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [docs]);
+
+  // фирменные документы: category === 'company'
+  const companyDocs = useMemo(
+    () => (docs || []).filter((d) => d.category === 'company'),
+    [docs]
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -276,7 +259,6 @@ export default function TechLibraryPage() {
   };
 
   const onUploaded = (row) => {
-    // обновим список — можно либо пушнуть, либо перезагрузить
     if (row) {
       setDocs((prev) => [...prev, row]);
     } else {
@@ -295,15 +277,11 @@ export default function TechLibraryPage() {
               Общие документы для всех: W-9, страховка, лицензии, формы и т.д.
             </p>
           </div>
-          <div style={{ fontSize: 12 }}>
-            {loadingCompany && <span style={{ color: '#6b7280' }}>Загрузка...</span>}
-            {errCompany && <span style={{ color: '#b91c1c' }}>{errCompany}</span>}
-          </div>
         </div>
 
-        {companyDocs.length === 0 && !loadingCompany && !errCompany ? (
+        {companyDocs.length === 0 ? (
           <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>
-            Пока нет общих документов фирмы.
+            Пока нет общих документов фирмы (используй категорию <b>company</b> при добавлении).
           </p>
         ) : (
           <div style={companyDocsRowWrap}>
@@ -389,55 +367,61 @@ export default function TechLibraryPage() {
                 </td>
               </tr>
             )}
-            {filtered.map((d) => (
-              <tr key={d.id}>
-                <td style={tdStyle}>{d.category || '—'}</td>
-                <td style={tdStyle}>{d.brand}</td>
-                <td style={tdStyle}>{d.model}</td>
-                <td style={tdStyle}>{d.title}</td>
-                <td style={tdStyle}>
-                  <span style={badgeDocType(d.doc_type)}>
-                    {d.doc_type || '—'}
-                  </span>
-                </td>
-                <td style={tdStyle} title={d.description || ''}>
-                  {d.description || '—'}
-                </td>
-                <td style={tdStyle}>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      type="button"
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 999,
-                        border: '1px solid #d1d5db',
-                        background: '#f9fafb',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                      }}
-                      onClick={() => handleOpenFile(d.file_url)}
-                    >
-                      Открыть
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 999,
-                        border: '1px solid #fecaca',
-                        background: '#fef2f2',
-                        color: '#b91c1c',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                      }}
-                      onClick={() => handleDelete(d)}
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {filtered.map((d) => {
+              const isCompanyDoc = d.category === 'company';
+              return (
+                <tr key={d.id}>
+                  <td style={tdStyle}>{d.category || '—'}</td>
+                  <td style={tdStyle}>{d.brand}</td>
+                  <td style={tdStyle}>{d.model}</td>
+                  <td style={tdStyle}>{d.title}</td>
+                  <td style={tdStyle}>
+                    <span style={badgeDocType(d.doc_type)}>
+                      {d.doc_type || '—'}
+                    </span>
+                  </td>
+                  <td style={tdStyle} title={d.description || ''}>
+                    {d.description || '—'}
+                  </td>
+                  <td style={tdStyle}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: 999,
+                          border: '1px solid #d1d5db',
+                          background: '#f9fafb',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                        }}
+                        onClick={() => handleOpenFile(d.file_url)}
+                      >
+                        Открыть
+                      </button>
+                      {/* Удалить фирменный документ может только админ */}
+                      {(!isCompanyDoc || isAdmin) && (
+                        <button
+                          type="button"
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: 999,
+                            border: '1px solid #fecaca',
+                            background: '#fef2f2',
+                            color: '#b91c1c',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                          }}
+                          onClick={() => handleDelete(d)}
+                        >
+                          Удалить
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
