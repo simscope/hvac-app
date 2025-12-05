@@ -2,7 +2,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import UploadTechDoc from '../components/UploadTechDoc.jsx';
-import { useAuth } from '../hooks/useAuth'; // <-- если у тебя другой хук, замени импорт
 
 const pageWrap = {
   padding: '16px 18px',
@@ -168,10 +167,22 @@ export default function TechLibraryPage() {
 
   const [showUpload, setShowUpload] = useState(false);
 
-  // роль пользователя
-  const { profile } = useAuth(); // profile.role должен быть 'admin' | 'manager' | 'tech'
-  const role = profile?.role;
-  const isAdmin = role === 'admin';
+  // роль пользователя (читаем из localStorage, чтобы не тянуть лишние хуки)
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('profile');
+      if (stored) {
+        const profile = JSON.parse(stored);
+        if (profile?.role === 'admin') {
+          setIsAdmin(true);
+        }
+      }
+    } catch (e) {
+      console.warn('Не удалось прочитать профиль из localStorage', e);
+    }
+  }, []);
 
   const loadDocs = async () => {
     setLoading(true);
