@@ -613,46 +613,88 @@ export default function EmailTab() {
         <div style={{ ...styles.overlayBase, ...styles.composeOverlay }} onClick={() => setComposeOpen(false)}>
           <div style={styles.composeModal} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>Новое письмо</h3>
-            <form onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                const to = (toRef.current?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-                const subject = subjectRef.current?.value || '';
-                const baseText = textRef.current?.value || '';
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  // Нормально парсим Кому: поддержка вставки с именем, ; и переносами строк
+                  const rawTo = toRef.current?.value || '';
 
-                let text = baseText;
+                  const to = rawTo
+                    .split(/[,;\n]/)
+                    .map(s => s.trim())
+                    .map(parseEmailAddress)
+                    .filter(Boolean);
 
-                if (includeSignature && !text.includes('Sim HVAC & Appliance repair')) {
-                  text = `${text}${SIGNATURE}`;
-                }
-                if (includePaymentOptions && !text.includes('Payment Options:')) {
-                  text = `${text}${PAYMENT_OPTIONS}`;
-                }
+                  if (!to.length) {
+                    alert('Укажите хотя бы один email получателя');
+                    return;
+                  }
 
-                const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
-                const files = Array.from(filesRef.current?.files || []);
-                const attachments = await Promise.all(files.map(f => new Promise((res, rej) => {
-                  const fr = new FileReader();
-                  fr.onerror = () => rej(new Error('File read error'));
-                  fr.onload = () => res({
-                    filename: f.name, mimeType: f.type || 'application/octet-stream',
-                    base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
+                  const subject = subjectRef.current?.value || '';
+                  const baseText = textRef.current?.value || '';
+
+                  let text = baseText;
+
+                  if (includeSignature && !text.includes('Sim HVAC & Appliance repair')) {
+                    text = `${text}${SIGNATURE}`;
+                  }
+                  if (includePaymentOptions && !text.includes('Payment Options:')) {
+                    text = `${text}${PAYMENT_OPTIONS}`;
+                  }
+
+                  const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
+                  const files = Array.from(filesRef.current?.files || []);
+                  const attachments = await Promise.all(
+                    files.map(f => new Promise((res, rej) => {
+                      const fr = new FileReader();
+                      fr.onerror = () => rej(new Error('File read error'));
+                      fr.onload = () => res({
+                        filename: f.name,
+                        mimeType: f.type || 'application/octet-stream',
+                        base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
+                      });
+                      fr.readAsArrayBuffer(f);
+                    }))
+                  );
+
+                  const { data: { session } = {} } = await supabase.auth.getSession();
+
+                  const r = await fetch(`${FUNCTIONS_URL}/gmail_send`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      apikey: SUPABASE_ANON_KEY,
+                      Authorization: `Bearer ${session?.access_token || ''}`
+                    },
+                    body: JSON.stringify({ to, subject, text, html, attachments })
                   });
-                  fr.readAsArrayBuffer(f);
-                })));
-                const { data: { session } = {} } = await supabase.auth.getSession();
-                const r = await fetch(`${FUNCTIONS_URL}/gmail_send`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session?.access_token || ''}` },
-                  body: JSON.stringify({ to, subject, text, html, attachments })
-                });
-                if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
-                setComposeOpen(false); setFolder('sent'); loadList({ append: false, pageToken: null });
-              } catch (err) { alert(err.message || String(err)); }
-            }}>
-              <div style={styles.formRow}><div>От</div><input value={ACCOUNT_EMAIL} disabled style={styles.input} /></div>
-              <div style={styles.formRow}><div>Кому (через запятую)</div><input ref={toRef} style={styles.input} placeholder="user@example.com, ..." /></div>
-              <div style={styles.formRow}><div>Тема</div><input ref={subjectRef} style={styles.input} /></div>
+
+                  if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
+                  setComposeOpen(false);
+                  setFolder('sent');
+                  loadList({ append: false, pageToken: null });
+                } catch (err) {
+                  alert(err.message || String(err));
+                }
+              }}
+            >
+              <div style={styles.formRow}>
+                <div>От</div>
+                <input value={ACCOUNT_EMAIL} disabled style={styles.input} />
+              </div>
+              <div style={styles.formRow}>
+                <div>Кому (через запятую)</div>
+                <input
+                  ref={toRef}
+                  style={styles.input}
+                  placeholder="user@example.com, ..."
+                />
+              </div>
+              <div style={styles.formRow}>
+                <div>Тема</div>
+                <input ref={subjectRef} style={styles.input} />
+              </div>
               <div style={styles.formRow}>
                 <div>Текст</div>
                 <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
@@ -697,7 +739,10 @@ export default function EmailTab() {
                 </div>
               </div>
 
-              <div style={styles.formRow}><div>Вложения</div><input ref={filesRef} type="file" multiple /></div>
+              <div style={styles.formRow}>
+                <div>Вложения</div>
+                <input ref={filesRef} type="file" multiple />
+              </div>
               <div style={styles.btnLine}>
                 <button type="submit" style={styles.btnPrimary}>Отправить</button>
                 <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)}>Отмена</button>
