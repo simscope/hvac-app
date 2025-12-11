@@ -9,16 +9,16 @@ const AllJobsPage = () => {
   const [origJobs, setOrigJobs] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [clients, setClients] = useState([]);
-  const [invoices, setInvoices] = useState([]);
+  const [invoices, setInvoices] = useState([]); // инвойсы из БД
 
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTech, setFilterTech] = useState('all');
-  const [filterPaid, setFilterPaid] = useState('all');
+  const [filterPaid, setFilterPaid] = useState('all'); // all | paid | unpaid
   const [searchText, setSearchText] = useState('');
-  const [invoiceQuery, setInvoiceQuery] = useState('');
+  const [invoiceQuery, setInvoiceQuery] = useState(''); // поиск по invoice_no / job_number
   const [sortAsc, setSortAsc] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState('active');
+  const [viewMode, setViewMode] = useState('active'); // active | warranty | archive
 
   const [showInvoiceList, setShowInvoiceList] = useState(true);
   const invoiceBoxRef = useRef(null);
@@ -69,7 +69,11 @@ const AllJobsPage = () => {
     setLoading(false);
   };
 
-  const getClient = useCallback((id) => clients.find((c) => c.id === id), [clients]);
+  // теперь через useCallback, чтобы eslint не ругался
+  const getClient = useCallback(
+    (id) => clients.find((c) => c.id === id),
+    [clients]
+  );
 
   const handleChange = (id, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
@@ -84,6 +88,7 @@ const AllJobsPage = () => {
     return val;
   };
 
+  /* ====== Save ====== */
   const handleSave = async (job) => {
     const prev = origById(job.id, origJobs) || {};
     const wasDone = isDone(prev.status);
@@ -128,6 +133,7 @@ const AllJobsPage = () => {
     setShowInvoiceList(false);
   };
 
+  /* ====== Maps: invoice by job_id и по номеру ====== */
   const invByJob = useMemo(() => {
     const m = new Map();
     for (const inv of invoices || []) {
@@ -146,6 +152,7 @@ const AllJobsPage = () => {
     return m;
   }, [jobs]);
 
+  /* ====== Export ====== */
   const handleExport = () => {
     const rows = filteredJobs.map((job) => {
       const client = getClient(job.client_id);
@@ -175,9 +182,9 @@ const AllJobsPage = () => {
     XLSX.writeFile(wb, 'jobs.xlsx');
   };
 
-  // ------------------- FILTER / WARRANTY / ARCHIVE -------------------
+  /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
-    const now = new Date();
+    const now = new Date(); // внутри useMemo
 
     return (jobs || [])
       .filter((j) => {
@@ -190,7 +197,7 @@ const AllJobsPage = () => {
         if (viewMode === 'archive') {
           return j.archived_at || (!recall && persistedInArchiveByWarranty(j, origJobs, now));
         }
-
+        // active
         return (
           (recall ||
             !(persistedInWarranty(j, origJobs, now) || persistedInArchiveByWarranty(j, origJobs, now))) &&
@@ -205,6 +212,7 @@ const AllJobsPage = () => {
           : canonStatus(j.status) === canonStatus(filterStatus),
       )
       .filter((j) => filterTech === 'all' || String(j.technician_id) === String(filterTech))
+      // поиск по invoice_no / job_number
       .filter((j) => {
         const q = invoiceQuery.trim();
         if (!q) return true;
@@ -219,6 +227,7 @@ const AllJobsPage = () => {
         const jobTxt = j.job_number != null ? String(j.job_number).toLowerCase() : '';
         return invTxt.includes(ql) || jobTxt.includes(ql);
       })
+      // общий поиск по клиенту/адресу
       .filter((j) => {
         if (!searchText) return true;
         const c = getClient(j.client_id);
@@ -253,9 +262,10 @@ const AllJobsPage = () => {
     sortAsc,
     viewMode,
     invByJob,
-    getClient,
+    getClient, // стабильный через useCallback
   ]);
 
+  // Быстрые совпадения для выпадающего окна
   const invoiceMatches = useMemo(() => {
     const q = invoiceQuery.trim();
     if (!q) return [];
@@ -263,12 +273,14 @@ const AllJobsPage = () => {
 
     if (isDigits(q)) {
       const qn = Number(q);
+      // точные совпадения по номеру инвойса
       for (const inv of invoices || []) {
         if (inv.invoice_no === qn) {
           const job = jobsById.get(inv.job_id);
           if (job) list.push({ job, inv });
         }
       }
+      // точные совпадения по job_number
       for (const job of jobs || []) {
         const jobNo = Number(job.job_number || NaN);
         if (jobNo === qn) {
@@ -278,8 +290,8 @@ const AllJobsPage = () => {
     } else {
       const ql = q.toLowerCase();
       for (const inv of invoices || []) {
-        const txt = inv.invoice_no != null ? String(inv.invoice_no).toLowerCase() : '';
-        if (txt.includes(ql)) {
+        const invTxt = inv.invoice_no != null ? String(inv.invoice_no).toLowerCase() : '';
+        if (invTxt.includes(ql)) {
           const job = jobsById.get(inv.job_id);
           if (job) list.push({ job, inv });
         }
@@ -292,6 +304,7 @@ const AllJobsPage = () => {
       }
     }
 
+    // убрать дубли
     const seen = new Set();
     const uniq = [];
     for (const item of list) {
@@ -342,21 +355,36 @@ const AllJobsPage = () => {
         .jobs-table thead th { background:#f3f4f6; font-weight:600; }
         .jobs-table th, .jobs-table td { border:1px solid #e5e7eb; padding:6px 8px; vertical-align:top; }
         .jobs-table .cell-wrap { white-space:normal; word-break:break-word; line-height:1.25; }
-        .jobs-table input, .jobs-table select { width:100%; height:28px; font-size:14px; padding:2px 6px; }
+        .jobs-table input, .jobs-table select, .jobs-table textarea { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
+        .jobs-table .center { text-align:center; }
         .jobs-table tr.warranty { background:#dcfce7; }
         .jobs-table tr.unpaid { background:#fee2e2; }
         .jobs-table tr.unpaid:hover { background:#fecaca; }
+        .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
 
         .filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; align-items:center; }
         .inv-search-wrap { position: relative; display:inline-block; }
-        .inv-dropdown { 
-          position:absolute; top:34px; left:0; z-index:20;
-          min-width:520px; max-height:330px; overflow:auto;
-          background:#fff; border:1px solid #e5e7eb; border-radius:8px;
-          box-shadow:0 6px 18px rgba(0,0,0,0.08);
+        .inv-dropdown {
+          position: absolute;
+          top: 34px;
+          left: 0;
+          z-index: 20;
+          min-width: 520px;
+          background: #fff;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+          max-height: 320px;
+          overflow: auto;
         }
-        .inv-item { padding:8px 10px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; gap:10px; }
+        .inv-item { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; display:flex; justify-content:space-between; gap:10px; align-items:center; }
+        .inv-item:last-child { border-bottom: none; }
+        .inv-item:hover { background:#f8fafc; }
+        .inv-item .meta { font-size:12px; color:#6b7280; }
+        .inv-actions { display:flex; gap:6px; }
+        .btn-link { background:#2563eb; color:#fff; border:none; border-radius:6px; height:28px; padding:0 10px; cursor:pointer; }
+        .btn-link.secondary { background:#0ea5e9; }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
@@ -364,18 +392,34 @@ const AllJobsPage = () => {
       {viewMode === 'active' && (
         <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
-            <span style={{ width: 12, height: 12, background: '#fee2e2', border: '1px solid #fca5a5' }} />
-            red — <b>COMPLETED</b> but <b>NOT PAID</b>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 12,
+                height: 12,
+                background: '#fee2e2',
+                border: '1px solid #fca5a5',
+              }}
+            />
+            <span>
+              red — <b>COMPLETED</b> but <b>NOT PAID</b> (amounts &gt; 0 without a selected payment method)
+            </span>
           </span>
-
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 12, height: 12, background: '#dcfce7', border: '1px solid #86efac' }} />
-            green — under 60-day warranty
+            <span
+              style={{
+                display: 'inline-block',
+                width: 12,
+                height: 12,
+                background: '#dcfce7',
+                border: '1px solid #86efac',
+              }}
+            />
+            <span>green — jobs under 60-day warranty</span>
           </span>
         </div>
       )}
 
-      {/* Filters */}
       <div className="filters">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All statuses</option>
@@ -407,12 +451,14 @@ const AllJobsPage = () => {
           <option value="archive">Archive</option>
         </select>
 
+        {/* Общий поиск */}
         <input
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Company, name, phone or address"
         />
 
+        {/* Поиск по инвойсу/джобу */}
         <div className="inv-search-wrap" ref={invoiceBoxRef}>
           <input
             value={invoiceQuery}
@@ -423,6 +469,7 @@ const AllJobsPage = () => {
             onFocus={() => setShowInvoiceList(true)}
             onKeyDown={openSingleMatchOnEnter}
             placeholder="Invoice # or Job #"
+            title="Введите номер инвойса или номер работы"
             style={{ width: 220 }}
           />
           {invoiceQuery && showInvoiceList && invoiceMatches.length > 0 && (
@@ -435,14 +482,14 @@ const AllJobsPage = () => {
                       <div style={{ fontWeight: 600 }}>
                         {inv ? `Invoice: ${inv.invoice_no}` : 'Invoice: —'} · Job: {job.job_number || job.id}
                       </div>
-                      <div style={{ fontSize: 12, color: '#6b7280' }}>
+                      <div className="meta">
                         {client?.company ? `${client.company} — ` : ''}
                         {(client?.full_name || client?.name || '—')} • {job.status || '—'}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <div className="inv-actions">
                       <button className="btn-link" onClick={() => navigate(`/job/${job.id}`)}>
-                        Open Job
+                        Открыть работу
                       </button>
                       <button
                         className="btn-link secondary"
@@ -452,7 +499,7 @@ const AllJobsPage = () => {
                             : navigate(`/invoice/new?job=${job.id}`)
                         }
                       >
-                        {inv ? 'Invoice' : 'Create'}
+                        {inv ? 'Инвойс' : 'Создать'}
                       </button>
                     </div>
                   </div>
@@ -465,7 +512,7 @@ const AllJobsPage = () => {
         <button onClick={resetFilters}>🔄 Reset</button>
         <button onClick={handleExport}>📤 Export to Excel</button>
         <button onClick={() => setSortAsc(!sortAsc)}>
-          Sort {sortAsc ? '↑' : '↓'}
+          Sort by Job # {sortAsc ? '↑' : '↓'}
         </button>
       </div>
 
@@ -481,6 +528,24 @@ const AllJobsPage = () => {
 
           <div className="overflow-x-auto">
             <table className="jobs-table">
+              <colgroup>
+                <col style={{ width: 70 }} />
+                <col style={{ width: 220 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 240 }} />
+                <col style={{ width: 120 }} />
+                <col style={{ width: 220 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 130 }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 40 }} />
+                <col style={{ width: 50 }} />
+                <col style={{ width: 50 }} />
+                <col style={{ width: 50 }} />
+              </colgroup>
+
               <thead>
                 <tr>
                   <th>Job #</th>
@@ -490,63 +555,92 @@ const AllJobsPage = () => {
                   <th>System</th>
                   <th>Issue</th>
                   <th>SCF</th>
-                  <th>SCF Pay</th>
+                  <th>SCF payment</th>
                   <th>Labor</th>
-                  <th>Labor Pay</th>
+                  <th>Labor payment</th>
                   <th>Status</th>
-                  <th>✔</th>
-                  <th>💾</th>
-                  <th>✏️</th>
-                  <th>📄</th>
+                  <th className="center">✔</th>
+                  <th className="center">💾</th>
+                  <th className="center">✏️</th>
+                  <th className="center">📄</th>
                 </tr>
               </thead>
 
               <tbody>
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
-                  const rowClass =
-                    !job.archived_at && persistedInWarranty(job, origJobs, new Date())
-                      ? 'warranty'
-                      : isDone(job.status) && isUnpaidNow(job)
-                      ? 'unpaid'
-                      : '';
+                  const rowClass = job.archived_at
+                    ? ''
+                    : persistedInWarranty(job, origJobs, new Date())
+                    ? 'warranty'
+                    : isDone(job.status) && isUnpaidNow(job)
+                    ? 'unpaid'
+                    : '';
+                  const scfError = needsScfPayment(job);
+                  const laborError = needsLaborPayment(job);
 
                   return (
                     <tr
                       key={job.id}
                       className={rowClass}
                       role="button"
+                      tabIndex={0}
                       onClick={(e) => {
-                        if (!['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName)) {
+                        const tag = e.target.tagName;
+                        if (!['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'A'].includes(tag)) {
                           navigate(`/job/${job.id}`);
                         }
                       }}
+                      onKeyDown={(e) => {
+                        if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            navigate(`/job/${job.id}`);
+                          }
+                        }
+                      }}
+                      title="Open job editor"
+                      style={{ cursor: 'pointer' }}
                     >
                       <td>
-                        <span className="num-link" onClick={(e) => { e.stopPropagation(); navigate(`/job/${job.id}`); }}>
-                          {job.job_number || job.id}
-                        </span>
+                        <div
+                          className="cell-wrap"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/job/${job.id}`);
+                          }}
+                        >
+                          <span className="num-link">{job.job_number || job.id}</span>
+                        </div>
                       </td>
 
                       <td>
                         <div className="cell-wrap">
                           {client?.company ? (
                             <>
-                              <b>{client.company}</b>
-                              <div style={{ fontSize: 12, color: '#6b7280' }}>
-                                {client.full_name || client.name}
+                              <div style={{ fontWeight: 600 }}>{client.company}</div>
+                              <div style={{ color: '#6b7280', fontSize: 12 }}>
+                                {client.full_name || client.name || '—'}
                               </div>
                             </>
                           ) : (
-                            <>{client?.full_name || client?.name || '—'}</>
+                            <div>{client?.full_name || client?.name || '—'}</div>
                           )}
                         </div>
                       </td>
 
-                      <td>{client?.phone || '—'}</td>
-                      <td>{formatAddress(client) || '—'}</td>
-                      <td>{job.system_type || '—'}</td>
-                      <td>{job.issue || '—'}</td>
+                      <td>
+                        <div className="cell-wrap">{client?.phone || '—'}</div>
+                      </td>
+                      <td>
+                        <div className="cell-wrap">{formatAddress(client) || '—'}</div>
+                      </td>
+                      <td>
+                        <div className="cell-wrap">{job.system_type || '—'}</div>
+                      </td>
+                      <td>
+                        <div className="cell-wrap">{job.issue || '—'}</div>
+                      </td>
 
                       <td>
                         <input
@@ -559,8 +653,9 @@ const AllJobsPage = () => {
 
                       <td>
                         <select
+                          className={scfError ? 'error' : ''}
                           value={job.scf_payment_method || ''}
-                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value)}
+                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value || null)}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -584,8 +679,11 @@ const AllJobsPage = () => {
 
                       <td>
                         <select
+                          className={laborError ? 'error' : ''}
                           value={job.labor_payment_method || ''}
-                          onChange={(e) => handleChange(job.id, 'labor_payment_method', e.target.value)}
+                          onChange={(e) =>
+                            handleChange(job.id, 'labor_payment_method', e.target.value || null)
+                          }
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -601,8 +699,8 @@ const AllJobsPage = () => {
                       <td>
                         <select
                           value={job.status || ''}
-                          onClick={(e) => e.stopPropagation()}
                           onChange={(e) => handleChange(job.id, 'status', e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
                           {statuses.map((s) => (
@@ -613,10 +711,11 @@ const AllJobsPage = () => {
                         </select>
                       </td>
 
-                      <td>{isFullyPaidNow(job) ? '✔️' : ''}</td>
+                      <td className="center">{isFullyPaidNow(job) ? '✔️' : ''}</td>
 
-                      <td>
+                      <td className="center">
                         <button
+                          title="Save"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleSave(job);
@@ -625,9 +724,9 @@ const AllJobsPage = () => {
                           💾
                         </button>
                       </td>
-
-                      <td>
+                      <td className="center">
                         <button
+                          title="Edit"
                           onClick={(e) => {
                             e.stopPropagation();
                             navigate(`/job/${job.id}`);
@@ -636,9 +735,9 @@ const AllJobsPage = () => {
                           ✏️
                         </button>
                       </td>
-
-                      <td>
+                      <td className="center">
                         <button
+                          title="Invoice"
                           onClick={(e) => {
                             e.stopPropagation();
                             openInvoiceForJob(job);
@@ -661,10 +760,7 @@ const AllJobsPage = () => {
 
 export default AllJobsPage;
 
-/* ============================================================
-   HELPERS – ВАЖНО: тут стоит новая логика, запрещающая
-   попадать в гарантию/архив, если работа НЕ оплачена.
-   ============================================================ */
+/* ====== helpers outside component ====== */
 
 function canonStatus(val) {
   const raw = String(val ?? '').toLowerCase();
@@ -678,7 +774,20 @@ function canonStatus(val) {
   if (v === 'tofinish') return 'to finish';
   if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
   if (v === 'canceled' || v === 'cancelled') return 'canceled';
-  return raw;
+  if (
+    [
+      'recall',
+      'diagnosis',
+      'in progress',
+      'parts ordered',
+      'waiting for parts',
+      'to finish',
+      'completed',
+      'canceled',
+    ].includes(raw)
+  )
+    return raw;
+  return v;
 }
 
 function isDone(status) {
@@ -691,7 +800,7 @@ function isRecall(status) {
 
 function methodChosen(raw) {
   const v = String(raw ?? '').trim().toLowerCase();
-  return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '—';
+  return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
 }
 
 function isFullyPaidNow(j) {
@@ -704,6 +813,14 @@ function isFullyPaidNow(j) {
 
 function isUnpaidNow(j) {
   return !isFullyPaidNow(j);
+}
+
+function needsScfPayment(j) {
+  return Number(j.scf || 0) > 0 && !methodChosen(j.scf_payment_method);
+}
+
+function needsLaborPayment(j) {
+  return Number(j.labor_price || 0) > 0 && !methodChosen(j.labor_payment_method);
 }
 
 function origById(id, origJobs) {
@@ -726,14 +843,14 @@ function warrantyStart(j, origJobs) {
 
 function warrantyEnd(j, origJobs) {
   const s = warrantyStart(j, origJobs);
-  return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null;
+  return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 дней
 }
 
 function persistedInWarranty(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
 
-  // 🔥 КЛЮЧЕВОЕ: если НЕ оплачено — НЕ попадает в гарантию
+  // 👇 Новое условие: если работа сейчас считается НЕ оплаченной — не в гарантии
   if (!isFullyPaidNow(j)) return false;
 
   return (
@@ -748,7 +865,7 @@ function persistedInArchiveByWarranty(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
 
-  // 🔥 НЕОПЛАЧЕННЫЕ НЕ попадают в архив через гарантию
+  // 👇 То же правило: неоплаченные не попадают в архив по гарантии
   if (!isFullyPaidNow(j)) return false;
 
   return (
@@ -761,17 +878,18 @@ function persistedInArchiveByWarranty(j, origJobs, now) {
 
 function formatAddress(c) {
   if (!c) return '';
-  return [
+  const parts = [
     c.address,
     c.address_line1,
     c.address_line2,
     c.street,
     c.city,
     c.state,
+    c.region,
     c.zip,
-  ]
-    .filter(Boolean)
-    .join(', ');
+    c.postal_code,
+  ].filter(Boolean);
+  return parts.join(', ');
 }
 
 function isDigits(s) {
