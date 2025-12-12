@@ -267,7 +267,7 @@ async function renderInvoiceLikePdf(doc, opts) {
   compTop += 14;
   doc.setFont(undefined, 'normal');
   [
-    '1587 E 19th St',
+    '1587 E 19th St apt 6F',
     'Brooklyn, NY 11230',
     '(929) 412-9042 Zelle',
     'simscope.office@gmail.com',
@@ -874,7 +874,7 @@ export default function InvoicePage() {
             )}
             <div style={{ marginTop: 8, fontWeight: 700 }}>Sim Scope Inc.</div>
             <div style={{ color: '#6b7280', lineHeight: 1.4 }}>
-              1587 E 19th St <br />
+              1587 E 19th St apt 6F<br />
               Brooklyn, NY 11230
               <br />
               (929) 412-9042 Zelle
@@ -1147,3 +1147,4 @@ export default function InvoicePage() {
     </div>
   );
 }
+
