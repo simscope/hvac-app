@@ -226,6 +226,16 @@ function quoteBlock(s) {
   return String(s).split('\n').map(l => (l.trim() ? '> ' + l : '>')).join('\n');
 }
 
+/* ✅ НАДЕЖНОЕ КОДИРОВАНИЕ ВЛОЖЕНИЙ (без stack overflow) */
+function fileToBase64DataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('File read error'));
+    fr.onload = () => resolve(String(fr.result || '')); // data:<mime>;base64,AAAA
+    fr.readAsDataURL(file);
+  });
+}
+
 /* ====== ГРУППИРОВКА ====== */
 function todayRange() {
   const now = new Date();
@@ -269,6 +279,7 @@ export default function EmailTab() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(true);
   const [includePaymentOptions, setIncludePaymentOptions] = useState(false);
+  const [sending, setSending] = useState(false); // ✅ чтобы не тыкали 10 раз
   const toRef = useRef(); const subjectRef = useRef(); const textRef = useRef(); const filesRef = useRef();
 
   // read
@@ -616,7 +627,11 @@ export default function EmailTab() {
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
+                if (sending) return;
+                setSending(true);
                 try {
+                  setError('');
+
                   // Нормально парсим Кому: поддержка вставки с именем, ; и переносами строк
                   const rawTo = toRef.current?.value || '';
 
@@ -644,38 +659,38 @@ export default function EmailTab() {
                   }
 
                   const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
+
+                  // ✅ НАДЕЖНО: attachments через DataURL → base64
                   const files = Array.from(filesRef.current?.files || []);
                   const attachments = await Promise.all(
-                    files.map(f => new Promise((res, rej) => {
-                      const fr = new FileReader();
-                      fr.onerror = () => rej(new Error('File read error'));
-                      fr.onload = () => res({
+                    files.map(async (f) => {
+                      const dataUrl = await fileToBase64DataUrl(f);
+                      const base64 = dataUrl.split('base64,')[1] || '';
+                      return {
                         filename: f.name,
                         mimeType: f.type || 'application/octet-stream',
-                        base64: btoa(String.fromCharCode(...new Uint8Array(fr.result)))
-                      });
-                      fr.readAsArrayBuffer(f);
-                    }))
+                        base64,
+                      };
+                    })
                   );
 
-                  const { data: { session } = {} } = await supabase.auth.getSession();
-
-                  const r = await fetch(`${FUNCTIONS_URL}/gmail_send`, {
+                  // ✅ Отправляем через authedFetch, чтобы заголовки всегда были корректны
+                  const r = await authedFetch(API.send, {
                     method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      apikey: SUPABASE_ANON_KEY,
-                      Authorization: `Bearer ${session?.access_token || ''}`
-                    },
                     body: JSON.stringify({ to, subject, text, html, attachments })
                   });
 
                   if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
+
                   setComposeOpen(false);
                   setFolder('sent');
                   loadList({ append: false, pageToken: null });
                 } catch (err) {
+                  console.error(err);
+                  setError(err.message || String(err));
                   alert(err.message || String(err));
+                } finally {
+                  setSending(false);
                 }
               }}
             >
@@ -744,8 +759,12 @@ export default function EmailTab() {
                 <input ref={filesRef} type="file" multiple />
               </div>
               <div style={styles.btnLine}>
-                <button type="submit" style={styles.btnPrimary}>Отправить</button>
-                <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)}>Отмена</button>
+                <button type="submit" style={styles.btnPrimary} disabled={sending}>
+                  {sending ? 'Отправка…' : 'Отправить'}
+                </button>
+                <button type="button" style={styles.btn} onClick={() => setComposeOpen(false)} disabled={sending}>
+                  Отмена
+                </button>
               </div>
             </form>
           </div>
