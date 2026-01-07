@@ -1009,10 +1009,7 @@ export default function EmailTab() {
 
                     const sub = [
                       a.mimeType ? String(a.mimeType) : '',
-                      a.size ? fmtBytes(a.size) : '',
-                      a.attachmentId ? `id: ${a.attachmentId}` : '',
-                      a.dataBase64 ? 'base64' : '',
-                      a.contentId ? `cid: ${String(a.contentId).replace(/[<>]/g, '')}` : '',
+                     a.size ? fmtBytes(a.size) : '',
                     ].filter(Boolean).join(' • ');
 
                     return (
