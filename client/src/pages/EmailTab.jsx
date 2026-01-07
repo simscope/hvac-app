@@ -241,12 +241,38 @@ function quoteBlock(s) {
   return String(s).split('\n').map(l => (l.trim() ? '> ' + l : '>')).join('\n');
 }
 
+/* ===== DOWNLOAD HELPERS ===== */
 function safeBase64ToBlob(base64, mimeType = 'application/octet-stream') {
   const bin = atob(base64 || '');
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return new Blob([bytes], { type: mimeType });
 }
+
+function extFromMime(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg';
+  if (m === 'image/png') return 'png';
+  if (m === 'image/gif') return 'gif';
+  if (m === 'application/pdf') return 'pdf';
+  if (m === 'text/plain') return 'txt';
+  if (m === 'text/html') return 'html';
+  if (m === 'application/zip') return 'zip';
+  if (m.includes('wordprocessingml')) return 'docx';
+  if (m.includes('spreadsheetml')) return 'xlsx';
+  return '';
+}
+
+function ensureFilename(name, mimeType) {
+  let fn = (name && String(name).trim()) ? String(name).trim() : 'attachment';
+  // если нет расширения — добавим по mimeType
+  if (!/\.[A-Za-z0-9]{1,8}$/.test(fn)) {
+    const ext = extFromMime(mimeType);
+    if (ext) fn = `${fn}.${ext}`;
+  }
+  return fn;
+}
+
 function downloadBlob(blob, filename = 'attachment') {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -255,8 +281,9 @@ function downloadBlob(blob, filename = 'attachment') {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 1000);
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 1500);
 }
+
 function fmtBytes(n) {
   const x = Number(n);
   if (!Number.isFinite(x) || x <= 0) return '';
@@ -345,7 +372,7 @@ export default function EmailTab() {
     list: `${FUNCTIONS_URL}/gmail_list`,
     send: `${FUNCTIONS_URL}/gmail_send`,
     get:  `${FUNCTIONS_URL}/gmail_get`,
-    attach: `${FUNCTIONS_URL}/gmail_attachment`, // желательно иметь на бэке (см. ниже)
+    attach: `${FUNCTIONS_URL}/gmail_attachment`,
     oauthStart: `${FUNCTIONS_URL}/oauth_google_start`,
   }), []);
 
@@ -463,8 +490,6 @@ export default function EmailTab() {
   async function openMail(id) {
     setCurrent(null); setReadOpen(true); setReading(true);
     try {
-      // Просим тело письма и метаданные вложений
-      // Если на бэке есть опция includeAttachmentsMeta/includeAttachments - он может её игнорировать, это ок.
       const r = await authedFetchJson(API.get, {
         method: 'POST',
         bodyObj: { id, includeAttachmentsMeta: true },
@@ -473,7 +498,6 @@ export default function EmailTab() {
       if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
       const data = await r.json();
 
-      // Приводим вложения к ожидаемой структуре (на всякий)
       const attachments = Array.isArray(data?.attachments) ? data.attachments : [];
       const normalized = attachments.map(a => ({
         filename: a?.filename || a?.name || 'attachment',
@@ -561,19 +585,25 @@ export default function EmailTab() {
     setDownloadingKey(key);
 
     try {
-      // 1) Если dataBase64 уже есть — скачиваем сразу
+      const mimeGuess = att.mimeType || 'application/octet-stream';
+      const nameGuess = ensureFilename(att.filename || 'attachment', mimeGuess);
+
+      // 1) Если dataBase64 уже есть — скачиваем сразу (с расширением)
       if (att.dataBase64) {
-        const blob = safeBase64ToBlob(att.dataBase64, att.mimeType);
-        downloadBlob(blob, att.filename || 'attachment');
+        const blob = safeBase64ToBlob(att.dataBase64, mimeGuess);
+        downloadBlob(blob, nameGuess);
         return;
       }
 
-      // 2) Если нет base64 — пробуем взять через gmail_attachment (идеальный вариант)
-      // Ожидаем, что бэк вернёт JSON: { filename, mimeType, base64 } ИЛИ отдаст файл как blob.
-      // Сначала пробуем как JSON:
+      // 2) Запрашиваем бэк (передаём filename + mimeType, чтобы бэк мог вернуть нормальное имя)
       let r = await authedFetchJson(API.attach, {
         method: 'POST',
-        bodyObj: { id: msgId, attachmentId: att.attachmentId },
+        bodyObj: {
+          id: msgId,
+          attachmentId: att.attachmentId,
+          filename: att.filename || 'attachment',
+          mimeType: mimeGuess,
+        },
       });
 
       if (r.ok) {
@@ -582,8 +612,9 @@ export default function EmailTab() {
         if (ct.includes('application/json')) {
           const data = await r.json();
           const base64 = data?.base64 || data?.dataBase64 || '';
-          const mimeType = data?.mimeType || att.mimeType;
-          const filename = data?.filename || att.filename || 'attachment';
+          const mimeType = data?.mimeType || mimeGuess;
+          const filename = ensureFilename(data?.filename || nameGuess, mimeType);
+
           if (!base64) throw new Error('Пустые данные вложения (base64).');
           const blob = safeBase64ToBlob(base64, mimeType);
           downloadBlob(blob, filename);
@@ -592,24 +623,30 @@ export default function EmailTab() {
 
         // Если бэк отдаёт файл напрямую:
         const blob = await r.blob();
-        downloadBlob(blob, att.filename || 'attachment');
+        downloadBlob(blob, nameGuess);
         return;
       }
 
-      // 3) Fallback: некоторые реализации делают это через gmail_get: {id, attachmentId}
-      // Тут не ставим Content-Type принудительно, но ответ ожидаем JSON.
+      // 3) Fallback (через gmail_get), тоже передаём filename/mimeType
       r = await authedFetchJson(API.get, {
         method: 'POST',
-        bodyObj: { id: msgId, attachmentId: att.attachmentId, action: 'attachment' },
+        bodyObj: {
+          id: msgId,
+          attachmentId: att.attachmentId,
+          filename: att.filename || 'attachment',
+          mimeType: mimeGuess,
+          action: 'attachment'
+        },
       });
 
       if (!r.ok) throw new Error(`Не удалось загрузить вложение: ${r.status} ${await r.text()}`);
 
       const data = await r.json();
       const base64 = data?.base64 || data?.dataBase64 || '';
-      const mimeType = data?.mimeType || att.mimeType;
-      const filename = data?.filename || att.filename || 'attachment';
-      if (!base64) throw new Error('Бэк не вернул base64 вложения. Нужно добавить endpoint/логику на сервере.');
+      const mimeType = data?.mimeType || mimeGuess;
+      const filename = ensureFilename(data?.filename || nameGuess, mimeType);
+
+      if (!base64) throw new Error('Бэк не вернул base64 вложения.');
       const blob = safeBase64ToBlob(base64, mimeType);
       downloadBlob(blob, filename);
     } catch (e) {
@@ -789,7 +826,6 @@ export default function EmailTab() {
                 try {
                   setError('');
 
-                  // Нормально парсим Кому: поддержка вставки с именем, ; и переносами строк
                   const rawTo = toRef.current?.value || '';
 
                   const to = rawTo
@@ -817,7 +853,6 @@ export default function EmailTab() {
 
                   const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
 
-                  // ✅ attachments через DataURL → base64
                   const files = Array.from(filesRef.current?.files || []);
                   const attachments = await Promise.all(
                     files.map(async (f) => {
@@ -870,7 +905,6 @@ export default function EmailTab() {
                 <div>Текст</div>
                 <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
 
-                {/* ДВЕ КОЛОНКИ: слева подпись, справа способы оплаты */}
                 <div
                   style={{
                     display: 'flex',
@@ -962,7 +996,7 @@ export default function EmailTab() {
                 <pre style={{ whiteSpace: 'pre-wrap' }}>{current?.text || '(пустое письмо)'}</pre>
               )}
 
-              {/* Вложения: теперь реально скачиваются */}
+              {/* Вложения: теперь скачиваются С НОРМАЛЬНЫМ ИМЕНЕМ/РАСШИРЕНИЕМ */}
               {Array.isArray(current?.attachments) && current.attachments.length > 0 && (
                 <div style={{ marginTop: 14 }}>
                   <b>Вложения:</b>
@@ -970,6 +1004,8 @@ export default function EmailTab() {
                   {current.attachments.map((a, i) => {
                     const key = `${current?.id}:${i}`;
                     const isDownloading = downloadingKey === key;
+
+                    const displayName = ensureFilename(a.filename || 'attachment', a.mimeType);
 
                     const sub = [
                       a.mimeType ? String(a.mimeType) : '',
@@ -982,7 +1018,7 @@ export default function EmailTab() {
                     return (
                       <div key={i} style={styles.attachmentRow}>
                         <div style={styles.attachmentMeta}>
-                          <div style={styles.attachmentName} title={a.filename}>{a.filename}</div>
+                          <div style={styles.attachmentName} title={displayName}>{displayName}</div>
                           <div style={styles.attachmentSub}>{sub || '—'}</div>
                         </div>
 
@@ -1001,8 +1037,7 @@ export default function EmailTab() {
                   })}
 
                   <div style={{ fontSize: 12, color: colors.subtext, marginTop: 8 }}>
-                    Если кнопка “Скачать” пишет, что “бэк не вернул base64” — нужно добавить endpoint <b>gmail_attachment</b>
-                    (или научить <b>gmail_get</b> отдавать файл по <b>attachmentId</b>).
+                    Если скачалось без расширения — значит у письма реально нет имени файла, мы добавим расширение по mimeType автоматически.
                   </div>
                 </div>
               )}
