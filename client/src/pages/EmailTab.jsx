@@ -120,7 +120,6 @@ const styles = {
     padding: 24,
     overflow: 'auto',
   },
-  // подняли z-index, чтобы быть выше TopNav
   readOverlay: { zIndex: 200 },
   composeOverlay: { zIndex: 210 },
 
@@ -164,6 +163,22 @@ const styles = {
   btnPrimary: { padding: '8px 14px', borderRadius: 10, background: colors.blue, color: '#fff', border: 'none', cursor: 'pointer' },
   btn: { padding: '8px 14px', borderRadius: 10, background: colors.bg, border: `1px solid ${colors.border}`, cursor: 'pointer' },
   signatureHint: { fontSize: 12, color: colors.subtext, marginTop: 6, whiteSpace: 'pre-wrap' },
+
+  attachmentRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    padding: '8px 10px',
+    border: `1px solid ${colors.border}`,
+    borderRadius: 10,
+    marginTop: 8,
+    background: '#fff',
+  },
+  attachmentMeta: { minWidth: 0 },
+  attachmentName: { fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  attachmentSub: { fontSize: 12, color: colors.subtext, marginTop: 2 },
+  attachmentBtns: { display: 'flex', gap: 8, flexShrink: 0 },
 };
 /* ================== */
 
@@ -226,6 +241,32 @@ function quoteBlock(s) {
   return String(s).split('\n').map(l => (l.trim() ? '> ' + l : '>')).join('\n');
 }
 
+function safeBase64ToBlob(base64, mimeType = 'application/octet-stream') {
+  const bin = atob(base64 || '');
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+function downloadBlob(blob, filename = 'attachment') {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 1000);
+}
+function fmtBytes(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x) || x <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = x; let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  const shown = i === 0 ? String(Math.round(v)) : v.toFixed(v >= 10 ? 1 : 2);
+  return `${shown} ${units[i]}`;
+}
+
 /* ✅ НАДЕЖНОЕ КОДИРОВАНИЕ ВЛОЖЕНИЙ (без stack overflow) */
 function fileToBase64DataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -279,7 +320,7 @@ export default function EmailTab() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [includeSignature, setIncludeSignature] = useState(true);
   const [includePaymentOptions, setIncludePaymentOptions] = useState(false);
-  const [sending, setSending] = useState(false); // ✅ чтобы не тыкали 10 раз
+  const [sending, setSending] = useState(false);
   const toRef = useRef(); const subjectRef = useRef(); const textRef = useRef(); const filesRef = useRef();
 
   // read
@@ -287,6 +328,9 @@ export default function EmailTab() {
   const [current, setCurrent] = useState(null);
   const [reading, setReading] = useState(false);
   const readBodyRef = useRef(null);
+
+  // attachments downloading
+  const [downloadingKey, setDownloadingKey] = useState(''); // `${messageId}:${idx}`
 
   // ► кэш получателей для отправленных
   const [recipients, setRecipients] = useState({}); // { [id]: "to@addr, ..." }
@@ -301,30 +345,53 @@ export default function EmailTab() {
     list: `${FUNCTIONS_URL}/gmail_list`,
     send: `${FUNCTIONS_URL}/gmail_send`,
     get:  `${FUNCTIONS_URL}/gmail_get`,
+    attach: `${FUNCTIONS_URL}/gmail_attachment`, // желательно иметь на бэке (см. ниже)
     oauthStart: `${FUNCTIONS_URL}/oauth_google_start`,
   }), []);
 
-  /* DATA */
-  async function authedFetch(url, options = {}) {
+  /* ===== AUTHED FETCH ===== */
+
+  async function getSessionHeaders(extraHeaders = {}) {
     const { data: { session } = {} } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('Нет сессии Supabase. Войдите и повторите.');
-    const headers = {
-      'Content-Type': 'application/json',
+    return {
       apikey: SUPABASE_ANON_KEY,
       Authorization: `Bearer ${session.access_token}`,
-      ...(options.headers || {}),
+      ...extraHeaders,
     };
-    return fetch(url, { ...options, headers });
   }
 
+  async function authedFetchJson(url, { method = 'POST', bodyObj = null, headers = {} } = {}) {
+    const baseHeaders = await getSessionHeaders({
+      'Content-Type': 'application/json',
+      ...headers,
+    });
+    return fetch(url, {
+      method,
+      headers: baseHeaders,
+      body: bodyObj ? JSON.stringify(bodyObj) : undefined,
+    });
+  }
+
+  // Важно для бинарных ответов: НЕ ставим Content-Type автоматически
+  async function authedFetchRaw(url, { method = 'POST', bodyObj = null, headers = {} } = {}) {
+    const baseHeaders = await getSessionHeaders(headers);
+    return fetch(url, {
+      method,
+      headers: baseHeaders,
+      body: bodyObj ? JSON.stringify(bodyObj) : undefined,
+    });
+  }
+
+  /* DATA */
   async function loadList({ append = false, pageToken = null } = {}) {
     try {
       setError('');
       if (append) setAppending(true); else { setListLoading(true); setNextPageToken(null); }
 
-      const r = await authedFetch(API.list, {
+      const r = await authedFetchJson(API.list, {
         method: 'POST',
-        body: JSON.stringify({ folder, q, pageToken }),
+        bodyObj: { folder, q, pageToken },
       });
 
       if (!r.ok) {
@@ -373,7 +440,7 @@ export default function EmailTab() {
         const pairs = await Promise.all(
           need.map(async (m) => {
             try {
-              const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id: m.id }) });
+              const r = await authedFetchJson(API.get, { method: 'POST', bodyObj: { id: m.id } });
               if (!r.ok) throw new Error(await r.text());
               const data = await r.json();
               return [m.id, data?.to || ''];
@@ -396,10 +463,29 @@ export default function EmailTab() {
   async function openMail(id) {
     setCurrent(null); setReadOpen(true); setReading(true);
     try {
-      const r = await authedFetch(API.get, { method: 'POST', body: JSON.stringify({ id }) });
+      // Просим тело письма и метаданные вложений
+      // Если на бэке есть опция includeAttachmentsMeta/includeAttachments - он может её игнорировать, это ок.
+      const r = await authedFetchJson(API.get, {
+        method: 'POST',
+        bodyObj: { id, includeAttachmentsMeta: true },
+      });
+
       if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
       const data = await r.json();
-      setCurrent(hydrateCidImages(data || {}));
+
+      // Приводим вложения к ожидаемой структуре (на всякий)
+      const attachments = Array.isArray(data?.attachments) ? data.attachments : [];
+      const normalized = attachments.map(a => ({
+        filename: a?.filename || a?.name || 'attachment',
+        mimeType: a?.mimeType || a?.contentType || 'application/octet-stream',
+        size: a?.size || a?.length || null,
+        attachmentId: a?.attachmentId || a?.id || null,
+        contentId: a?.contentId || a?.cid || null,
+        dataBase64: a?.dataBase64 || a?.base64 || null,
+        isInline: !!a?.isInline,
+      }));
+
+      setCurrent(hydrateCidImages({ ...(data || {}), attachments: normalized }));
     } catch (e) {
       console.error(e);
       const m = list.find(x => x.id === id);
@@ -414,6 +500,7 @@ export default function EmailTab() {
       });
     } finally { setReading(false); }
   }
+
   useEffect(() => { if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0; }, [readOpen, current, reading]);
 
   function openComposerWith({ to = '', subject = '', body = '' } = {}) {
@@ -446,6 +533,7 @@ export default function EmailTab() {
     const quoted = `\n\n${SIGNATURE}\n\n----\nOn ${when}, ${m.from} wrote:\n` + quoteBlock(plain || '(пустое сообщение)');
     openComposerWith({ to, subject, body: quoted });
   }
+
   function onForward() {
     const m = current; if (!m) return;
     const subj = (m.subject || ''); const subject = subj.toLowerCase().startsWith('fwd:') ? subj : `Fwd: ${subj}`;
@@ -459,9 +547,78 @@ export default function EmailTab() {
       `Subject: ${m.subject || ''}\n\n`;
     openComposerWith({ to: '', subject, body: header + plain });
   }
+
   function closeRead() {
     if (current?._blobUrlsToRevoke) current._blobUrlsToRevoke.forEach(u => { try { URL.revokeObjectURL(u); } catch {} });
     setReadOpen(false);
+  }
+
+  async function downloadAttachment(att, idx) {
+    const msgId = current?.id;
+    if (!msgId || !att) return;
+
+    const key = `${msgId}:${idx}`;
+    setDownloadingKey(key);
+
+    try {
+      // 1) Если dataBase64 уже есть — скачиваем сразу
+      if (att.dataBase64) {
+        const blob = safeBase64ToBlob(att.dataBase64, att.mimeType);
+        downloadBlob(blob, att.filename || 'attachment');
+        return;
+      }
+
+      // 2) Если нет base64 — пробуем взять через gmail_attachment (идеальный вариант)
+      // Ожидаем, что бэк вернёт JSON: { filename, mimeType, base64 } ИЛИ отдаст файл как blob.
+      // Сначала пробуем как JSON:
+      let r = await authedFetchJson(API.attach, {
+        method: 'POST',
+        bodyObj: { id: msgId, attachmentId: att.attachmentId },
+      });
+
+      if (r.ok) {
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+
+        if (ct.includes('application/json')) {
+          const data = await r.json();
+          const base64 = data?.base64 || data?.dataBase64 || '';
+          const mimeType = data?.mimeType || att.mimeType;
+          const filename = data?.filename || att.filename || 'attachment';
+          if (!base64) throw new Error('Пустые данные вложения (base64).');
+          const blob = safeBase64ToBlob(base64, mimeType);
+          downloadBlob(blob, filename);
+          return;
+        }
+
+        // Если бэк отдаёт файл напрямую:
+        const blob = await r.blob();
+        downloadBlob(blob, att.filename || 'attachment');
+        return;
+      }
+
+      // 3) Fallback: некоторые реализации делают это через gmail_get: {id, attachmentId}
+      // Тут не ставим Content-Type принудительно, но ответ ожидаем JSON.
+      r = await authedFetchJson(API.get, {
+        method: 'POST',
+        bodyObj: { id: msgId, attachmentId: att.attachmentId, action: 'attachment' },
+      });
+
+      if (!r.ok) throw new Error(`Не удалось загрузить вложение: ${r.status} ${await r.text()}`);
+
+      const data = await r.json();
+      const base64 = data?.base64 || data?.dataBase64 || '';
+      const mimeType = data?.mimeType || att.mimeType;
+      const filename = data?.filename || att.filename || 'attachment';
+      if (!base64) throw new Error('Бэк не вернул base64 вложения. Нужно добавить endpoint/логику на сервере.');
+      const blob = safeBase64ToBlob(base64, mimeType);
+      downloadBlob(blob, filename);
+    } catch (e) {
+      console.error(e);
+      setError(e.message || String(e));
+      alert(e.message || String(e));
+    } finally {
+      setDownloadingKey('');
+    }
   }
 
   /* ROW (для Sent показываем адресата, для Inbox — отправителя) */
@@ -660,7 +817,7 @@ export default function EmailTab() {
 
                   const html = wrapHtmlTimes(`<div>${nl2br(text)}</div>`);
 
-                  // ✅ НАДЕЖНО: attachments через DataURL → base64
+                  // ✅ attachments через DataURL → base64
                   const files = Array.from(filesRef.current?.files || []);
                   const attachments = await Promise.all(
                     files.map(async (f) => {
@@ -674,10 +831,9 @@ export default function EmailTab() {
                     })
                   );
 
-                  // ✅ Отправляем через authedFetch, чтобы заголовки всегда были корректны
-                  const r = await authedFetch(API.send, {
+                  const r = await authedFetchJson(API.send, {
                     method: 'POST',
-                    body: JSON.stringify({ to, subject, text, html, attachments })
+                    bodyObj: { to, subject, text, html, attachments }
                   });
 
                   if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
@@ -757,7 +913,11 @@ export default function EmailTab() {
               <div style={styles.formRow}>
                 <div>Вложения</div>
                 <input ref={filesRef} type="file" multiple />
+                <div style={{ fontSize: 12, color: colors.subtext, marginTop: 6 }}>
+                  Если письмо с большими файлами не отправляется — проверь лимит на Edge Function (body size).
+                </div>
               </div>
+
               <div style={styles.btnLine}>
                 <button type="submit" style={styles.btnPrimary} disabled={sending}>
                   {sending ? 'Отправка…' : 'Отправить'}
@@ -783,11 +943,13 @@ export default function EmailTab() {
                 <button style={styles.btn} onClick={closeRead}>Закрыть</button>
               </div>
             </div>
+
             <div style={styles.readMeta}>
               <div><b>От:</b> {current?.from || ''}</div>
               {current?.to ? <div><b>Кому:</b> {current.to}</div> : null}
               <div><b>Дата:</b> {current?.date ? new Date(current.date).toLocaleString() : ''}</div>
             </div>
+
             <div style={styles.readBody} ref={readBodyRef}>
               {reading ? (
                 <div style={{ color: colors.subtext }}>Загрузка письма…</div>
@@ -799,14 +961,49 @@ export default function EmailTab() {
               ) : (
                 <pre style={{ whiteSpace: 'pre-wrap' }}>{current?.text || '(пустое письмо)'}</pre>
               )}
+
+              {/* Вложения: теперь реально скачиваются */}
               {Array.isArray(current?.attachments) && current.attachments.length > 0 && (
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: 14 }}>
                   <b>Вложения:</b>
-                  <ul style={{ marginTop: 6 }}>
-                    {current.attachments.map((a, i) => (
-                      <li key={i}>{a.filename} {a.size ? `(${a.size}B)` : ''}</li>
-                    ))}
-                  </ul>
+
+                  {current.attachments.map((a, i) => {
+                    const key = `${current?.id}:${i}`;
+                    const isDownloading = downloadingKey === key;
+
+                    const sub = [
+                      a.mimeType ? String(a.mimeType) : '',
+                      a.size ? fmtBytes(a.size) : '',
+                      a.attachmentId ? `id: ${a.attachmentId}` : '',
+                      a.dataBase64 ? 'base64' : '',
+                      a.contentId ? `cid: ${String(a.contentId).replace(/[<>]/g, '')}` : '',
+                    ].filter(Boolean).join(' • ');
+
+                    return (
+                      <div key={i} style={styles.attachmentRow}>
+                        <div style={styles.attachmentMeta}>
+                          <div style={styles.attachmentName} title={a.filename}>{a.filename}</div>
+                          <div style={styles.attachmentSub}>{sub || '—'}</div>
+                        </div>
+
+                        <div style={styles.attachmentBtns}>
+                          <button
+                            style={styles.btn}
+                            onClick={() => downloadAttachment(a, i)}
+                            disabled={isDownloading}
+                            title="Скачать вложение"
+                          >
+                            {isDownloading ? 'Скачивание…' : 'Скачать'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div style={{ fontSize: 12, color: colors.subtext, marginTop: 8 }}>
+                    Если кнопка “Скачать” пишет, что “бэк не вернул base64” — нужно добавить endpoint <b>gmail_attachment</b>
+                    (или научить <b>gmail_get</b> отдавать файл по <b>attachmentId</b>).
+                  </div>
                 </div>
               )}
             </div>
