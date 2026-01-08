@@ -7,31 +7,25 @@ import { supabase } from './supabaseClient';
 
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import TopNav from './components/TopNav.jsx';
-
 import EmailTab from './pages/EmailTab.jsx';
 
 // страницы
 import LoginPage from './pages/LoginPage.jsx';
 import NoAccessPage from './pages/NoAccessPage.jsx';
-
 import JobsPage from './pages/JobsPage.jsx';
 import AllJobsPage from './pages/AllJobsPage.jsx';
 import JobDetailsPage from './pages/JobDetailsPage.jsx';
-
 import CalendarPage from './pages/CalendarPage.jsx';
 import MaterialsPage from './pages/MaterialsPage.jsx';
 import ChatPage from './pages/ChatPage.jsx';
 import InvoicePage from './pages/InvoicePage.jsx';
-
 import TechniciansPage from './pages/TechniciansPage.jsx';
 import FinancePage from './pages/FinancePage.jsx';
 import ChatAdminPage from './pages/ChatAdminPage.jsx';
-
 import TasksTodayPage from './pages/TasksTodayPage.jsx';
-
 import TechniciansMap from './pages/TechniciansMap.jsx';
 import TechLibraryPage from './pages/TechLibraryPage.jsx';
-
+import DebtorsPage from './pages/DebtorsPage.jsx';
 // 🔥 НОВАЯ страница — Reset Password
 import ResetPassword from './pages/ResetPassword.jsx';
 
