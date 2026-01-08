@@ -133,7 +133,14 @@ function Shell() {
               </ProtectedRoute>
             }
           />
-
+          <Route 
+            path="/debtors" 
+              element={
+                <ProtectedRoute allow={['admin', 'manager']}>
+                <DebtorsPage />
+              </ProtectedRoute>
+            }
+           />
           {/* Календарь — менеджер + админ */}
           <Route
             path="/calendar"
