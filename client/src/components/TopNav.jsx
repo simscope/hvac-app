@@ -32,6 +32,14 @@ const Icon = {
       />
     </svg>
   ),
+   Debtors: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path
+        fill="currentColor"
+        d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2Zm1 14h-2v-2h2v2Zm0-4h-2V6h2v6Z"
+      />
+    </svg>
+  ),
   Calendar: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path
@@ -312,6 +320,7 @@ export default function TopNav() {
     if (r === 'admin' || r === 'manager') {
       arr.push(
         { to: '/jobs/all', label: 'Все заявки', icon: <Icon.All /> },
+        { to: '/debtors', label: 'Должники', icon: <Icon.Debtors /> },
         { to: '/calendar', label: 'Календарь', icon: <Icon.Calendar /> },
         { to: '/materials', label: 'Материалы', icon: <Icon.Materials /> },
         { to: '/tasks/today', label: 'Задачи', icon: <Icon.Tasks /> },
