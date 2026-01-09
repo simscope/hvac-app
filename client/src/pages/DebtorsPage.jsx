@@ -24,19 +24,18 @@ export default function DebtorsPage() {
   const [errorById, setErrorById] = useState({}); // jobId -> string
   const [keepVisibleById, setKeepVisibleById] = useState({}); // keep row visible until save completes
 
-  // autosave clients (blacklist)
-  const clientSaveTimersRef = useRef(new Map()); // clientId -> timerId
-  const [savingClientById, setSavingClientById] = useState({}); // clientId -> bool
-  const [errorClientById, setErrorClientById] = useState({}); // clientId -> string
+  // blacklist modal
+  const [blOpen, setBlOpen] = useState(false);
+  const [blClientId, setBlClientId] = useState(null);
+  const [blDraft, setBlDraft] = useState('');
+  const [blSaving, setBlSaving] = useState(false);
+  const [blError, setBlError] = useState('');
 
   useEffect(() => {
     fetchAll();
     return () => {
       for (const t of saveTimersRef.current.values()) clearTimeout(t);
       saveTimersRef.current.clear();
-
-      for (const t of clientSaveTimersRef.current.values()) clearTimeout(t);
-      clientSaveTimersRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -48,7 +47,6 @@ export default function DebtorsPage() {
       // include archived too (unpaid can be archived by old logic)
       supabase.from('jobs').select('*').order('created_at', { ascending: false }),
 
-      // blacklist хранится в clients
       supabase.from('clients').select('*').order('created_at', { ascending: false }),
 
       supabase
@@ -83,10 +81,8 @@ export default function DebtorsPage() {
     setJobs((prev) => prev.map((j) => (String(j.id) === String(id) ? { ...j, ...patch } : j)));
   };
 
-  const updateLocalClient = (clientId, patch) => {
-    setClients((prev) =>
-      (prev || []).map((c) => (String(c.id) === String(clientId) ? { ...c, ...patch } : c))
-    );
+  const updateLocalClient = (id, patch) => {
+    setClients((prev) => prev.map((c) => (String(c.id) === String(id) ? { ...c, ...patch } : c)));
   };
 
   const toISO = (val) => {
@@ -161,7 +157,6 @@ export default function DebtorsPage() {
       return;
     }
 
-    // update local "orig"
     setOrigJobs((prevOrig) =>
       prevOrig.map((x) => (String(x.id) === String(jobId) ? { ...x, ...payload } : x))
     );
@@ -172,45 +167,66 @@ export default function DebtorsPage() {
     await fetchAll();
   };
 
-  /* ====== BLACKLIST: autosave clients ====== */
+  /* ====== BLACKLIST: modal actions ====== */
 
-  const scheduleClientAutosave = (clientId, reason = 'blacklist-change') => {
-    const old = clientSaveTimersRef.current.get(clientId);
-    if (old) clearTimeout(old);
-
-    const t = setTimeout(() => {
-      doClientSave(clientId, reason);
-    }, 650);
-
-    clientSaveTimersRef.current.set(clientId, t);
+  const openBlacklistModal = (client, preset = '') => {
+    setBlError('');
+    setBlSaving(false);
+    setBlClientId(client?.id ?? null);
+    setBlDraft(preset ?? client?.blacklist ?? '');
+    setBlOpen(true);
   };
 
-  const doClientSave = async (clientId, reason = 'blacklist-autosave') => {
-    const c = (clients || []).find((x) => String(x.id) === String(clientId));
-    if (!c) return;
+  const closeBlacklistModal = () => {
+    setBlOpen(false);
+    setBlClientId(null);
+    setBlDraft('');
+    setBlError('');
+    setBlSaving(false);
+  };
 
-    setSavingClientById((p) => ({ ...p, [clientId]: true }));
-    setErrorClientById((p) => ({ ...p, [clientId]: '' }));
+  const saveBlacklist = async () => {
+    const clientId = blClientId;
+    if (!clientId) return;
 
-    // хранение: любой текст = blacklisted, пусто = не в blacklist
-    const raw = c.blacklist;
-    const nextVal = String(raw ?? '').trim();
-    const payload = { blacklist: nextVal ? nextVal : null };
-
-    const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
-
-    if (error) {
-      console.error('Client autosave error:', reason, error, payload);
-      setErrorClientById((p) => ({
-        ...p,
-        [clientId]: (error?.message || 'Failed to save').toString(),
-      }));
-      setSavingClientById((p) => ({ ...p, [clientId]: false }));
+    const reason = String(blDraft ?? '').trim();
+    if (!reason) {
+      setBlError('Укажи причину (не пусто).');
       return;
     }
 
-    setSavingClientById((p) => ({ ...p, [clientId]: false }));
-    // можно без fetchAll, но оставлю лёгкий refresh, чтобы всё было точно консистентно
+    setBlSaving(true);
+    setBlError('');
+
+    // оптимистично обновим локально
+    updateLocalClient(clientId, { blacklist: reason });
+
+    const { error } = await supabase.from('clients').update({ blacklist: reason }).eq('id', clientId);
+
+    if (error) {
+      console.error('Blacklist save error:', error);
+      setBlError((error?.message || 'Failed to save blacklist').toString());
+      setBlSaving(false);
+      return;
+    }
+
+    setBlSaving(false);
+    closeBlacklistModal();
+    await fetchAll();
+  };
+
+  const clearBlacklist = async (clientId) => {
+    if (!clientId) return;
+
+    // оптимистично
+    updateLocalClient(clientId, { blacklist: null });
+
+    const { error } = await supabase.from('clients').update({ blacklist: null }).eq('id', clientId);
+
+    if (error) {
+      console.error('Blacklist clear error:', error);
+      // откатим в UI через refresh
+    }
     await fetchAll();
   };
 
@@ -311,15 +327,6 @@ export default function DebtorsPage() {
         }
         .err { color:#b91c1c; font-size:12px; margin-top:4px; }
 
-        .bl-wrap { display:flex; flex-direction:column; gap:6px; }
-        .bl-row { display:flex; gap:6px; align-items:center; }
-        .bl-input { width:100%; height:28px; font-size:13px; padding:2px 6px; box-sizing:border-box; }
-        .bl-btn {
-          height:28px; padding:0 10px; border-radius:8px;
-          border:1px solid #e5e7eb; background:#fff; cursor:pointer;
-          font-weight:700; font-size:12px;
-        }
-        .bl-btn:hover { background:#f3f4f6; }
         .bl-pill {
           display:inline-flex; align-items:center; gap:6px;
           padding:4px 10px; border-radius:999px;
@@ -327,14 +334,120 @@ export default function DebtorsPage() {
           background:#111827; color:#fff;
           border: 1px solid rgba(255,255,255,0.12);
           white-space:nowrap;
-          max-width: 100%;
+          max-width:100%;
           overflow:hidden;
           text-overflow:ellipsis;
         }
         .bl-pill--yes { background:#7f1d1d; border-color: rgba(255,255,255,0.18); }
         .bl-pill--no { background:#0f172a; }
-        .mini { font-size:11px; color:#6b7280; }
+
+        .btn {
+          height:28px; padding:0 10px; border-radius:8px;
+          border:1px solid #e5e7eb; background:#fff; cursor:pointer;
+          font-weight:800; font-size:12px;
+        }
+        .btn:hover { background:#f3f4f6; }
+        .btn-danger { border-color:#fecaca; background:#fff; }
+        .btn-danger:hover { background:#fee2e2; }
+        .btn-primary { border-color:#c7d2fe; background:#fff; }
+        .btn-primary:hover { background:#eef2ff; }
+
+        /* modal */
+        .modal-backdrop {
+          position:fixed; inset:0;
+          background:rgba(0,0,0,0.5);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          padding:16px;
+          z-index:9999;
+        }
+        .modal {
+          width:min(720px, 100%);
+          background:#fff;
+          border-radius:14px;
+          border:1px solid #e5e7eb;
+          box-shadow:0 24px 70px rgba(0,0,0,0.25);
+          overflow:hidden;
+        }
+        .modal-head {
+          padding:12px 14px;
+          border-bottom:1px solid #e5e7eb;
+          display:flex;
+          align-items:center;
+          justify-content:space-between;
+          gap:12px;
+        }
+        .modal-title { font-weight:900; font-size:16px; }
+        .modal-body { padding:14px; }
+        .modal-body textarea {
+          width:100%;
+          min-height:110px;
+          resize:vertical;
+          font-size:14px;
+          padding:10px 10px;
+          border-radius:10px;
+          border:1px solid #e5e7eb;
+          outline:none;
+          box-sizing:border-box;
+        }
+        .modal-body textarea:focus { border-color:#c7d2fe; box-shadow:0 0 0 3px rgba(99,102,241,0.15); }
+        .modal-foot {
+          padding:12px 14px;
+          border-top:1px solid #e5e7eb;
+          display:flex;
+          justify-content:flex-end;
+          gap:8px;
+        }
+        .muted { color:#6b7280; font-size:12px; }
       `}</style>
+
+      {/* ===== Modal ===== */}
+      {blOpen && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => {
+            // клик вне окна закрывает
+            if (e.target === e.currentTarget && !blSaving) closeBlacklistModal();
+          }}
+        >
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div className="modal-title">⛔ Blacklist клиента</div>
+              <button className="btn" onClick={closeBlacklistModal} disabled={blSaving}>
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="muted" style={{ marginBottom: 8 }}>
+                Укажи причину. Это сохранится в <b>clients.blacklist</b>.
+              </div>
+
+              <textarea
+                value={blDraft}
+                onChange={(e) => setBlDraft(e.target.value)}
+                placeholder="Например: No-show, refuses to pay, rude behavior, chargeback..."
+                disabled={blSaving}
+              />
+
+              {blError ? <div className="err" style={{ marginTop: 8 }}>⚠ {blError}</div> : null}
+              {blSaving ? <div className="muted" style={{ marginTop: 8 }}>Saving…</div> : null}
+            </div>
+
+            <div className="modal-foot">
+              <button className="btn" onClick={closeBlacklistModal} disabled={blSaving}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={saveBlacklist} disabled={blSaving}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <h1 className="text-2xl font-bold">💸 Должники (Unpaid)</h1>
@@ -386,7 +499,9 @@ export default function DebtorsPage() {
           })
           .map(([techId, list]) => {
             const title =
-              techId === 'No technician' ? '🧾 No technician' : `👨‍🔧 ${getTechName(techId)}`;
+              techId === 'No technician'
+                ? '🧾 No technician'
+                : `👨‍🔧 ${getTechName(techId)}`;
 
             return (
               <div key={techId} style={{ marginBottom: 18 }}>
@@ -405,7 +520,7 @@ export default function DebtorsPage() {
                       <col style={{ width: 140 }} />
                       <col style={{ width: 90 }} />
                       <col style={{ width: 140 }} />
-                      <col style={{ width: 230 }} />
+                      <col style={{ width: 190 }} />
                     </colgroup>
 
                     <thead>
@@ -435,9 +550,6 @@ export default function DebtorsPage() {
 
                         const blVal = client?.blacklist;
                         const isBl = !!(blVal && String(blVal).trim() !== '');
-
-                        const clientErr = client ? errorClientById[client.id] || '' : '';
-                        const clientSaving = client ? !!savingClientById[client.id] : false;
 
                         return (
                           <tr
@@ -585,47 +697,44 @@ export default function DebtorsPage() {
                               </select>
                             </td>
 
-                            {/* ===== LIVE BLACKLIST ===== */}
+                            {/* Blacklist: buttons + modal */}
                             <td onClick={(e) => e.stopPropagation()}>
                               {!client ? (
                                 <span className="bl-pill bl-pill--no">—</span>
                               ) : (
-                                <div className="bl-wrap">
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                   <span
                                     className={`bl-pill ${isBl ? 'bl-pill--yes' : 'bl-pill--no'}`}
-                                    title={isBl ? `Blacklisted: ${String(blVal)}` : 'Not blacklisted'}
+                                    title={isBl ? String(blVal) : 'Not blacklisted'}
                                   >
                                     {isBl ? `⛔ ${String(blVal)}` : '—'}
                                   </span>
 
-                                  <div className="bl-row">
-                                    <input
-                                      className="bl-input"
-                                      value={client.blacklist || ''}
-                                      placeholder="Blacklist reason (type to save)"
-                                      onChange={(e) => {
-                                        updateLocalClient(client.id, { blacklist: e.target.value });
-                                        scheduleClientAutosave(client.id, 'blacklist');
-                                      }}
-                                      onBlur={() => doClientSave(client.id, 'blacklist-blur')}
-                                    />
-                                    <button
-                                      className="bl-btn"
-                                      title="Clear blacklist"
-                                      onClick={() => {
-                                        updateLocalClient(client.id, { blacklist: '' });
-                                        scheduleClientAutosave(client.id, 'blacklist-clear');
-                                        // быстро сохраняем без ожидания blur
-                                        doClientSave(client.id, 'blacklist-clear-now');
-                                      }}
-                                    >
-                                      Clear
-                                    </button>
-                                  </div>
-
-                                  <div className="mini">
-                                    {clientSaving ? 'Saving…' : ''}
-                                    {clientErr ? <span style={{ color: '#b91c1c' }}>⚠ {clientErr}</span> : ''}
+                                  <div style={{ display: 'flex', gap: 6 }}>
+                                    {!isBl ? (
+                                      <button
+                                        className="btn btn-danger"
+                                        onClick={() => openBlacklistModal(client, '')}
+                                      >
+                                        Blacklist
+                                      </button>
+                                    ) : (
+                                      <>
+                                        <button
+                                          className="btn btn-primary"
+                                          onClick={() => openBlacklistModal(client, String(blVal || ''))}
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          className="btn btn-danger"
+                                          onClick={() => clearBlacklist(client.id)}
+                                          title="Remove from blacklist"
+                                        >
+                                          Clear
+                                        </button>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -696,7 +805,6 @@ function needsLaborPayment(j) {
 }
 
 function isUnpaid(j) {
-  // unpaid if ANY required payment method missing
   const scf = Number(j.scf || 0);
   const labor = Number(j.labor_price || 0);
 
@@ -710,7 +818,6 @@ function isUnpaid(j) {
 }
 
 function debtAmount(j) {
-  // kept for header total only
   let s = 0;
   const scf = Number(j.scf || 0);
   const labor = Number(j.labor_price || 0);
