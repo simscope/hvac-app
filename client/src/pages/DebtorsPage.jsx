@@ -327,20 +327,48 @@ export default function DebtorsPage() {
         }
         .err { color:#b91c1c; font-size:12px; margin-top:4px; }
 
-        .bl-pill {
-          display:inline-flex; align-items:center; gap:6px;
-          padding:4px 10px; border-radius:999px;
-          font-size:12px; font-weight:900;
-          background:#111827; color:#fff;
-          border: 1px solid rgba(255,255,255,0.12);
-          white-space:nowrap;
-          max-width:100%;
-          overflow:hidden;
-          text-overflow:ellipsis;
-        }
-        .bl-pill--yes { background:#7f1d1d; border-color: rgba(255,255,255,0.18); }
-        .bl-pill--no { background:#0f172a; }
+       .bl-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
 
+.bl-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af; /* серый */
+  flex: 0 0 10px;
+}
+
+.bl-dot--yes {
+  background: #dc2626; /* красный */
+}
+
+.bl-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.bl-btn:hover {
+  background: #f3f4f6;
+}
+
+.bl-btn-danger {
+  border-color: #fecaca;
+}
+
+.bl-btn-danger:hover {
+  background: #fee2e2;
+}
+       
         .btn {
           height:28px; padding:0 10px; border-radius:8px;
           border:1px solid #e5e7eb; background:#fff; cursor:pointer;
@@ -697,48 +725,40 @@ export default function DebtorsPage() {
                               </select>
                             </td>
 
-                            {/* Blacklist: buttons + modal */}
                             <td onClick={(e) => e.stopPropagation()}>
-                              {!client ? (
-                                <span className="bl-pill bl-pill--no">—</span>
-                              ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                  <span
-                                    className={`bl-pill ${isBl ? 'bl-pill--yes' : 'bl-pill--no'}`}
-                                    title={isBl ? String(blVal) : 'Not blacklisted'}
-                                  >
-                                    {isBl ? `⛔ ${String(blVal)}` : '—'}
-                                  </span>
+  {!client ? null : (
+    <div className="bl-row">
+      <span
+        className={`bl-dot ${isBl ? 'bl-dot--yes' : ''}`}
+        title={isBl ? String(client.blacklist) : 'Not blacklisted'}
+      />
 
-                                  <div style={{ display: 'flex', gap: 6 }}>
-                                    {!isBl ? (
-                                      <button
-                                        className="btn btn-danger"
-                                        onClick={() => openBlacklistModal(client, '')}
-                                      >
-                                        Blacklist
-                                      </button>
-                                    ) : (
-                                      <>
-                                        <button
-                                          className="btn btn-primary"
-                                          onClick={() => openBlacklistModal(client, String(blVal || ''))}
-                                        >
-                                          Edit
-                                        </button>
-                                        <button
-                                          className="btn btn-danger"
-                                          onClick={() => clearBlacklist(client.id)}
-                                          title="Remove from blacklist"
-                                        >
-                                          Clear
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                            </td>
+      {!isBl ? (
+        <button
+          className="bl-btn bl-btn-danger"
+          onClick={() => openBlacklistModal(client, '')}
+        >
+          Blacklist
+        </button>
+      ) : (
+        <>
+          <button
+            className="bl-btn"
+            onClick={() => openBlacklistModal(client, String(client.blacklist))}
+          >
+            Edit
+          </button>
+          <button
+            className="bl-btn bl-btn-danger"
+            onClick={() => clearBlacklist(client.id)}
+          >
+            Clear
+          </button>
+        </>
+      )}
+    </div>
+  )}
+</td>
                           </tr>
                         );
                       })}
@@ -746,9 +766,7 @@ export default function DebtorsPage() {
                   </table>
 
                   <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-                    Логика: должники = <b>Completed</b> + не выбран тип оплаты (SCF/Labor).
-                    Как только ты выбрал тип оплаты — строка исчезнет <b>после успешного автосохранения</b>.
-                  </div>
+                   </div>
                 </div>
               </div>
             );
