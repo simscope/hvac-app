@@ -18,17 +18,25 @@ export default function DebtorsPage() {
   const [filterTech, setFilterTech] = useState('all');
   const [searchText, setSearchText] = useState('');
 
-  // autosave
+  // autosave jobs
   const saveTimersRef = useRef(new Map()); // jobId -> timerId
   const [savingById, setSavingById] = useState({}); // jobId -> bool
   const [errorById, setErrorById] = useState({}); // jobId -> string
   const [keepVisibleById, setKeepVisibleById] = useState({}); // keep row visible until save completes
+
+  // autosave clients (blacklist)
+  const clientSaveTimersRef = useRef(new Map()); // clientId -> timerId
+  const [savingClientById, setSavingClientById] = useState({}); // clientId -> bool
+  const [errorClientById, setErrorClientById] = useState({}); // clientId -> string
 
   useEffect(() => {
     fetchAll();
     return () => {
       for (const t of saveTimersRef.current.values()) clearTimeout(t);
       saveTimersRef.current.clear();
+
+      for (const t of clientSaveTimersRef.current.values()) clearTimeout(t);
+      clientSaveTimersRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -40,6 +48,7 @@ export default function DebtorsPage() {
       // include archived too (unpaid can be archived by old logic)
       supabase.from('jobs').select('*').order('created_at', { ascending: false }),
 
+      // blacklist хранится в clients
       supabase.from('clients').select('*').order('created_at', { ascending: false }),
 
       supabase
@@ -71,7 +80,13 @@ export default function DebtorsPage() {
   );
 
   const updateLocalJob = (id, patch) => {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
+    setJobs((prev) => prev.map((j) => (String(j.id) === String(id) ? { ...j, ...patch } : j)));
+  };
+
+  const updateLocalClient = (clientId, patch) => {
+    setClients((prev) =>
+      (prev || []).map((c) => (String(c.id) === String(clientId) ? { ...c, ...patch } : c))
+    );
   };
 
   const toISO = (val) => {
@@ -98,7 +113,7 @@ export default function DebtorsPage() {
   };
 
   const doSave = async (jobId, reason = 'autosave') => {
-    const job = (jobs || []).find((j) => j.id === jobId);
+    const job = (jobs || []).find((j) => String(j.id) === String(jobId));
     if (!job) return;
 
     setSavingById((p) => ({ ...p, [jobId]: true }));
@@ -147,11 +162,55 @@ export default function DebtorsPage() {
     }
 
     // update local "orig"
-    setOrigJobs((prevOrig) => prevOrig.map((x) => (x.id === jobId ? { ...x, ...payload } : x)));
+    setOrigJobs((prevOrig) =>
+      prevOrig.map((x) => (String(x.id) === String(jobId) ? { ...x, ...payload } : x))
+    );
 
     setSavingById((p) => ({ ...p, [jobId]: false }));
     setKeepVisibleById((p) => ({ ...p, [jobId]: false }));
 
+    await fetchAll();
+  };
+
+  /* ====== BLACKLIST: autosave clients ====== */
+
+  const scheduleClientAutosave = (clientId, reason = 'blacklist-change') => {
+    const old = clientSaveTimersRef.current.get(clientId);
+    if (old) clearTimeout(old);
+
+    const t = setTimeout(() => {
+      doClientSave(clientId, reason);
+    }, 650);
+
+    clientSaveTimersRef.current.set(clientId, t);
+  };
+
+  const doClientSave = async (clientId, reason = 'blacklist-autosave') => {
+    const c = (clients || []).find((x) => String(x.id) === String(clientId));
+    if (!c) return;
+
+    setSavingClientById((p) => ({ ...p, [clientId]: true }));
+    setErrorClientById((p) => ({ ...p, [clientId]: '' }));
+
+    // хранение: любой текст = blacklisted, пусто = не в blacklist
+    const raw = c.blacklist;
+    const nextVal = String(raw ?? '').trim();
+    const payload = { blacklist: nextVal ? nextVal : null };
+
+    const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
+
+    if (error) {
+      console.error('Client autosave error:', reason, error, payload);
+      setErrorClientById((p) => ({
+        ...p,
+        [clientId]: (error?.message || 'Failed to save').toString(),
+      }));
+      setSavingClientById((p) => ({ ...p, [clientId]: false }));
+      return;
+    }
+
+    setSavingClientById((p) => ({ ...p, [clientId]: false }));
+    // можно без fetchAll, но оставлю лёгкий refresh, чтобы всё было точно консистентно
     await fetchAll();
   };
 
@@ -191,11 +250,11 @@ export default function DebtorsPage() {
 
   // keep rows visible until save completes
   const visibleDebtors = useMemo(() => {
-    const base = new Map(debtors.map((j) => [j.id, j]));
+    const base = new Map(debtors.map((j) => [String(j.id), j]));
     for (const [id, keep] of Object.entries(keepVisibleById || {})) {
       if (!keep) continue;
-      const j = (jobs || []).find((x) => x.id === id);
-      if (j && isDone(j.status)) base.set(j.id, j);
+      const j = (jobs || []).find((x) => String(x.id) === String(id));
+      if (j && isDone(j.status)) base.set(String(j.id), j);
     }
     return Array.from(base.values());
   }, [debtors, keepVisibleById, jobs]);
@@ -251,21 +310,30 @@ export default function DebtorsPage() {
           background:#0f172a; color:#fff;
         }
         .err { color:#b91c1c; font-size:12px; margin-top:4px; }
-        .bl {
-          display:inline-flex;
-          align-items:center;
-          gap:6px;
-          padding:4px 10px;
-          border-radius:999px;
-          font-size:12px;
-          font-weight:900;
-          background:#111827;
-          color:#fff;
+
+        .bl-wrap { display:flex; flex-direction:column; gap:6px; }
+        .bl-row { display:flex; gap:6px; align-items:center; }
+        .bl-input { width:100%; height:28px; font-size:13px; padding:2px 6px; box-sizing:border-box; }
+        .bl-btn {
+          height:28px; padding:0 10px; border-radius:8px;
+          border:1px solid #e5e7eb; background:#fff; cursor:pointer;
+          font-weight:700; font-size:12px;
+        }
+        .bl-btn:hover { background:#f3f4f6; }
+        .bl-pill {
+          display:inline-flex; align-items:center; gap:6px;
+          padding:4px 10px; border-radius:999px;
+          font-size:12px; font-weight:900;
+          background:#111827; color:#fff;
           border: 1px solid rgba(255,255,255,0.12);
           white-space:nowrap;
+          max-width: 100%;
+          overflow:hidden;
+          text-overflow:ellipsis;
         }
-        .bl--yes { background:#7f1d1d; border-color: rgba(255,255,255,0.18); }
-        .bl--no { background:#0f172a; }
+        .bl-pill--yes { background:#7f1d1d; border-color: rgba(255,255,255,0.18); }
+        .bl-pill--no { background:#0f172a; }
+        .mini { font-size:11px; color:#6b7280; }
       `}</style>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -318,9 +386,7 @@ export default function DebtorsPage() {
           })
           .map(([techId, list]) => {
             const title =
-              techId === 'No technician'
-                ? '🧾 No technician'
-                : `👨‍🔧 ${getTechName(techId)}`;
+              techId === 'No technician' ? '🧾 No technician' : `👨‍🔧 ${getTechName(techId)}`;
 
             return (
               <div key={techId} style={{ marginBottom: 18 }}>
@@ -334,12 +400,12 @@ export default function DebtorsPage() {
                       <col style={{ width: 120 }} />
                       <col style={{ width: 260 }} />
                       <col style={{ width: 120 }} />
-                      <col style={{ width: 240 }} />
+                      <col style={{ width: 260 }} />
                       <col style={{ width: 90 }} />
                       <col style={{ width: 140 }} />
                       <col style={{ width: 90 }} />
                       <col style={{ width: 140 }} />
-                      <col style={{ width: 110 }} />
+                      <col style={{ width: 230 }} />
                     </colgroup>
 
                     <thead>
@@ -361,12 +427,17 @@ export default function DebtorsPage() {
                     <tbody>
                       {list.map((job) => {
                         const client = getClient(job.client_id);
+
                         const scfErr = needsScfPayment(job);
                         const laborErr = needsLaborPayment(job);
 
                         const err = errorById[job.id] || '';
+
                         const blVal = client?.blacklist;
                         const isBl = !!(blVal && String(blVal).trim() !== '');
+
+                        const clientErr = client ? errorClientById[client.id] || '' : '';
+                        const clientSaving = client ? !!savingClientById[client.id] : false;
 
                         return (
                           <tr
@@ -514,10 +585,50 @@ export default function DebtorsPage() {
                               </select>
                             </td>
 
-                            <td>
-                              <span className={`bl ${isBl ? 'bl--yes' : 'bl--no'}`} title="Client blacklist flag">
-                                {isBl ? `⛔ ${String(blVal)}` : '—'}
-                              </span>
+                            {/* ===== LIVE BLACKLIST ===== */}
+                            <td onClick={(e) => e.stopPropagation()}>
+                              {!client ? (
+                                <span className="bl-pill bl-pill--no">—</span>
+                              ) : (
+                                <div className="bl-wrap">
+                                  <span
+                                    className={`bl-pill ${isBl ? 'bl-pill--yes' : 'bl-pill--no'}`}
+                                    title={isBl ? `Blacklisted: ${String(blVal)}` : 'Not blacklisted'}
+                                  >
+                                    {isBl ? `⛔ ${String(blVal)}` : '—'}
+                                  </span>
+
+                                  <div className="bl-row">
+                                    <input
+                                      className="bl-input"
+                                      value={client.blacklist || ''}
+                                      placeholder="Blacklist reason (type to save)"
+                                      onChange={(e) => {
+                                        updateLocalClient(client.id, { blacklist: e.target.value });
+                                        scheduleClientAutosave(client.id, 'blacklist');
+                                      }}
+                                      onBlur={() => doClientSave(client.id, 'blacklist-blur')}
+                                    />
+                                    <button
+                                      className="bl-btn"
+                                      title="Clear blacklist"
+                                      onClick={() => {
+                                        updateLocalClient(client.id, { blacklist: '' });
+                                        scheduleClientAutosave(client.id, 'blacklist-clear');
+                                        // быстро сохраняем без ожидания blur
+                                        doClientSave(client.id, 'blacklist-clear-now');
+                                      }}
+                                    >
+                                      Clear
+                                    </button>
+                                  </div>
+
+                                  <div className="mini">
+                                    {clientSaving ? 'Saving…' : ''}
+                                    {clientErr ? <span style={{ color: '#b91c1c' }}>⚠ {clientErr}</span> : ''}
+                                  </div>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         );
@@ -611,7 +722,7 @@ function debtAmount(j) {
 }
 
 function origById(id, origJobs) {
-  return (origJobs || []).find((x) => x.id === id) || null;
+  return (origJobs || []).find((x) => String(x.id) === String(id)) || null;
 }
 
 function formatAddress(c) {
