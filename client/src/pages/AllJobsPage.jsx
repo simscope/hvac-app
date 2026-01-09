@@ -357,12 +357,6 @@ const AllJobsPage = () => {
     }
   };
 
-  const openInvoiceForJob = (job) => {
-    const inv = invByJob.get(job.id);
-    if (inv) navigate(`/invoice/${job.id}?invoice=${inv.id}`);
-    else navigate(`/invoice/new?job=${job.id}`);
-  };
-
   return (
     <div className="p-4">
       <style>{`
@@ -506,15 +500,12 @@ const AllJobsPage = () => {
                 <col style={{ width: 120 }} />
                 <col style={{ width: 240 }} />
                 <col style={{ width: 120 }} />
-                <col style={{ width: 220 }} />
+                <col style={{ width: 240 }} />
                 <col style={{ width: 90 }} />
                 <col style={{ width: 130 }} />
                 <col style={{ width: 90 }} />
                 <col style={{ width: 130 }} />
                 <col style={{ width: 160 }} />
-                <col style={{ width: 40 }} />
-                <col style={{ width: 50 }} />
-                <col style={{ width: 50 }} />
                 <col style={{ width: 50 }} />
               </colgroup>
 
@@ -531,10 +522,7 @@ const AllJobsPage = () => {
                   <th>Labor</th>
                   <th>Labor payment</th>
                   <th>Status</th>
-                  <th className="center">✔</th>
                   <th className="center">💾</th>
-                  <th className="center">✏️</th>
-                  <th className="center">📄</th>
                 </tr>
               </thead>
 
@@ -682,8 +670,6 @@ const AllJobsPage = () => {
                         </select>
                       </td>
 
-                      <td className="center">{isFullyPaidNow(job) ? '✔️' : ''}</td>
-
                       <td className="center">
                         <button
                           title="Save"
@@ -693,30 +679,6 @@ const AllJobsPage = () => {
                           }}
                         >
                           💾
-                        </button>
-                      </td>
-
-                      <td className="center">
-                        <button
-                          title="Edit"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/job/${job.id}`);
-                          }}
-                        >
-                          ✏️
-                        </button>
-                      </td>
-
-                      <td className="center">
-                        <button
-                          title="Invoice"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openInvoiceForJob(job);
-                          }}
-                        >
-                          📄
                         </button>
                       </td>
                     </tr>
@@ -774,14 +736,6 @@ function isRecall(status) {
 function methodChosen(raw) {
   const v = String(raw ?? '').trim().toLowerCase();
   return v !== '' && v !== '-' && v !== 'none' && v !== 'нет' && v !== '0' && v !== '—';
-}
-
-function isFullyPaidNow(j) {
-  const scf = Number(j.scf || 0);
-  const labor = Number(j.labor_price || 0);
-  const scfOK = scf <= 0 || (scf > 0 && methodChosen(j.scf_payment_method));
-  const laborOK = labor <= 0 || (labor > 0 && methodChosen(j.labor_payment_method));
-  return scfOK && laborOK;
 }
 
 function needsScfPayment(j) {
