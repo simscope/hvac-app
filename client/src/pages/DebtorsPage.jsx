@@ -87,7 +87,7 @@ export default function DebtorsPage() {
     const old = saveTimersRef.current.get(jobId);
     if (old) clearTimeout(old);
 
-    // keep visible even if it becomes "paid" (disappears) until save is done
+    // keep visible even if it becomes "paid" until save completes
     setKeepVisibleById((p) => ({ ...p, [jobId]: true }));
 
     const t = setTimeout(() => {
@@ -211,17 +211,6 @@ export default function DebtorsPage() {
     return g;
   }, [visibleDebtors]);
 
-  // totals per technician
-  const debtSumByTech = useMemo(() => {
-    const m = new Map(); // techId -> amount
-    for (const j of visibleDebtors) {
-      const key = j.technician_id ? String(j.technician_id) : 'No technician';
-      const amt = debtAmount(j);
-      m.set(key, (m.get(key) || 0) + amt);
-    }
-    return m;
-  }, [visibleDebtors]);
-
   const grandTotal = useMemo(() => {
     let s = 0;
     for (const j of visibleDebtors) s += debtAmount(j);
@@ -250,7 +239,6 @@ export default function DebtorsPage() {
         .jobs-table .cell-wrap { white-space:normal; word-break:break-word; line-height:1.25; }
         .jobs-table input, .jobs-table select { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
-        .jobs-table .center { text-align:center; }
         .jobs-table tr.debtor { background:#fee2e2; }
         .jobs-table tr.debtor:hover { background:#fecaca; }
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
@@ -262,40 +250,22 @@ export default function DebtorsPage() {
           font-size:12px; font-weight:800;
           background:#0f172a; color:#fff;
         }
-        .savingDot { width:8px; height:8px; border-radius:50%; background:#f59e0b; display:inline-block; }
-        .okDot { width:8px; height:8px; border-radius:50%; background:#22c55e; display:inline-block; }
         .err { color:#b91c1c; font-size:12px; margin-top:4px; }
-        .btn-mini {
-          border:1px solid #e5e7eb;
-          background:#fff;
-          padding:4px 8px;
-          border-radius:8px;
-          cursor:pointer;
-        }
-        .btn-mini:hover { background:#f8fafc; }
-
-        .groupHeader {
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
-          gap:10px;
-          margin: 14px 0 8px;
-        }
-        .groupTitle { font-size: 18px; font-weight: 900; }
-        .groupTotal {
+        .bl {
           display:inline-flex;
           align-items:center;
-          gap:8px;
-          padding:6px 10px;
-          border-radius: 999px;
+          gap:6px;
+          padding:4px 10px;
+          border-radius:999px;
+          font-size:12px;
+          font-weight:900;
           background:#111827;
           color:#fff;
-          font-weight:900;
-          font-size:13px;
           border: 1px solid rgba(255,255,255,0.12);
+          white-space:nowrap;
         }
-        .moneyRed { color:#fecaca; }
-        .moneyWhite { color:#fff; }
+        .bl--yes { background:#7f1d1d; border-color: rgba(255,255,255,0.18); }
+        .bl--no { background:#0f172a; }
       `}</style>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
@@ -326,9 +296,7 @@ export default function DebtorsPage() {
           style={{ width: 360 }}
         />
 
-        <button className="btn-mini" onClick={fetchAll}>
-          🔄 Refresh
-        </button>
+        <button onClick={fetchAll}>🔄 Refresh</button>
       </div>
 
       {loading && <p>Loading...</p>}
@@ -341,7 +309,6 @@ export default function DebtorsPage() {
 
       {!loading &&
         Object.entries(grouped)
-          // make stable order: by tech name, then "No technician" last
           .sort(([a], [b]) => {
             if (a === 'No technician') return 1;
             if (b === 'No technician') return -1;
@@ -355,17 +322,9 @@ export default function DebtorsPage() {
                 ? '🧾 No technician'
                 : `👨‍🔧 ${getTechName(techId)}`;
 
-            const techTotal = debtSumByTech.get(techId) || 0;
-
             return (
               <div key={techId} style={{ marginBottom: 18 }}>
-                <div className="groupHeader">
-                  <div className="groupTitle">{title}</div>
-                  <div className="groupTotal" title="Сумма долга по технику">
-                    <span style={{ opacity: 0.85 }}>Debt:</span>
-                    <span className="moneyWhite">{money(techTotal)}</span>
-                  </div>
-                </div>
+                <div style={{ fontSize: 18, fontWeight: 900, margin: '14px 0 8px' }}>{title}</div>
 
                 <div className="overflow-x-auto">
                   <table className="jobs-table">
@@ -380,9 +339,7 @@ export default function DebtorsPage() {
                       <col style={{ width: 140 }} />
                       <col style={{ width: 90 }} />
                       <col style={{ width: 140 }} />
-                      <col style={{ width: 90 }} />
-                      <col style={{ width: 60 }} />
-                      <col style={{ width: 60 }} />
+                      <col style={{ width: 110 }} />
                     </colgroup>
 
                     <thead>
@@ -397,9 +354,7 @@ export default function DebtorsPage() {
                         <th>SCF payment</th>
                         <th>Labor</th>
                         <th>Labor payment</th>
-                        <th>Debt</th>
-                        <th className="center">↻</th>
-                        <th className="center">✏️</th>
+                        <th>Blacklist</th>
                       </tr>
                     </thead>
 
@@ -409,10 +364,9 @@ export default function DebtorsPage() {
                         const scfErr = needsScfPayment(job);
                         const laborErr = needsLaborPayment(job);
 
-                        const saving = !!savingById[job.id];
                         const err = errorById[job.id] || '';
-
-                        const debt = debtAmount(job);
+                        const blVal = client?.blacklist;
+                        const isBl = !!(blVal && String(blVal).trim() !== '');
 
                         return (
                           <tr
@@ -469,11 +423,6 @@ export default function DebtorsPage() {
                                     {client?.full_name || client?.name || '—'}
                                   </div>
                                 )}
-                                {client?.blacklist ? (
-                                  <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>
-                                    ⛔ blacklisted: {String(client.blacklist)}
-                                  </div>
-                                ) : null}
                               </div>
                             </td>
 
@@ -566,31 +515,9 @@ export default function DebtorsPage() {
                             </td>
 
                             <td>
-                              <div className="cell-wrap" style={{ fontWeight: 900, color: '#7f1d1d' }}>
-                                {money(debt)}
-                              </div>
-                              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                                {needsScfPayment(job) ? `SCF ${money(Number(job.scf || 0))}` : ''}
-                                {needsScfPayment(job) && needsLaborPayment(job) ? ' + ' : ''}
-                                {needsLaborPayment(job) ? `Labor ${money(Number(job.labor_price || 0))}` : ''}
-                              </div>
-                            </td>
-
-                            <td className="center" title={saving ? 'Saving...' : 'Idle'}>
-                              {saving ? <span className="savingDot" /> : <span className="okDot" />}
-                            </td>
-
-                            <td className="center">
-                              <button
-                                className="btn-mini"
-                                title="Open job details"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate(`/job/${job.id}`);
-                                }}
-                              >
-                                ✏️
-                              </button>
+                              <span className={`bl ${isBl ? 'bl--yes' : 'bl--no'}`} title="Client blacklist flag">
+                                {isBl ? `⛔ ${String(blVal)}` : '—'}
+                              </span>
                             </td>
                           </tr>
                         );
@@ -672,7 +599,7 @@ function isUnpaid(j) {
 }
 
 function debtAmount(j) {
-  // debt = sum of parts that are not marked as paid
+  // kept for header total only
   let s = 0;
   const scf = Number(j.scf || 0);
   const labor = Number(j.labor_price || 0);
