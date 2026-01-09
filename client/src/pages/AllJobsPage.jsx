@@ -13,7 +13,6 @@ const AllJobsPage = () => {
 
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterTech, setFilterTech] = useState('all');
-  const [filterPaid, setFilterPaid] = useState('all'); // all | paid | unpaid
   const [searchText, setSearchText] = useState('');
   const [invoiceQuery, setInvoiceQuery] = useState(''); // поиск по invoice_no / job_number
   const [sortAsc, setSortAsc] = useState(true);
@@ -70,10 +69,7 @@ const AllJobsPage = () => {
   };
 
   // теперь через useCallback, чтобы eslint не ругался
-  const getClient = useCallback(
-    (id) => clients.find((c) => c.id === id),
-    [clients]
-  );
+  const getClient = useCallback((id) => clients.find((c) => c.id === id), [clients]);
 
   const handleChange = (id, field, value) => {
     setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
@@ -126,7 +122,6 @@ const AllJobsPage = () => {
   const resetFilters = () => {
     setFilterStatus('all');
     setFilterTech('all');
-    setFilterPaid('all');
     setSearchText('');
     setInvoiceQuery('');
     setViewMode('active');
@@ -166,7 +161,7 @@ const AllJobsPage = () => {
         Phone: client?.phone || '',
         Address: formatAddress(client),
         SCF: job.scf,
-        'SCF': job.scf_payment_method,
+        'SCF payment': job.scf_payment_method,
         Labor: job.labor_price,
         'Labor payment': job.labor_payment_method,
         Status: job.status,
@@ -187,6 +182,8 @@ const AllJobsPage = () => {
     const now = new Date(); // внутри useMemo
 
     return (jobs || [])
+      // ✅ НЕ показываем Completed на этой странице
+      .filter((j) => !isDone(j.status))
       .filter((j) => {
         const o = origById(j.id, origJobs) || j;
         const recall = isRecall(o.status);
@@ -241,11 +238,6 @@ const AllJobsPage = () => {
           addr.includes(t)
         );
       })
-      .filter((j) => {
-        if (filterPaid === 'paid') return isFullyPaidNow(j);
-        if (filterPaid === 'unpaid') return isUnpaidNow(j);
-        return true;
-      })
       .sort((a, b) => {
         const A = (a.job_number || a.id).toString();
         const B = (b.job_number || b.id).toString();
@@ -256,7 +248,6 @@ const AllJobsPage = () => {
     origJobs,
     filterStatus,
     filterTech,
-    filterPaid,
     searchText,
     invoiceQuery,
     sortAsc,
@@ -389,37 +380,6 @@ const AllJobsPage = () => {
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
 
-      {viewMode === 'active' && (
-        <div style={{ marginBottom: 8, color: '#6b7280', fontSize: 13 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginRight: 12 }}>
-            <span
-              style={{
-                display: 'inline-block',
-                width: 12,
-                height: 12,
-                background: '#fee2e2',
-                border: '1px solid #fca5a5',
-              }}
-            />
-            <span>
-              red — <b>COMPLETED</b> but <b>NOT PAID</b> (amounts &gt; 0 without a selected payment method)
-            </span>
-          </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span
-              style={{
-                display: 'inline-block',
-                width: 12,
-                height: 12,
-                background: '#dcfce7',
-                border: '1px solid #86efac',
-              }}
-            />
-            <span>green — jobs under 60-day warranty</span>
-          </span>
-        </div>
-      )}
-
       <div className="filters">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All statuses</option>
@@ -437,12 +397,6 @@ const AllJobsPage = () => {
               {t.name}
             </option>
           ))}
-        </select>
-
-        <select value={filterPaid} onChange={(e) => setFilterPaid(e.target.value)}>
-          <option value="all">All payments</option>
-          <option value="paid">Paid</option>
-          <option value="unpaid">Unpaid</option>
         </select>
 
         <select value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
@@ -569,13 +523,16 @@ const AllJobsPage = () => {
               <tbody>
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
+
+                  // В этом файле "Completed" уже отфильтрован — но оставим на всякий случай.
+                  if (isDone(job.status)) return null;
+
                   const rowClass = job.archived_at
                     ? ''
                     : persistedInWarranty(job, origJobs, new Date())
                     ? 'warranty'
-                    : isDone(job.status) && isUnpaidNow(job)
-                    ? 'unpaid'
                     : '';
+
                   const scfError = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
 
@@ -681,9 +638,7 @@ const AllJobsPage = () => {
                         <select
                           className={laborError ? 'error' : ''}
                           value={job.labor_payment_method || ''}
-                          onChange={(e) =>
-                            handleChange(job.id, 'labor_payment_method', e.target.value || null)
-                          }
+                          onChange={(e) => handleChange(job.id, 'labor_payment_method', e.target.value || null)}
                           onClick={(e) => e.stopPropagation()}
                         >
                           <option value="">—</option>
@@ -724,6 +679,7 @@ const AllJobsPage = () => {
                           💾
                         </button>
                       </td>
+
                       <td className="center">
                         <button
                           title="Edit"
@@ -735,6 +691,7 @@ const AllJobsPage = () => {
                           ✏️
                         </button>
                       </td>
+
                       <td className="center">
                         <button
                           title="Invoice"
@@ -811,10 +768,6 @@ function isFullyPaidNow(j) {
   return scfOK && laborOK;
 }
 
-function isUnpaidNow(j) {
-  return !isFullyPaidNow(j);
-}
-
 function needsScfPayment(j) {
   return Number(j.scf || 0) > 0 && !methodChosen(j.scf_payment_method);
 }
@@ -850,7 +803,7 @@ function persistedInWarranty(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
 
-  // 👇 Новое условие: если работа сейчас считается НЕ оплаченной — не в гарантии
+  // неоплаченные не в гарантии
   if (!isFullyPaidNow(j)) return false;
 
   return (
@@ -865,7 +818,7 @@ function persistedInArchiveByWarranty(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
 
-  // 👇 То же правило: неоплаченные не попадают в архив по гарантии
+  // неоплаченные не попадают в архив по гарантии
   if (!isFullyPaidNow(j)) return false;
 
   return (
