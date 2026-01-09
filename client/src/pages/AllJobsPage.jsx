@@ -68,7 +68,7 @@ const AllJobsPage = () => {
     setLoading(false);
   };
 
-  // теперь через useCallback, чтобы eslint не ругался
+  // чтобы eslint не ругался
   const getClient = useCallback((id) => clients.find((c) => c.id === id), [clients]);
 
   const handleChange = (id, field, value) => {
@@ -128,7 +128,7 @@ const AllJobsPage = () => {
     setShowInvoiceList(false);
   };
 
-  /* ====== Maps: invoice by job_id и по номеру ====== */
+  /* ====== Maps: invoice by job_id ====== */
   const invByJob = useMemo(() => {
     const m = new Map();
     for (const inv of invoices || []) {
@@ -179,25 +179,28 @@ const AllJobsPage = () => {
 
   /* ====== Filter / group ====== */
   const filteredJobs = useMemo(() => {
-    const now = new Date(); // внутри useMemo
+    const now = new Date();
 
     return (jobs || [])
-      // ✅ НЕ показываем Completed на этой странице
+      // ✅ НЕ показываем Completed на этой странице (Completed будет на странице Должники/и др)
       .filter((j) => !isDone(j.status))
       .filter((j) => {
         const o = origById(j.id, origJobs) || j;
         const recall = isRecall(o.status);
 
         if (viewMode === 'warranty') {
-          return !recall && !j.archived_at && persistedInWarranty(j, origJobs, now);
+          // 🔧 ВАЖНО: warranty/архив считаем по “сохранённой оплате”, а не по текущему редактированию
+          return !recall && !j.archived_at && persistedInWarrantyBySavedState(j, origJobs, now);
         }
         if (viewMode === 'archive') {
-          return j.archived_at || (!recall && persistedInArchiveByWarranty(j, origJobs, now));
+          // в архиве показываем то что реально archived_at или истекло после гарантии (только оплаченные)
+          return j.archived_at || (!recall && persistedInArchiveByWarrantyBySavedState(j, origJobs, now));
         }
         // active
         return (
           (recall ||
-            !(persistedInWarranty(j, origJobs, now) || persistedInArchiveByWarranty(j, origJobs, now))) &&
+            !(persistedInWarrantyBySavedState(j, origJobs, now) ||
+              persistedInArchiveByWarrantyBySavedState(j, origJobs, now))) &&
           !j.archived_at
         );
       })
@@ -253,7 +256,7 @@ const AllJobsPage = () => {
     sortAsc,
     viewMode,
     invByJob,
-    getClient, // стабильный через useCallback
+    getClient,
   ]);
 
   // Быстрые совпадения для выпадающего окна
@@ -405,14 +408,12 @@ const AllJobsPage = () => {
           <option value="archive">Archive</option>
         </select>
 
-        {/* Общий поиск */}
         <input
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Company, name, phone or address"
         />
 
-        {/* Поиск по инвойсу/джобу */}
         <div className="inv-search-wrap" ref={invoiceBoxRef}>
           <input
             value={invoiceQuery}
@@ -465,9 +466,7 @@ const AllJobsPage = () => {
 
         <button onClick={resetFilters}>🔄 Reset</button>
         <button onClick={handleExport}>📤 Export to Excel</button>
-        <button onClick={() => setSortAsc(!sortAsc)}>
-          Sort by Job # {sortAsc ? '↑' : '↓'}
-        </button>
+        <button onClick={() => setSortAsc(!sortAsc)}>Sort by Job # {sortAsc ? '↑' : '↓'}</button>
       </div>
 
       {loading && <p>Loading...</p>}
@@ -524,12 +523,12 @@ const AllJobsPage = () => {
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
 
-                  // В этом файле "Completed" уже отфильтрован — но оставим на всякий случай.
+                  // на всякий случай
                   if (isDone(job.status)) return null;
 
                   const rowClass = job.archived_at
                     ? ''
-                    : persistedInWarranty(job, origJobs, new Date())
+                    : persistedInWarrantyBySavedState(job, origJobs, new Date())
                     ? 'warranty'
                     : '';
 
@@ -799,34 +798,29 @@ function warrantyEnd(j, origJobs) {
   return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 дней
 }
 
-function persistedInWarranty(j, origJobs, now) {
+/**
+ * 🔧 Исправление:
+ * Warranty/Archive считаем ТОЛЬКО по сохранённому состоянию (origJobs),
+ * а не по текущему редактированию строки в UI.
+ */
+function persistedInWarrantyBySavedState(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
 
-  // неоплаченные не в гарантии
-  if (!isFullyPaidNow(j)) return false;
+  // неоплаченные НЕ в гарантии (по сохранённому состоянию)
+  if (!persistedFullyPaid(j, origJobs)) return false;
 
-  return (
-    isDone(o.status) &&
-    persistedFullyPaid(j, origJobs) &&
-    warrantyStart(j, origJobs) &&
-    now <= warrantyEnd(j, origJobs)
-  );
+  return isDone(o.status) && warrantyStart(j, origJobs) && now <= warrantyEnd(j, origJobs);
 }
 
-function persistedInArchiveByWarranty(j, origJobs, now) {
+function persistedInArchiveByWarrantyBySavedState(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
 
-  // неоплаченные не попадают в архив по гарантии
-  if (!isFullyPaidNow(j)) return false;
+  // неоплаченные НЕ попадают в архив по гарантии (по сохранённому состоянию)
+  if (!persistedFullyPaid(j, origJobs)) return false;
 
-  return (
-    isDone(o.status) &&
-    persistedFullyPaid(j, origJobs) &&
-    warrantyStart(j, origJobs) &&
-    now > warrantyEnd(j, origJobs)
-  );
+  return isDone(o.status) && warrantyStart(j, origJobs) && now > warrantyEnd(j, origJobs);
 }
 
 function formatAddress(c) {
