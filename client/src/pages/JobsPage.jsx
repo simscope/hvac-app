@@ -136,7 +136,7 @@ export default function JobsPage() {
       if (an != null && bn == null) return -1;
       if (an == null && bn == null) return 0;
 
-      return an - bn; // asc
+      return bn - an; // asc
     });
   }, [visibleJobs]);
 
@@ -491,3 +491,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
