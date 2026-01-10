@@ -13,7 +13,7 @@ const STATUS_VALUES = [
   'Waiting for parts',
   'To finish',
   'Completed',
-  ];
+];
 
 /* ===== Для сортировки — заданный порядок ===== */
 const ALL_STATUS_ORDER = [...STATUS_VALUES];
@@ -46,18 +46,20 @@ export default function JobsPage() {
 
   // === состояние модалки "чёрный список"
   const [blOpen, setBlOpen] = useState(false);
-  const [blClient, setBlClient] = useState(null);     // полная строка клиента
+  const [blClient, setBlClient] = useState(null); // полная строка клиента
   const [blText, setBlText] = useState('');
   const [blSaving, setBlSaving] = useState(false);
 
   const navigate = useNavigate();
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => {
+    fetchAll();
+  }, []);
 
   async function fetchAll() {
-    const jobsReq    = supabase.from('jobs').select('*');
+    const jobsReq = supabase.from('jobs').select('*');
     const clientsReq = supabase.from('clients').select('*'); // берём blacklist тоже
-    const techsReq   = supabase
+    const techsReq = supabase
       .from('technicians')
       .select('id,name,role,is_active')
       .in('role', ['technician', 'tech'])
@@ -79,7 +81,9 @@ export default function JobsPage() {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
     const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(
+      d.getMinutes()
+    )}`;
   };
 
   const jobsView = useMemo(() => {
@@ -125,11 +129,13 @@ export default function JobsPage() {
     try {
       const payload = {
         technician_id: job.technician_id ? job.technician_id : null,
-        status: job.status ? toDbStatus(job.status) : (job.status_canon ?? null),
+        status: job.status ? toDbStatus(job.status) : job.status_canon ?? null,
         scf:
           job.scf === '' || job.scf == null
             ? null
-            : Number.isNaN(Number(job.scf)) ? null : Number(job.scf),
+            : Number.isNaN(Number(job.scf))
+              ? null
+              : Number(job.scf),
         issue: job.issue || null,
       };
       const { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
@@ -168,6 +174,7 @@ export default function JobsPage() {
         .update({ blacklist: value === '' ? null : value })
         .eq('id', blClient.id);
       if (error) throw error;
+
       setBlOpen(false);
       setBlClient(null);
       setBlText('');
@@ -191,10 +198,30 @@ export default function JobsPage() {
         .row-click { cursor:pointer; }
         .row-click:hover { background:#f9fafb; }
         .jobs-table input, .jobs-table select { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
-        .icon-btn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border:1px solid #e5e7eb; border-radius:6px; background:#fff; cursor:pointer; }
+
+        /* ACTIONS: ровно + красиво */
+        .th-actions { text-align:center; }
+        .td-actions { padding:6px 6px; }
+        .actions-wrap { display:flex; align-items:center; justify-content:center; gap:8px; }
+
+        .icon-btn {
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          width:30px;
+          height:30px;
+          border:1px solid #e5e7eb;
+          border-radius:8px;
+          background:#fff;
+          cursor:pointer;
+          line-height:1;
+          user-select:none;
+        }
         .icon-btn:hover { background:#f3f4f6; }
+        .icon-btn:disabled { opacity:.55; cursor:not-allowed; }
         .icon-red { color:#b91c1c; border-color:#fecaca; }
         .tag-bl { display:inline-block; margin-left:6px; font-size:11px; color:#b91c1c; font-weight:700; }
+
         /* Modal */
         .modal-back { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; z-index:50; }
         .modal-card { width:520px; max-width:calc(100% - 24px); background:#fff; border-radius:12px; border:1px solid #e5e7eb; box-shadow:0 10px 30px rgba(0,0,0,.15); }
@@ -204,6 +231,7 @@ export default function JobsPage() {
         .btn { padding:8px 12px; border-radius:8px; border:1px solid #e5e7eb; background:#f8fafc; cursor:pointer; }
         .btn-primary { background:#2563eb; color:#fff; border-color:#2563eb; }
         .btn-danger { background:#fee2e2; color:#b91c1c; border-color:#fecaca; }
+
         @media (max-width: 1024px) { .col-system, .col-date { display:none; } }
       `}</style>
 
@@ -220,7 +248,7 @@ export default function JobsPage() {
             <col style={{ width: 170 }} />
             <col style={{ width: 160 }} className="col-date" />
             <col style={{ width: 180 }} />
-            <col style={{ width: 180 }} />
+            <col style={{ width: 120 }} />
           </colgroup>
 
           <thead>
@@ -233,7 +261,7 @@ export default function JobsPage() {
               <th>Technician</th>
               <th className="col-date">Created</th>
               <th>Status</th>
-              <th>Actions</th>
+              <th className="th-actions">Actions</th>
             </tr>
           </thead>
 
@@ -246,20 +274,20 @@ export default function JobsPage() {
                 tabIndex={0}
                 onClick={(e) => {
                   const tag = e.target.tagName;
-                  if (!['BUTTON','A','INPUT','SELECT','TEXTAREA'].includes(tag)) openJob(job.id);
+                  if (!['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) openJob(job.id);
                 }}
                 onKeyDown={(e) => {
-                  if (!['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) {
-                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openJob(job.id); }
+                  if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openJob(job.id);
+                    }
                   }
                 }}
                 title="Open job"
               >
                 <td>
-                  <div
-                    className="cell-wrap num-link"
-                    onClick={(e) => { e.stopPropagation(); openJob(job.id); }}
-                  >
+                  <div className="cell-wrap num-link" onClick={(e) => { e.stopPropagation(); openJob(job.id); }}>
                     {job.job_number || job.id}
                   </div>
                 </td>
@@ -288,7 +316,9 @@ export default function JobsPage() {
                   </div>
                 </td>
 
-                <td className="col-system"><div className="cell-wrap">{job.system_type || '—'}</div></td>
+                <td className="col-system">
+                  <div className="cell-wrap">{job.system_type || '—'}</div>
+                </td>
 
                 <td onClick={(e) => e.stopPropagation()}>
                   <input
@@ -314,11 +344,17 @@ export default function JobsPage() {
                     onChange={(e) => handleChange(job.id, 'technician_id', e.target.value || null)}
                   >
                     <option value="">—</option>
-                    {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    {technicians.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
                   </select>
                 </td>
 
-                <td className="col-date"><div className="cell-wrap">{job.created_at_fmt}</div></td>
+                <td className="col-date">
+                  <div className="cell-wrap">{job.created_at_fmt}</div>
+                </td>
 
                 <td onClick={(e) => e.stopPropagation()}>
                   <select
@@ -326,47 +362,37 @@ export default function JobsPage() {
                     onChange={(e) => {
                       const canon = toDbStatus(e.target.value);
                       setJobs((prev) =>
-                        prev.map((j) =>
-                          j.id === job.id ? { ...j, status: canon, status_canon: canon } : j
-                        )
+                        prev.map((j) => (j.id === job.id ? { ...j, status: canon, status_canon: canon } : j))
                       );
                     }}
                   >
                     <option value="">—</option>
                     {STATUS_VALUES.map((value) => (
-                      <option key={value} value={value}>{value}</option>
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
                     ))}
                   </select>
                 </td>
 
-                {/* ACTIONS: Save / Edit / Blacklist */}
-                <td onClick={(e) => e.stopPropagation()}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                {/* ACTIONS: Save + Blacklist (убрали Edit) */}
+                <td className="td-actions" onClick={(e) => e.stopPropagation()}>
+                  <div className="actions-wrap">
                     <button
                       title="Save"
                       className="icon-btn"
                       onClick={() => handleSave(job)}
                       disabled={savingId === job.id}
+                      aria-label="Save"
                     >
                       {savingId === job.id ? '…' : '💾'}
                     </button>
 
                     <button
-                      title="Edit"
-                      className="icon-btn"
-                      onClick={() => openJob(job.id)}
-                    >
-                      ✏️
-                    </button>
-
-                    <button
-                      title={
-                        job.client_blacklist
-                          ? `Blacklist: ${job.client_blacklist}`
-                          : 'Add to blacklist'
-                      }
+                      title={job.client_blacklist ? `Blacklist: ${job.client_blacklist}` : 'Add to blacklist'}
                       className={`icon-btn ${job.client_blacklist ? 'icon-red' : ''}`}
                       onClick={() => openBlacklistEditor(job)}
+                      aria-label="Blacklist"
                     >
                       🚫
                     </button>
@@ -376,7 +402,11 @@ export default function JobsPage() {
             ))}
 
             {sortedJobs.length === 0 && (
-              <tr><td colSpan={9} style={{ padding: 10 }}>No jobs in selected statuses</td></tr>
+              <tr>
+                <td colSpan={9} style={{ padding: 10 }}>
+                  No jobs in selected statuses
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
@@ -420,7 +450,9 @@ export default function JobsPage() {
               </button>
               <button
                 className="btn btn-danger"
-                onClick={() => { setBlText(''); }}
+                onClick={() => {
+                  setBlText('');
+                }}
                 disabled={blSaving}
                 title="Очистить blacklist"
               >
@@ -436,4 +468,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
