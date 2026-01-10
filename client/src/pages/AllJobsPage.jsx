@@ -187,7 +187,6 @@ const AllJobsPage = () => {
 
         // ===== warranty =====
         if (viewMode === 'warranty') {
-          // только Completed + Paid + within 60 days, и не archived
           return (
             !recall &&
             !j.archived_at &&
@@ -200,10 +199,7 @@ const AllJobsPage = () => {
 
         // ===== archive =====
         if (viewMode === 'archive') {
-          // показываем всё что явно archived_at
           if (j.archived_at) return true;
-
-          // либо Completed + Paid + warranty expired
           return (
             !recall &&
             isDone(o.status) &&
@@ -214,7 +210,6 @@ const AllJobsPage = () => {
         }
 
         // ===== active =====
-        // active = НЕ completed, НЕ archived, и НЕ “warranty/expired-warranty” (по сохранённым данным)
         if (j.archived_at) return false;
         if (isDone(o.status)) return false;
 
@@ -232,7 +227,6 @@ const AllJobsPage = () => {
           warrantyStart(j, origJobs) &&
           now > warrantyEnd(j, origJobs);
 
-        // recall остаётся в active
         return recall || !(inWarranty || inArchiveByWarranty);
       })
       .filter((j) =>
@@ -357,6 +351,19 @@ const AllJobsPage = () => {
     }
   };
 
+  const Legend = () => (
+    <div className="legend">
+      <span className="legend-item st-recall">ReCall</span>
+      <span className="legend-item st-diagnosis">Diagnosis</span>
+      <span className="legend-item st-in-progress">In progress</span>
+      <span className="legend-item st-parts-ordered">Parts ordered</span>
+      <span className="legend-item st-waiting">Waiting for parts</span>
+      <span className="legend-item st-to-finish">To finish</span>
+      <span className="legend-item st-completed">Completed</span>
+      <span className="legend-item st-warranty">Warranty</span>
+    </div>
+  );
+
   return (
     <div className="p-4">
       <style>{`
@@ -367,7 +374,6 @@ const AllJobsPage = () => {
         .jobs-table input, .jobs-table select, .jobs-table textarea { width:100%; height:28px; font-size:14px; padding:2px 6px; box-sizing:border-box; }
         .jobs-table .num-link { color:#2563eb; text-decoration:underline; cursor:pointer; }
         .jobs-table .center { text-align:center; }
-        .jobs-table tr.warranty { background:#dcfce7; }
         .jobs-table select.error { border:1px solid #ef4444; background:#fee2e2; }
 
         .filters { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; align-items:center; }
@@ -393,21 +399,39 @@ const AllJobsPage = () => {
         .btn-link { background:#2563eb; color:#fff; border:none; border-radius:6px; height:28px; padding:0 10px; cursor:pointer; }
         .btn-link.secondary { background:#0ea5e9; }
 
-        /* ===== Client colored pill by status ===== */
-        .client-pill {
-          display: inline-flex;
-          flex-direction: column;
-          gap: 2px;
-          max-width: 100%;
-          padding: 6px 10px;
+        /* ===== Legend ===== */
+        .legend {
+          display:flex;
+          flex-wrap:wrap;
+          gap:8px;
+          align-items:center;
+          margin: 6px 0 10px 0;
+        }
+        .legend-item{
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          padding: 4px 10px;
           border-radius: 999px;
           border: 1px solid transparent;
-          line-height: 1.15;
+          font-size: 12px;
+          font-weight: 600;
+          user-select:none;
         }
-        .client-pill .company { font-weight: 700; }
-        .client-pill .person  { font-size: 12px; opacity: 0.9; }
 
-        /* status colors (как на чипах) */
+        /* ===== Row colors by status ===== */
+        .jobs-table tr.st-recall td        { background:#fee2e2; }
+        .jobs-table tr.st-diagnosis td     { background:#fef9c3; }
+        .jobs-table tr.st-in-progress td   { background:#dbeafe; }
+        .jobs-table tr.st-parts-ordered td { background:#ede9fe; }
+        .jobs-table tr.st-waiting td       { background:#f3e8ff; }
+        .jobs-table tr.st-to-finish td     { background:#ffedd5; }
+        .jobs-table tr.st-completed td     { background:#dcfce7; }
+
+        /* warranty should win */
+        .jobs-table tr.warranty td { background:#dcfce7 !important; }
+
+        /* pill styles for legend */
         .st-recall        { background:#fee2e2; border-color:#fecaca; color:#991b1b; }
         .st-diagnosis     { background:#fef9c3; border-color:#fde68a; color:#854d0e; }
         .st-in-progress   { background:#dbeafe; border-color:#bfdbfe; color:#1e40af; }
@@ -415,7 +439,7 @@ const AllJobsPage = () => {
         .st-waiting       { background:#f3e8ff; border-color:#e9d5ff; color:#6b21a8; }
         .st-to-finish     { background:#ffedd5; border-color:#fed7aa; color:#9a3412; }
         .st-completed     { background:#dcfce7; border-color:#bbf7d0; color:#166534; }
-        .st-default       { background:#f3f4f6; border-color:#e5e7eb; color:#111827; }
+        .st-warranty      { background:#dcfce7; border-color:#bbf7d0; color:#166534; }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
@@ -516,6 +540,9 @@ const AllJobsPage = () => {
               : `👨‍🔧 ${technicians.find((t) => String(t.id) === String(techId))?.name || '—'}`}
           </h2>
 
+          {/* ===== Legend above each table ===== */}
+          <Legend />
+
           <div className="overflow-x-auto">
             <table className="jobs-table">
               <colgroup>
@@ -554,12 +581,10 @@ const AllJobsPage = () => {
                 {groupJobs.map((job) => {
                   const client = getClient(job.client_id);
 
-                  const rowClass =
-                    viewMode === 'warranty'
-                      ? 'warranty'
-                      : persistedInWarrantyBySavedState(job, origJobs, new Date())
-                      ? 'warranty'
-                      : '';
+                  const warrantyRow =
+                    viewMode === 'warranty' || persistedInWarrantyBySavedState(job, origJobs, new Date());
+
+                  const rowClass = warrantyRow ? 'warranty' : statusClassFor(job.status);
 
                   const scfError = needsScfPayment(job);
                   const laborError = needsLaborPayment(job);
@@ -599,19 +624,18 @@ const AllJobsPage = () => {
                         </div>
                       </td>
 
-                      {/* ===== Client cell: colored by status ===== */}
                       <td>
                         <div className="cell-wrap">
-                          <div className={`client-pill ${statusClassFor(job.status)}`}>
-                            {client?.company ? (
-                              <>
-                                <div className="company">{client.company}</div>
-                                <div className="person">{client.full_name || client.name || '—'}</div>
-                              </>
-                            ) : (
-                              <div className="company">{client?.full_name || client?.name || '—'}</div>
-                            )}
-                          </div>
+                          {client?.company ? (
+                            <>
+                              <div style={{ fontWeight: 600 }}>{client.company}</div>
+                              <div style={{ color: '#6b7280', fontSize: 12 }}>
+                                {client.full_name || client.name || '—'}
+                              </div>
+                            </>
+                          ) : (
+                            <div>{client?.full_name || client?.name || '—'}</div>
+                          )}
                         </div>
                       </td>
 
@@ -752,7 +776,6 @@ function canonStatus(val) {
 
 function statusClassFor(status) {
   const c = canonStatus(status);
-
   if (c === 'recall') return 'st-recall';
   if (c === 'diagnosis') return 'st-diagnosis';
   if (c === 'in progress') return 'st-in-progress';
@@ -760,8 +783,7 @@ function statusClassFor(status) {
   if (c === 'waiting for parts') return 'st-waiting';
   if (c === 'to finish') return 'st-to-finish';
   if (c === 'completed') return 'st-completed';
-
-  return 'st-default';
+  return '';
 }
 
 function isDone(status) {
@@ -808,7 +830,6 @@ function warrantyEnd(j, origJobs) {
   return s ? new Date(s.getTime() + 60 * 24 * 60 * 60 * 1000) : null; // +60 дней
 }
 
-// просто для подсветки (если где-то пригодится)
 function persistedInWarrantyBySavedState(j, origJobs, now) {
   const o = origById(j.id, origJobs) || j;
   if (isRecall(o.status)) return false;
