@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
+import { supabase } from '../supabaseClient';
 
 const norm = (r) => {
   if (!r) return null;
@@ -10,9 +10,8 @@ const norm = (r) => {
   return x === 'technician' ? 'tech' : x;
 };
 
-// 🔧 имя edge-функции для списка писем Gmail
-// Если в Supabase функция называется не `mail-gmail-list` — поменяй тут.
-const GMAIL_FN = 'mail-gmail-list';
+// ✅ В Supabase у тебя функция называется gmail_list (а не mail-gmail-list)
+const GMAIL_FN = 'gmail_list';
 
 // Встроенные SVG-иконки
 const Icon = {
@@ -32,7 +31,7 @@ const Icon = {
       />
     </svg>
   ),
-   Debtors: (p) => (
+  Debtors: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path
         fill="currentColor"
@@ -56,7 +55,6 @@ const Icon = {
       />
     </svg>
   ),
-  // Иконка библиотеки (как у тебя была)
   Library: (p) => (
     <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
       <path
@@ -123,26 +121,11 @@ const Icon = {
   ),
 };
 
-// 🔐 Edge-функции с auth-токеном пользователя (как в EmailTab)
-const callEdgeAuth = async (fn, payload) => {
-  const { data } = await supabase.auth.getSession();
-  const access = data?.session?.access_token || SUPABASE_ANON_KEY;
-
-  const res = await fetch(`${FUNCTIONS_URL}/${fn}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${access}`,
-    },
-    body: JSON.stringify(payload || {}),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Edge ${fn} failed: ${res.status} ${text}`);
-  }
-  return res.json();
+// ✅ Безопасный вызов Edge Function (через supabase SDK) — не ломает UI
+const invokeEdge = async (fn, body) => {
+  const { data, error } = await supabase.functions.invoke(fn, { body: body || {} });
+  if (error) throw error;
+  return data;
 };
 
 export default function TopNav() {
@@ -159,12 +142,13 @@ export default function TopNav() {
     }
   });
 
-  // 🔔 Gmail непрочитанные
+  // 🔔 Gmail непрочитанные (badge)
   const [gmailUnread, setGmailUnread] = useState(0);
 
   const channelRef = useRef(null);
   const debounceRef = useRef(null);
   const pollRef = useRef(null);
+  const gmailPollRef = useRef(null);
 
   const debounced = (fn, ms = 250) => {
     clearTimeout(debounceRef.current);
@@ -176,16 +160,18 @@ export default function TopNav() {
       setChatUnreadTotal(0);
       return;
     }
-    const { data, error } = await supabase.rpc('get_unread_by_chat');
-    if (error) return;
-    const sum = (data || []).reduce(
-      (s, r) => s + (Number(r.unread) || 0),
-      0
-    );
-    setChatUnreadTotal(sum);
     try {
-      localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum));
-    } catch {}
+      const { data, error } = await supabase.rpc('get_unread_by_chat');
+      if (error) return;
+      const sum = (data || []).reduce((s, r) => s + (Number(r.unread) || 0), 0);
+      setChatUnreadTotal(sum);
+      try {
+        localStorage.setItem('CHAT_UNREAD_TOTAL', String(sum));
+      } catch {}
+    } catch (e) {
+      // никогда не ломаем UI
+      console.error('get_unread_by_chat failed', e);
+    }
   };
 
   // Локальные события для чата
@@ -195,8 +181,7 @@ export default function TopNav() {
       if (typeof n === 'number') setChatUnreadTotal(n);
     };
     window.addEventListener('chat-unread-changed', onLocalChanged);
-    return () =>
-      window.removeEventListener('chat-unread-changed', onLocalChanged);
+    return () => window.removeEventListener('chat-unread-changed', onLocalChanged);
   }, []);
 
   // Подписка на Supabase для чата
@@ -231,6 +216,7 @@ export default function TopNav() {
         () => debounced(refreshUnreadFromServer)
       )
       .subscribe();
+
     channelRef.current = ch;
 
     const onFocus = () => debounced(refreshUnreadFromServer, 50);
@@ -256,8 +242,10 @@ export default function TopNav() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid]);
 
-  // 🔔 Gmail unread через edge-функцию GMAIL_FN
+  // ✅ Gmail unread: безопасно, не ломает приложение + правильное имя функции
   useEffect(() => {
+    clearInterval(gmailPollRef.current);
+
     if (!user) {
       setGmailUnread(0);
       return;
@@ -267,33 +255,29 @@ export default function TopNav() {
 
     const loadUnread = async () => {
       try {
-        const json = await callEdgeAuth(GMAIL_FN, {
+        const json = await invokeEdge(GMAIL_FN, {
           folder: 'inbox',
-          q: 'is:unread', // твоя функция ждёт поле q
+          q: 'is:unread',
           maxResults: 50,
         });
 
-        // Твой edge возвращает: { ok, emails, nextPageToken }
-        const count =
-          json && json.ok && Array.isArray(json.emails)
-            ? json.emails.length
-            : 0;
+        // edge returns { ok, emails, nextPageToken }
+        const count = json && json.ok && Array.isArray(json.emails) ? json.emails.length : 0;
 
-        if (!cancelled) {
-          setGmailUnread(count);
-        }
+        if (!cancelled) setGmailUnread(count);
       } catch (e) {
-        console.error('Failed to load Gmail unread count', e);
+        // ❗ никогда не ломаем навигацию
+        console.error('gmail_list unread failed', e);
         if (!cancelled) setGmailUnread(0);
       }
     };
 
     loadUnread();
-    const timer = setInterval(loadUnread, 60000);
+    gmailPollRef.current = setInterval(loadUnread, 60000);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      clearInterval(gmailPollRef.current);
     };
   }, [user]);
 
@@ -313,9 +297,7 @@ export default function TopNav() {
 
   // Порядок ссылок в топ-меню
   const links = useMemo(() => {
-    const arr = [
-      { to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true },
-    ];
+    const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true }];
 
     if (r === 'admin' || r === 'manager') {
       arr.push(
@@ -339,27 +321,17 @@ export default function TopNav() {
     }
 
     if (r === 'admin' || r === 'manager') {
-      arr.push({
-        to: '/tech-library',
-        label: 'Тех. база',
-        icon: <Icon.Library />,
-      });
+      arr.push({ to: '/tech-library', label: 'Тех. база', icon: <Icon.Library /> });
     }
 
     return arr;
   }, [r]);
 
   const initials = useMemo(() => {
-    const name =
-      (user?.user_metadata?.full_name ||
-        user?.user_metadata?.name ||
-        user?.email ||
-        '').trim();
+    const name = (user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || '').trim();
     if (!name) return 'U';
     const parts = name.split(/\s+/);
-    return (
-      (parts[0]?.[0] || '') + (parts[1]?.[0] || '')
-    ).toUpperCase();
+    return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase();
   }, [user]);
 
   if (!user) return null;
@@ -385,18 +357,10 @@ export default function TopNav() {
               key={l.to}
               to={l.to}
               end={l.end}
-              className={({ isActive }) =>
-                'tn__link' + (isActive ? ' is-active' : '')
-              }
+              className={({ isActive }) => 'tn__link' + (isActive ? ' is-active' : '')}
               aria-label={`${l.label}${
-                l.to === '/chat' && chatUnreadTotal
-                  ? `, ${chatUnreadTotal} непрочитанных`
-                  : ''
-              }${
-                l.to === '/email' && gmailUnread
-                  ? `, ${gmailUnread} новых писем`
-                  : ''
-              }`}
+                l.to === '/chat' && chatUnreadTotal ? `, ${chatUnreadTotal} непрочитанных` : ''
+              }${l.to === '/email' && gmailUnread ? `, ${gmailUnread} новых писем` : ''}`}
             >
               <span className="tn__icon">{l.icon}</span>
               <span className="tn__text">{l.label}</span>
@@ -418,9 +382,7 @@ export default function TopNav() {
       </div>
 
       <div className="tn__right">
-        <span className={`tn__role tn__role--${r || 'none'}`}>
-          {r || '...'}
-        </span>
+        <span className={`tn__role tn__role--${r || 'none'}`}>{r || '...'}</span>
         <div className="tn__avatar" title={user?.email || ''}>
           {initials}
         </div>
@@ -486,9 +448,7 @@ export default function TopNav() {
           margin-left: 6px;
           box-shadow: 0 1px 2px rgba(0,0,0,.25);
         }
-        .tn__badge--email {
-          /* если захочешь другой цвет/стиль для Email — меняй тут */
-        }
+        .tn__badge--email {}
 
         .tn__right { display:flex; align-items:center; gap: 10px; }
         .tn__role {
