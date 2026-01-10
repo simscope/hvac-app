@@ -106,17 +106,6 @@ const FinancePage = () => {
   const selectStyle = { width: '100%', padding: '6px 8px' };
   const btn = { padding: '8px 12px', cursor: 'pointer', borderRadius: 6, border: 'none' };
 
-  const linkBtn = {
-    background: 'transparent',
-    border: 'none',
-    padding: 0,
-    margin: 0,
-    cursor: 'pointer',
-    textDecoration: 'underline',
-    color: '#2563eb',
-    fontWeight: 600,
-  };
-
   const periodOptions = [
     { label: 'Сегодня', value: 'day' },
     { label: 'Неделя', value: 'week' },
@@ -140,13 +129,10 @@ const FinancePage = () => {
     return tech ? tech.name : '—';
   };
 
-  /* ===== открыть карточку работы =====
-     Маршрут: /jobs/:id (открываем в новой вкладке)
-     Если у тебя другой путь — поменяешь тут в одной строке.
-  */
+  /* ===== открыть карточку работы (клик по строке) ===== */
   const openJobCard = useCallback((jobId) => {
     if (!jobId) return;
-    const url = `/jobs/${jobId}`;
+    const url = `/jobs/${jobId}`; // если у тебя другой route — поменяешь тут
     window.open(url, '_blank', 'noopener,noreferrer');
   }, []);
 
@@ -339,6 +325,7 @@ const FinancePage = () => {
         salary_paid_amount: salary,
       };
       const { error } = await supabase.from('jobs').update(patch).eq('id', job.id).select('id').single();
+
       if (error) throw error;
       await fetchJobs();
     } catch (e) {
@@ -356,6 +343,7 @@ const FinancePage = () => {
         salary_paid_amount: null,
       };
       const { error } = await supabase.from('jobs').update(patch).eq('id', job.id).select('id').single();
+
       if (error) throw error;
       await fetchJobs();
     } catch (e) {
@@ -411,13 +399,9 @@ const FinancePage = () => {
 
   const allVisibleIds = useMemo(() => new Set(filteredJobs.map((j) => j.id)), [filteredJobs]);
 
-  const allVisibleSelected = useMemo(
-    () => filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id)),
-    [filteredJobs, selected],
-  );
-
   const toggleSelectAllVisible = () => {
-    if (allVisibleSelected) {
+    const allSelected = filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id));
+    if (allSelected) {
       const next = new Set(selected);
       filteredJobs.forEach((j) => next.delete(j.id));
       setSelected(next);
@@ -443,6 +427,11 @@ const FinancePage = () => {
         return acc + salary;
       }, 0),
     [filteredJobs, selected, calcRow],
+  );
+
+  const selectedVisibleCount = useMemo(
+    () => [...selected].filter((id) => allVisibleIds.has(id)).length,
+    [selected, allVisibleIds],
   );
 
   /* ===== RENDER ===== */
@@ -495,7 +484,6 @@ const FinancePage = () => {
           </select>
         </div>
 
-        {/* Фильтр по статусу заявки */}
         <div>
           <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Статус заявки</label>
           <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} style={selectStyle}>
@@ -513,10 +501,13 @@ const FinancePage = () => {
           </select>
         </div>
 
-        {/* Фильтр: Оплата клиента */}
         <div>
           <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Оплата клиента</label>
-          <select value={filterClientPaid} onChange={(e) => setFilterClientPaid(e.target.value)} style={selectStyle}>
+          <select
+            value={filterClientPaid}
+            onChange={(e) => setFilterClientPaid(e.target.value)}
+            style={selectStyle}
+          >
             {clientPaidOptions.map((p) => (
               <option key={p.value} value={p.value}>
                 {p.label}
@@ -539,14 +530,14 @@ const FinancePage = () => {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             onClick={() => bulkPay(selected)}
-            disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
+            disabled={selectedVisibleCount === 0}
             style={{ ...btn, background: '#2563eb', color: '#fff' }}
           >
             Выплатить выбранным
           </button>
           <button
             onClick={() => bulkUnpay(selected)}
-            disabled={[...selected].filter((id) => allVisibleIds.has(id)).length === 0}
+            disabled={selectedVisibleCount === 0}
             style={{ ...btn, background: '#f59e0b', color: '#111827' }}
           >
             Отменить выплату выбранным
@@ -584,6 +575,7 @@ const FinancePage = () => {
                   type="checkbox"
                   checked={filteredJobs.length > 0 && filteredJobs.every((j) => selected.has(j.id))}
                   onChange={toggleSelectAllVisible}
+                  onClick={(e) => e.stopPropagation()}
                 />
               </th>
               <th style={thStyle(COL.JOB)}>Job #</th>
@@ -609,23 +601,25 @@ const FinancePage = () => {
               const paid = !!j.salary_paid;
 
               return (
-                <tr key={j.id} style={{ background: paid ? '#ecfdf5' : 'transparent' }}>
-                  <td style={{ ...tdStyle(COL.SEL, 'center') }}>
-                    <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleRow(j.id)} />
+                <tr
+                  key={j.id}
+                  onClick={() => openJobCard(j.id)}
+                  title="Открыть карточку работы"
+                  style={{
+                    background: paid ? '#ecfdf5' : 'transparent',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <td style={{ ...tdStyle(COL.SEL, 'center') }} onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(j.id)}
+                      onChange={() => toggleRow(j.id)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
                   </td>
 
-                  {/* Job # — кликабельно */}
-                  <td style={tdStyle(COL.JOB)}>
-                    <button
-                      type="button"
-                      style={linkBtn}
-                      onClick={() => openJobCard(j.id)}
-                      title="Открыть карточку работы"
-                    >
-                      {j.job_number || j.id}
-                    </button>
-                  </td>
-
+                  <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
                   <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
                   <td style={tdStyle(COL.STATUS)}>{showStatus(j)}</td>
 
@@ -660,36 +654,24 @@ const FinancePage = () => {
                     )}
                   </td>
 
-                  <td style={{ ...tdStyle(COL.ACTION, 'center') }}>
-                    <div style={{ display: 'grid', gap: 6, justifyItems: 'center' }}>
-                      {/* Кнопка открытия карточки */}
+                  <td style={{ ...tdStyle(COL.ACTION, 'center') }} onClick={(e) => e.stopPropagation()}>
+                    {!paid ? (
                       <button
-                        type="button"
-                        onClick={() => openJobCard(j.id)}
-                        style={{ ...btn, background: '#111827', color: '#fff' }}
-                        title="Открыть карточку работы"
+                        onClick={() => markPaid(j)}
+                        style={{ ...btn, background: '#2563eb', color: '#fff' }}
+                        title="Пометить как выплаченное с фиксацией суммы"
                       >
-                        Карточка
+                        Выплатил зарплату
                       </button>
-
-                      {!paid ? (
-                        <button
-                          onClick={() => markPaid(j)}
-                          style={{ ...btn, background: '#2563eb', color: '#fff' }}
-                          title="Пометить как выплаченное с фиксацией суммы"
-                        >
-                          Выплатил зарплату
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => unmarkPaid(j)}
-                          style={{ ...btn, background: '#f59e0b', color: '#111827' }}
-                          title="Отменить пометку выплаты"
-                        >
-                          Отменить выплату
-                        </button>
-                      )}
-                    </div>
+                    ) : (
+                      <button
+                        onClick={() => unmarkPaid(j)}
+                        style={{ ...btn, background: '#f59e0b', color: '#111827' }}
+                        title="Отменить пометку выплаты"
+                      >
+                        Отменить выплату
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
