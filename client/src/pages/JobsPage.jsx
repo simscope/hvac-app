@@ -112,18 +112,30 @@ export default function JobsPage() {
   // Сортировка: по порядку статусов, затем по дате
   const orderMap = useMemo(() => new Map(ALL_STATUS_ORDER.map((s, i) => [s, i])), []);
   const sortedJobs = useMemo(() => {
+    const toNum = (v) => {
+      if (v === '' || v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
     return [...visibleJobs].sort((a, b) => {
+      // 1) SCF asc (пустые внизу)
+      const ascf = toNum(a.scf);
+      const bscf = toNum(b.scf);
+
+      if (ascf == null && bscf != null) return 1;
+      if (ascf != null && bscf == null) return -1;
+      if (ascf != null && bscf != null && ascf !== bscf) return ascf - bscf;
+
+      // 2) статус по заданному порядку
       const ar = orderMap.get(a.status_canon) ?? 999;
       const br = orderMap.get(b.status_canon) ?? 999;
       if (ar !== br) return ar - br;
+
+      // 3) дата (новые выше)
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     });
   }, [visibleJobs, orderMap]);
-
-  function handleChange(id, field, value) {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
-  }
-
   async function handleSave(job) {
     setSavingId(job.id);
     try {
@@ -468,3 +480,4 @@ export default function JobsPage() {
     </div>
   );
 }
+
