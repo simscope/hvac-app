@@ -392,6 +392,30 @@ const AllJobsPage = () => {
         .inv-actions { display:flex; gap:6px; }
         .btn-link { background:#2563eb; color:#fff; border:none; border-radius:6px; height:28px; padding:0 10px; cursor:pointer; }
         .btn-link.secondary { background:#0ea5e9; }
+
+        /* ===== Client colored pill by status ===== */
+        .client-pill {
+          display: inline-flex;
+          flex-direction: column;
+          gap: 2px;
+          max-width: 100%;
+          padding: 6px 10px;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          line-height: 1.15;
+        }
+        .client-pill .company { font-weight: 700; }
+        .client-pill .person  { font-size: 12px; opacity: 0.9; }
+
+        /* status colors (как на чипах) */
+        .st-recall        { background:#fee2e2; border-color:#fecaca; color:#991b1b; }
+        .st-diagnosis     { background:#fef9c3; border-color:#fde68a; color:#854d0e; }
+        .st-in-progress   { background:#dbeafe; border-color:#bfdbfe; color:#1e40af; }
+        .st-parts-ordered { background:#ede9fe; border-color:#ddd6fe; color:#5b21b6; }
+        .st-waiting       { background:#f3e8ff; border-color:#e9d5ff; color:#6b21a8; }
+        .st-to-finish     { background:#ffedd5; border-color:#fed7aa; color:#9a3412; }
+        .st-completed     { background:#dcfce7; border-color:#bbf7d0; color:#166534; }
+        .st-default       { background:#f3f4f6; border-color:#e5e7eb; color:#111827; }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
@@ -575,18 +599,19 @@ const AllJobsPage = () => {
                         </div>
                       </td>
 
+                      {/* ===== Client cell: colored by status ===== */}
                       <td>
                         <div className="cell-wrap">
-                          {client?.company ? (
-                            <>
-                              <div style={{ fontWeight: 600 }}>{client.company}</div>
-                              <div style={{ color: '#6b7280', fontSize: 12 }}>
-                                {client.full_name || client.name || '—'}
-                              </div>
-                            </>
-                          ) : (
-                            <div>{client?.full_name || client?.name || '—'}</div>
-                          )}
+                          <div className={`client-pill ${statusClassFor(job.status)}`}>
+                            {client?.company ? (
+                              <>
+                                <div className="company">{client.company}</div>
+                                <div className="person">{client.full_name || client.name || '—'}</div>
+                              </>
+                            ) : (
+                              <div className="company">{client?.full_name || client?.name || '—'}</div>
+                            )}
+                          </div>
                         </div>
                       </td>
 
@@ -723,6 +748,20 @@ function canonStatus(val) {
   )
     return raw;
   return v;
+}
+
+function statusClassFor(status) {
+  const c = canonStatus(status);
+
+  if (c === 'recall') return 'st-recall';
+  if (c === 'diagnosis') return 'st-diagnosis';
+  if (c === 'in progress') return 'st-in-progress';
+  if (c === 'parts ordered') return 'st-parts-ordered';
+  if (c === 'waiting for parts') return 'st-waiting';
+  if (c === 'to finish') return 'st-to-finish';
+  if (c === 'completed') return 'st-completed';
+
+  return 'st-default';
 }
 
 function isDone(status) {
