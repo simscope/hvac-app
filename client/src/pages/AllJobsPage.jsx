@@ -15,7 +15,7 @@ const AllJobsPage = () => {
   const [filterTech, setFilterTech] = useState('all');
   const [searchText, setSearchText] = useState('');
   const [invoiceQuery, setInvoiceQuery] = useState('');
-  const [sortAsc, setSortAsc] = useState(true);
+  const [sortAsc, setSortAsc] = useState(false); // ✅ по умолчанию: снизу вверх (DESC)
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('active'); // active | warranty | archive
 
@@ -185,7 +185,6 @@ const AllJobsPage = () => {
         const o = origById(j.id, origJobs) || j;
         const recall = isRecall(o.status);
 
-        // ===== warranty =====
         if (viewMode === 'warranty') {
           return (
             !recall &&
@@ -197,7 +196,6 @@ const AllJobsPage = () => {
           );
         }
 
-        // ===== archive =====
         if (viewMode === 'archive') {
           if (j.archived_at) return true;
           return (
@@ -209,7 +207,6 @@ const AllJobsPage = () => {
           );
         }
 
-        // ===== active =====
         if (j.archived_at) return false;
         if (isDone(o.status)) return false;
 
@@ -265,8 +262,19 @@ const AllJobsPage = () => {
         );
       })
       .sort((a, b) => {
-        const A = (a.job_number || a.id).toString();
-        const B = (b.job_number || b.id).toString();
+        // ✅ numeric sort by job_number (DESC by default)
+        const aNum = Number(a.job_number || 0);
+        const bNum = Number(b.job_number || 0);
+
+        // если у одного нет номера — пусть идет ниже
+        if (!a.job_number && b.job_number) return 1;
+        if (a.job_number && !b.job_number) return -1;
+
+        if (aNum !== bNum) return sortAsc ? aNum - bNum : bNum - aNum;
+
+        // fallback стабильный
+        const A = String(a.id || '');
+        const B = String(b.id || '');
         return sortAsc ? A.localeCompare(B) : B.localeCompare(A);
       });
   }, [
@@ -540,7 +548,6 @@ const AllJobsPage = () => {
               : `👨‍🔧 ${technicians.find((t) => String(t.id) === String(techId))?.name || '—'}`}
           </h2>
 
-          {/* ===== Legend above each table ===== */}
           <Legend />
 
           <div className="overflow-x-auto">
