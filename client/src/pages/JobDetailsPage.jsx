@@ -67,6 +67,7 @@ const ROW = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignI
 const INPUT = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' };
 const SELECT = { ...INPUT };
 const TA = { ...INPUT, minHeight: 80, resize: 'vertical' };
+const TA_BIG = { ...INPUT, minHeight: 110, resize: 'vertical' };
 
 const H1 = { fontWeight: 800, fontSize: 22 };
 const H2 = { fontWeight: 700, fontSize: 16, marginBottom: 8 };
@@ -143,19 +144,11 @@ async function callEdgeAuth(path, body) {
 }
 
 /* ---------- Dictionaries ---------- */
-const STATUS_OPTIONS = [
-  'recall',
-  'Diagnosis',
-  'In progress',
-  'Parts ordered',
-  'Waiting for parts',
-  'To finish',
-  'Completed',
-];
+const STATUS_OPTIONS = ['recall', 'Diagnosis', 'In progress', 'Parts ordered', 'Waiting for parts', 'To finish', 'Completed'];
 const SYSTEM_OPTIONS = ['HVAC', 'Appliance'];
 
 /* ---------- Payments ---------- */
-const PM_ALLOWED = ['cash', 'zelle', 'card', 'check','ACH'];
+const PM_ALLOWED = ['cash', 'zelle', 'card', 'check', 'ACH'];
 const pmToSelect = (v) => {
   const s = String(v ?? '').trim().toLowerCase();
   return PM_ALLOWED.includes(s) ? s : '-';
@@ -203,8 +196,7 @@ const DONE_STATUSES = new Set(['completed', 'complete', 'done']);
 const isDone = (s) => DONE_STATUSES.has(String(s || '').toLowerCase().trim());
 
 /* ---------- Payment options block for emails ---------- */
-const PAYMENT_OPTIONS_TEXT =
-`Payment Options:
+const PAYMENT_OPTIONS_TEXT = `Payment Options:
 💸 Zelle: 929-412-9042
 🏦 ACH Transfer
 Account number: 918130706
@@ -291,8 +283,16 @@ export default function JobDetailsPage() {
   const [techs, setTechs] = useState([]);
   const [materials, setMaterials] = useState([]);
 
-  // company добавлено
-  const [client, setClient] = useState({ id: null, company: '', full_name: '', phone: '', email: '', address: '' });
+  // ✅ добавили notes
+  const [client, setClient] = useState({
+    id: null,
+    company: '',
+    full_name: '',
+    phone: '',
+    email: '',
+    address: '',
+    notes: '', // additional info
+  });
   const [clientDirty, setClientDirty] = useState(false);
 
   const [photos, setPhotos] = useState([]);
@@ -366,9 +366,10 @@ export default function JobDetailsPage() {
 
       // client
       if (j.client_id) {
+        // ✅ добавили notes в select
         const { data: c } = await supabase
           .from('clients')
-          .select('id, company, full_name, phone, email, address')
+          .select('id, company, full_name, phone, email, address, notes')
           .eq('id', j.client_id)
           .maybeSingle();
         setClient(
@@ -380,6 +381,7 @@ export default function JobDetailsPage() {
                 phone: c.phone || '',
                 email: c.email || '',
                 address: c.address || '',
+                notes: c.notes || '',
               }
             : {
                 id: null,
@@ -388,7 +390,8 @@ export default function JobDetailsPage() {
                 phone: j.client_phone || j.phone || '',
                 email: j.client_email || j.email || '',
                 address: j.client_address || j.address || '',
-              },
+                notes: '',
+              }
         );
       } else {
         setClient({
@@ -398,6 +401,7 @@ export default function JobDetailsPage() {
           phone: j.client_phone || j.phone || '',
           email: j.client_email || j.email || '',
           address: j.client_address || j.address || '',
+          notes: '',
         });
       }
 
@@ -435,7 +439,6 @@ export default function JobDetailsPage() {
         const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
         if (!error) setJob((p) => ({ ...(p || {}), ...patch }));
       } catch (e) {
-        // optional operation
         console.warn('auto-archive failed', e);
       }
     };
@@ -477,10 +480,7 @@ export default function JobDetailsPage() {
     const ids = Array.from(new Set(list.map((c) => c.author_user_id).filter(Boolean)));
     const nameByUserId = {};
     if (ids.length) {
-      const { data: techPeople } = await supabase
-        .from('technicians')
-        .select('auth_user_id, name')
-        .in('auth_user_id', ids);
+      const { data: techPeople } = await supabase.from('technicians').select('auth_user_id, name').in('auth_user_id', ids);
       (techPeople || []).forEach((t) => {
         if (t?.auth_user_id && t?.name) nameByUserId[t.auth_user_id] = t.name;
       });
@@ -602,6 +602,8 @@ export default function JobDetailsPage() {
       phone: stringOrNull(client.phone) ?? '',
       email: normalizeEmail(client.email),
       address: stringOrNull(client.address) ?? '',
+      // ✅ сохраняем notes
+      notes: stringOrNull(client.notes) ?? '',
     };
 
     try {
@@ -613,7 +615,7 @@ export default function JobDetailsPage() {
 
         const { data: fresh, error: selErr } = await supabase
           .from('clients')
-          .select('id, company, full_name, phone, email, address')
+          .select('id, company, full_name, phone, email, address, notes')
           .eq('id', cid)
           .maybeSingle();
         if (selErr) throw selErr;
@@ -628,6 +630,7 @@ export default function JobDetailsPage() {
           phone: merged.phone || '',
           email: merged.email || '',
           address: merged.address || '',
+          notes: merged.notes || '',
         });
         setClientDirty(false);
         alert('Client saved');
@@ -637,7 +640,7 @@ export default function JobDetailsPage() {
       const { data: created, error: insErr } = await supabase
         .from('clients')
         .insert(payload)
-        .select('id, company, full_name, phone, email, address')
+        .select('id, company, full_name, phone, email, address, notes')
         .single();
       if (insErr) throw insErr;
 
@@ -649,6 +652,7 @@ export default function JobDetailsPage() {
         phone: created.phone || '',
         email: created.email || '',
         address: created.address || '',
+        notes: created.notes || '',
       });
       setClientDirty(false);
       alert('Client created and linked to the job');
@@ -660,10 +664,7 @@ export default function JobDetailsPage() {
 
   /* ---------- materials ---------- */
   const addMat = () => {
-    setMaterials((p) => [
-      ...p,
-      { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' },
-    ]);
+    setMaterials((p) => [...p, { id: `tmp-${Date.now()}`, job_id: jobId, name: '', price: null, quantity: 1, supplier: '' }]);
   };
   const chMat = (idx, field, val) => {
     setMaterials((p) => {
@@ -712,11 +713,7 @@ export default function JobDetailsPage() {
       }
     }
 
-    const { data: fresh } = await supabase
-      .from('materials')
-      .select('*')
-      .eq('job_id', jobId)
-      .order('id', { ascending: true });
+    const { data: fresh } = await supabase.from('materials').select('*').eq('job_id', jobId).order('id', { ascending: true });
     setMaterials(fresh || []);
     alert('Materials saved');
   };
@@ -774,7 +771,6 @@ export default function JobDetailsPage() {
       await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
       await loadPhotos();
     } catch (e) {
-      // fallback: прямое удаление из Storage (если есть права RLS)
       const { error } = await storage().remove([`${jobId}/${name}`]);
       if (error) {
         alert(`Failed to delete file: ${e.message || error.message || 'error'}`);
@@ -808,7 +804,7 @@ export default function JobDetailsPage() {
     for (const n of names) await downloadOne(n);
   };
 
-  // *** НОВОЕ: открытие фото / PDF по клику ***
+  // open photo/pdf
   const openPhoto = (url) => {
     if (!url) return;
     window.open(url, '_blank', 'noopener,noreferrer');
@@ -820,11 +816,7 @@ export default function JobDetailsPage() {
     try {
       const [stRes, dbRes] = await Promise.all([
         invStorage().list(`${jobId}`, { limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
-        supabase
-          .from('invoices')
-          .select('id, invoice_no, created_at')
-          .eq('job_id', jobId)
-          .order('created_at', { ascending: false }),
+        supabase.from('invoices').select('id, invoice_no, created_at').eq('job_id', jobId).order('created_at', { ascending: false }),
       ]);
 
       const stData = stRes?.data || [];
@@ -871,8 +863,7 @@ export default function JobDetailsPage() {
 
   const openInvoice = (item) => {
     if (item?.hasFile && item?.url) window.open(item.url, '_blank', 'noopener,noreferrer');
-    else if (item?.invoice_no)
-      window.open(makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`), '_blank', 'noopener,noreferrer');
+    else if (item?.invoice_no) window.open(makeFrontUrl(`/invoice/${jobId}?no=${encodeURIComponent(item.invoice_no)}`), '_blank', 'noopener,noreferrer');
     else window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
@@ -893,7 +884,6 @@ export default function JobDetailsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // --- delete invoice (edge + fallback) ---
   const deleteInvoice = async (item) => {
     if (!item) return;
 
@@ -908,8 +898,8 @@ export default function JobDetailsPage() {
       await callEdgeAuth('admin-delete-invoice', {
         bucket: INVOICES_BUCKET,
         job_id: jobId,
-        invoice_no: invoiceNoStr,   // строкой
-        file_name: fileName,        // опционально
+        invoice_no: invoiceNoStr,
+        file_name: fileName,
       });
       edgeOk = true;
     } catch (e) {
@@ -926,11 +916,7 @@ export default function JobDetailsPage() {
         if (item?.db_id) {
           await supabase.from('invoices').delete().eq('id', item.db_id);
         } else if (invoiceNoNum != null) {
-          await supabase
-            .from('invoices')
-            .delete()
-            .eq('job_id', jobId)
-            .eq('invoice_no', invoiceNoNum);
+          await supabase.from('invoices').delete().eq('job_id', jobId).eq('invoice_no', invoiceNoNum);
         }
       } catch (e) {
         console.warn('DB cleanup warn:', e?.message || e);
@@ -947,15 +933,15 @@ export default function JobDetailsPage() {
   // --- helpers for email body ---
   function escapeHtml(s) {
     return String(s ?? '')
-      .replace(/&/g,'&amp;')
-      .replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;')
-      .replace(/"/g,'&quot;')
-      .replace(/'/g,'&#39;');
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
   const nl2brHtml = (s) => `<p>${escapeHtml(String(s || '').trim()).replace(/\n{2,}/g, '\n\n').split('\n').join('<br/>')}</p>`;
   const buildHtmlFromText = (text) =>
-`<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
+    `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#0f172a">
   ${nl2brHtml(text)}
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0"/>
   <div style="font-size:12px;color:#334155">
@@ -968,12 +954,10 @@ export default function JobDetailsPage() {
   </div>
 </div>`.trim();
 
-  // Build default email draft (generic "write to client")
   const buildDefaultEmailDraftSimple = () => {
     const to = normalizeEmail(client?.email) || '';
     const subject = `Message about your service job ${job?.job_number ? '#' + job.job_number : ''} — Sim Scope Inc.`;
-    const message =
-`Hello${client?.full_name ? ' ' + client.full_name : ''},
+    const message = `Hello${client?.full_name ? ' ' + client.full_name : ''},
 
 This is Sim HVAC & Appliance repair regarding your recent service job ${job?.job_number ? '#' + job.job_number : ''}.
 
@@ -989,13 +973,11 @@ Services Licensed & Insured | Serving NYC and NJ`;
     return { to, subject, message };
   };
 
-  // Build default email draft (single invoice)
   const buildDefaultEmailDraft = (inv) => {
     const to = normalizeEmail(client?.email) || '';
     const invoiceNo = inv?.invoice_no ? String(inv.invoice_no) : null;
     const subject = `Invoice ${invoiceNo ? '#' + invoiceNo : ''} — Sim Scope Inc.`;
-    const message =
-`Hello${client?.full_name ? ' ' + client.full_name : ''},
+    const message = `Hello${client?.full_name ? ' ' + client.full_name : ''},
 
 Please find your invoice ${invoiceNo ? '#' + invoiceNo : ''} attached as a PDF.
 
@@ -1011,13 +993,11 @@ Services Licensed & Insured | Serving NYC and NJ`;
     return { to, subject, message };
   };
 
-  // Build default email draft (multi)
   const buildDefaultEmailDraftMulti = (list) => {
     const to = normalizeEmail(client?.email) || '';
     const nums = list.map((i) => (i.invoice_no ? `#${i.invoice_no}` : i.name)).join(', ');
     const subject = `Invoices ${nums} — Sim Scope Inc.`;
-    const message =
-`Hello${client?.full_name ? ' ' + client.full_name : ''},
+    const message = `Hello${client?.full_name ? ' ' + client.full_name : ''},
 
 Please find your invoices (${nums}) attached as PDFs in one email.
 
@@ -1033,7 +1013,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
     return { to, subject, message };
   };
 
-  // Send single invoice
   const sendInvoiceEmail = async (inv, overrides = {}) => {
     if (!inv?.hasFile) {
       alert('Invoice PDF is not in storage yet. Open the invoice and save it first, then press Refresh.');
@@ -1061,7 +1040,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
         text,
         html,
         bucket: INVOICES_BUCKET,
-        key,           // "<jobId>/<fileName>"
+        key,
         job_id: jobId,
         invoice_no: invoiceNo ? Number(invoiceNo) : null,
         client_name: client?.full_name || null,
@@ -1076,7 +1055,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // Send multiple invoices
   const sendInvoicesEmailMulti = async (list, overrides = {}) => {
     const allHaveFile = list.every((i) => i.hasFile);
     if (!allHaveFile) {
@@ -1095,22 +1073,16 @@ Services Licensed & Insured | Serving NYC and NJ`;
     const attachments = list.map((i) => {
       const invoiceNo = i?.invoice_no ? String(i.invoice_no) : null;
       const fileName = i?.name || (invoiceNo ? `invoice_${invoiceNo}.pdf` : 'invoice.pdf');
-      return {
-        bucket: INVOICES_BUCKET,
-        key: `${jobId}/${fileName}`,
-        filename: fileName,
-      };
+      return { bucket: INVOICES_BUCKET, key: `${jobId}/${fileName}`, filename: fileName };
     });
 
     try {
       await callEdgeAuth('gmail_send', {
-        to: [to],               // gmail_send ждёт массив получателей
+        to: [to],
         subject,
-        text,                   // html не передаём — отправляем plain text
-        attachments: attachments.map(a => ({
-          ...a,                 // { bucket, key, filename }
-          mimeType: 'application/pdf',
-        })),
+        text,
+        html: buildHtmlFromText(text),
+        attachments: attachments.map((a) => ({ ...a, mimeType: 'application/pdf' })),
       });
       alert(`Sent ${attachments.length} invoice(s) to ${to}`);
     } catch (e) {
@@ -1118,11 +1090,10 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // Modal open/close + send (single / generic)
   const openClientEmailModal = () => {
     const draft = buildDefaultEmailDraftSimple();
     setEmailDraft(draft);
-    setEmailInvSelected(null);    // generic mode (no invoice)
+    setEmailInvSelected(null);
     setIncludePaymentOptions(false);
     setEmailModalOpen(true);
   };
@@ -1139,7 +1110,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
     setEmailInvSelected(null);
   };
   const confirmSendEmailFromModal = async () => {
-    // invoice mode
     if (emailInvSelected) {
       await sendInvoiceEmail(emailInvSelected, {
         to: emailDraft.to,
@@ -1150,7 +1120,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
       return;
     }
 
-    // generic "write to client" mode
     const to = normalizeEmail(emailDraft.to);
     if (!to) {
       alert('Client email is empty. Please fill it in.');
@@ -1162,12 +1131,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
     try {
       setSendingInvId('generic');
-      await callEdgeAuth('gmail_send', {
-        to: [to],
-        subject,
-        text,
-        html,
-      });
+      await callEdgeAuth('gmail_send', { to: [to], subject, text, html });
       alert('Email sent to ' + to);
     } catch (e) {
       alert('Failed to send email: ' + (e.message || e));
@@ -1177,7 +1141,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
     }
   };
 
-  // Modal open/close + send (multi)
   const openEmailModalMulti = () => {
     const draft = buildDefaultEmailDraftMulti(selectedInvoices);
     setEmailDraftMulti(draft);
@@ -1214,7 +1177,6 @@ Services Licensed & Insured | Serving NYC and NJ`;
     <div style={PAGE}>
       <div style={H1}>Edit Job {jobNumTitle}</div>
 
-      {/* Archive banner */}
       {isArchived && (
         <div style={ARCHIVE_BANNER}>
           <div>
@@ -1313,7 +1275,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                     value={pmToSelect(job.scf_payment_method)}
                     onChange={(e) => setField('scf_payment_method', pmToSave(e.target.value))}
                   >
-                    {['-', 'cash', 'zelle', 'card', 'check','ACH'].map((p) => (
+                    {['-', 'cash', 'zelle', 'card', 'check', 'ACH'].map((p) => (
                       <option key={p} value={p}>
                         {p}
                       </option>
@@ -1325,12 +1287,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
               <div style={ROW}>
                 <div>Labor ($)</div>
-                <input
-                  style={INPUT}
-                  type="number"
-                  value={job.labor_price ?? ''}
-                  onChange={(e) => setField('labor_price', toNum(e.target.value))}
-                />
+                <input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e) => setField('labor_price', toNum(e.target.value))} />
               </div>
 
               <div style={ROW}>
@@ -1409,12 +1366,22 @@ Services Licensed & Insured | Serving NYC and NJ`;
               <Row label="Phone" value={client.phone} onChange={(v) => setClientField('phone', v)} />
               <Row label="Email" value={client.email} onChange={(v) => setClientField('email', v)} />
               <Row label="Address" value={client.address} onChange={(v) => setClientField('address', v)} />
+
+              {/* ✅ НОВОЕ ОКНО ДЛЯ ДОП. ИНФОРМАЦИИ */}
+              <RowTextArea
+                label="Additional info"
+                value={client.notes}
+                onChange={(v) => setClientField('notes', v)}
+                placeholder="Any additional notes about the client (access codes, contacts, preferences, etc.)"
+              />
+
               <div style={{ display: 'flex', gap: 8 }}>
                 <button style={PRIMARY} onClick={saveClient} disabled={!clientDirty}>
                   Save client
                 </button>
                 {!clientDirty && <div style={{ ...MUTED, alignSelf: 'center' }}>No changes</div>}
               </div>
+
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button
                   style={BTN}
@@ -1425,9 +1392,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                   Write to the client
                 </button>
                 {!normalizeEmail(client?.email) && (
-                  <div style={{ ...MUTED, fontSize: 12, alignSelf: 'center' }}>
-                    Fill client email above to enable sending
-                  </div>
+                  <div style={{ ...MUTED, fontSize: 12, alignSelf: 'center' }}>Fill client email above to enable sending</div>
                 )}
               </div>
             </div>
@@ -1438,15 +1403,12 @@ Services Licensed & Insured | Serving NYC and NJ`;
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={H2}>Invoices (PDF)</div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {/* Select all / Send selected */}
                 <label style={{ userSelect: 'none', cursor: 'pointer', fontSize: 13 }}>
                   <input
                     type="checkbox"
                     style={{ marginRight: 6 }}
                     checked={allInvChecked}
-                    onChange={(e) =>
-                      setInvChecked(e.target.checked ? Object.fromEntries(invoices.map((it) => [keyOfInv(it), true])) : {})
-                    }
+                    onChange={(e) => setInvChecked(e.target.checked ? Object.fromEntries(invoices.map((it) => [keyOfInv(it), true])) : {})}
                   />
                   Select all
                 </label>
@@ -1489,25 +1451,15 @@ Services Licensed & Insured | Serving NYC and NJ`;
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <input
-                          type="checkbox"
-                          checked={!!invChecked[invKey]}
-                          onChange={(e) => setInvChecked((s) => ({ ...s, [invKey]: e.target.checked }))}
-                        />
+                        <input type="checkbox" checked={!!invChecked[invKey]} onChange={(e) => setInvChecked((s) => ({ ...s, [invKey]: e.target.checked }))} />
                         <div>
                           <div style={{ fontWeight: 600 }}>
                             {inv.invoice_no ? `Invoice #${inv.invoice_no}` : inv.name}
-                            {!inv.hasFile && (
-                              <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>
-                            )}
+                            {!inv.hasFile && <span style={{ marginLeft: 8, color: '#a1a1aa', fontWeight: 400 }}>(PDF not in storage yet)</span>}
                           </div>
-                          <div style={{ fontSize: 12, color: '#6b7280' }}>
-                            {inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}
-                          </div>
+                          <div style={{ fontSize: 12, color: '#6b7280' }}>{inv.updated_at ? new Date(inv.updated_at).toLocaleString() : ''}</div>
                           {!normalizeEmail(client?.email) && (
-                            <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>
-                              Client email is empty — fill it above to enable sending.
-                            </div>
+                            <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>Client email is empty — fill it above to enable sending.</div>
                           )}
                         </div>
                       </div>
@@ -1534,13 +1486,8 @@ Services Licensed & Insured | Serving NYC and NJ`;
                         </button>
                         <button
                           type="button"
-                          title={!inv.hasFile ? 'PDF not saved yet' : (!normalizeEmail(client?.email) ? 'Client email is empty' : 'Send invoice by email')}
-                          style={{
-                            ...PRIMARY,
-                            opacity: canSend ? 1 : 0.5,
-                            cursor: canSend ? 'pointer' : 'not-allowed',
-                            minWidth: 120,
-                          }}
+                          title={!inv.hasFile ? 'PDF not saved yet' : !normalizeEmail(client?.email) ? 'Client email is empty' : 'Send invoice by email'}
+                          style={{ ...PRIMARY, opacity: canSend ? 1 : 0.5, cursor: canSend ? 'pointer' : 'not-allowed', minWidth: 120 }}
                           onClick={() => canSend && openEmailModal(inv)}
                           disabled={!canSend || sending}
                         >
@@ -1577,27 +1524,13 @@ Services Licensed & Insured | Serving NYC and NJ`;
                     <input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
                   </Td>
                   <Td>
-                    <input
-                      style={INPUT}
-                      type="number"
-                      value={m.price ?? ''}
-                      onChange={(e) => chMat(i, 'price', e.target.value)}
-                    />
+                    <input style={INPUT} type="number" value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} />
                   </Td>
                   <Td>
-                    <input
-                      style={INPUT}
-                      type="number"
-                      value={m.quantity ?? 1}
-                      onChange={(e) => chMat(i, 'quantity', e.target.value)}
-                    />
+                    <input style={INPUT} type="number" value={m.quantity ?? 1} onChange={(e) => chMat(i, 'quantity', e.target.value)} />
                   </Td>
                   <Td>
-                    <input
-                      style={INPUT}
-                      value={m.supplier || ''}
-                      onChange={(e) => chMat(i, 'supplier', e.target.value)}
-                    />
+                    <input style={INPUT} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} />
                   </Td>
                   <Td center>
                     <button style={DANGER} onClick={() => delMat(m)}>
@@ -1626,16 +1559,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
           <div style={MUTED}>Loading…</div>
         ) : (
           <>
-            <div
-              style={{
-                maxHeight: 260,
-                overflowY: 'auto',
-                border: '1px solid #e5e7eb',
-                borderRadius: 8,
-                padding: 10,
-                marginBottom: 8,
-              }}
-            >
+            <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: 10, marginBottom: 8 }}>
               {comments.length === 0 ? (
                 <div style={MUTED}>No comments yet</div>
               ) : (
@@ -1654,13 +1578,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
               )}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <textarea
-                rows={2}
-                style={{ ...TA, minHeight: 60 }}
-                value={commentText}
-                onChange={(e) => setCommentText(e.target.value)}
-                placeholder="Write a comment…"
-              />
+              <textarea rows={2} style={{ ...TA, minHeight: 60 }} value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder="Write a comment…" />
               <button style={PRIMARY} onClick={addComment}>
                 Send
               </button>
@@ -1684,13 +1602,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
         </div>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf"
-            onChange={onPick}
-          />
+          <input ref={fileRef} type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.pdf,image/*,application/pdf" onChange={onPick} />
           {uploadBusy && <span style={MUTED}>Uploading…</span>}
         </div>
 
@@ -1699,48 +1611,20 @@ Services Licensed & Insured | Serving NYC and NJ`;
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))', gap: 10 }}>
           {photos.map((p) => (
             <div key={p.name} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 8 }}>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  marginBottom: 6,
-                  userSelect: 'none',
-                  cursor: 'pointer',
-                }}
-              >
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, userSelect: 'none', cursor: 'pointer' }}>
                 <input type="checkbox" checked={!!checked[p.name]} onChange={() => toggleOnePhoto(p.name)} />
                 <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{p.name}</span>
               </label>
 
               {/\.(pdf)$/i.test(p.name) ? (
-                <div
-                  style={{
-                    height: 120,
-                    display: 'grid',
-                    placeItems: 'center',
-                    background: '#f1f5f9',
-                    borderRadius: 8,
-                    marginBottom: 6,
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => openPhoto(p.url)}
-                >
+                <div style={{ height: 120, display: 'grid', placeItems: 'center', background: '#f1f5f9', borderRadius: 8, marginBottom: 6, cursor: 'pointer' }} onClick={() => openPhoto(p.url)}>
                   📄 PDF
                 </div>
               ) : (
                 <img
                   src={p.url}
                   alt={p.name}
-                  style={{
-                    width: '100%',
-                    height: 120,
-                    objectFit: 'cover',
-                    borderRadius: 8,
-                    display: 'block',
-                    marginBottom: 6,
-                    cursor: 'pointer',
-                  }}
+                  style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: 8, display: 'block', marginBottom: 6, cursor: 'pointer' }}
                   onClick={() => openPhoto(p.url)}
                 />
               )}
@@ -1770,36 +1654,19 @@ Services Licensed & Insured | Serving NYC and NJ`;
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={ROW}>
                 <div>To</div>
-                <input
-                  style={INPUT}
-                  value={emailDraft.to}
-                  onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))}
-                  placeholder="client@example.com"
-                />
+                <input style={INPUT} value={emailDraft.to} onChange={(e) => setEmailDraft((d) => ({ ...d, to: e.target.value }))} placeholder="client@example.com" />
               </div>
               <div style={ROW}>
                 <div>Subject</div>
-                <input
-                  style={INPUT}
-                  value={emailDraft.subject}
-                  onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))}
-                />
+                <input style={INPUT} value={emailDraft.subject} onChange={(e) => setEmailDraft((d) => ({ ...d, subject: e.target.value }))} />
               </div>
               <div>
                 <div style={{ marginBottom: 6, color: '#374151', fontWeight: 600 }}>Message</div>
-                <textarea
-                  style={{ ...TA, minHeight: 180 }}
-                  value={emailDraft.message}
-                  onChange={(e) => setEmailDraft((d) => ({ ...d, message: e.target.value }))}
-                />
+                <textarea style={{ ...TA, minHeight: 180 }} value={emailDraft.message} onChange={(e) => setEmailDraft((d) => ({ ...d, message: e.target.value }))} />
                 {isInvoiceEmail ? (
-                  <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
-                    Attachment: invoice PDF will be attached automatically
-                  </div>
+                  <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>Attachment: invoice PDF will be attached automatically</div>
                 ) : (
-                  <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
-                    This email will be sent without attachments.
-                  </div>
+                  <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>This email will be sent without attachments.</div>
                 )}
                 <div style={{ marginTop: 4 }}>
                   <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
@@ -1811,9 +1678,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                         setIncludePaymentOptions(checked);
                         setEmailDraft((d) => ({
                           ...d,
-                          message: checked
-                            ? addPaymentOptionsBlock(d.message)
-                            : stripPaymentOptionsBlock(d.message),
+                          message: checked ? addPaymentOptionsBlock(d.message) : stripPaymentOptionsBlock(d.message),
                         }));
                       }}
                     />
@@ -1853,41 +1718,22 @@ Services Licensed & Insured | Serving NYC and NJ`;
             <div style={{ display: 'grid', gap: 10 }}>
               <div style={ROW}>
                 <div>To</div>
-                <input
-                  style={INPUT}
-                  value={emailDraftMulti.to}
-                  onChange={(e) => setEmailDraftMulti((d) => ({ ...d, to: e.target.value }))}
-                  placeholder="client@example.com"
-                />
+                <input style={INPUT} value={emailDraftMulti.to} onChange={(e) => setEmailDraftMulti((d) => ({ ...d, to: e.target.value }))} placeholder="client@example.com" />
               </div>
               <div style={ROW}>
                 <div>Subject</div>
-                <input
-                  style={INPUT}
-                  value={emailDraftMulti.subject}
-                  onChange={(e) => setEmailDraftMulti((d) => ({ ...d, subject: e.target.value }))}
-                />
+                <input style={INPUT} value={emailDraftMulti.subject} onChange={(e) => setEmailDraftMulti((d) => ({ ...d, subject: e.target.value }))} />
               </div>
               <div>
                 <div style={{ marginBottom: 6, color: '#374151', fontWeight: 600 }}>Message</div>
-                <textarea
-                  style={{ ...TA, minHeight: 180 }}
-                  value={emailDraftMulti.message}
-                  onChange={(e) => setEmailDraftMulti((d) => ({ ...d, message: e.target.value }))}
-                />
-                <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>
-                  Attachments: all selected invoice PDFs will be attached automatically
-                </div>
+                <textarea style={{ ...TA, minHeight: 180 }} value={emailDraftMulti.message} onChange={(e) => setEmailDraftMulti((d) => ({ ...d, message: e.target.value }))} />
+                <div style={{ ...MUTED, fontSize: 12, marginTop: 6 }}>Attachments: all selected invoice PDFs will be attached automatically</div>
               </div>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button style={BTN} onClick={closeEmailModalMulti}>Cancel</button>
-              <button
-                style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.6, cursor: canSendSelected ? 'pointer' : 'not-allowed' }}
-                disabled={!canSendSelected}
-                onClick={confirmSendEmailFromModalMulti}
-              >
+              <button style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.6, cursor: canSendSelected ? 'pointer' : 'not-allowed' }} disabled={!canSendSelected} onClick={confirmSendEmailFromModalMulti}>
                 Send {selectedInvoices.length}
               </button>
             </div>
@@ -1911,6 +1757,21 @@ function Row({ label, value, onChange }) {
     </div>
   );
 }
+
+function RowTextArea({ label, value, onChange, placeholder }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignItems: 'start' }}>
+      <div style={{ paddingTop: 8 }}>{label}</div>
+      <textarea
+        style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%', minHeight: 110, resize: 'vertical' }}
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder || ''}
+      />
+    </div>
+  );
+}
+
 function Th({ children, center }) {
   return (
     <th style={{ textAlign: center ? 'center' : 'left', borderBottom: '1px solid #e5e7eb', background: '#f9fafb', padding: 8 }}>
@@ -1919,8 +1780,5 @@ function Th({ children, center }) {
   );
 }
 function Td({ children, center }) {
-  return (
-    <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>
-  );
+  return <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', textAlign: center ? 'center' : 'left' }}>{children}</td>;
 }
-
