@@ -20,7 +20,7 @@ const normalizePaymentLabel = (raw) => {
   if (v === 'zelle') return 'Zelle';
   if (v === 'card' || v === 'карта') return 'Карта';
   if (v === 'check' || v === 'чек') return 'Чек';
-  if (v === 'ACH' || v === 'ACH') return 'ACH';
+  if (v === 'ach') return 'ACH';
   return String(raw);
 };
 
@@ -71,8 +71,19 @@ const FinancePage = () => {
     ACTION: 150,
   };
   const TABLE_WIDTH =
-    COL.SEL + COL.JOB + COL.TECH + COL.STATUS + COL.SCF + COL.SCF_PAY + COL.LABOR + COL.LABOR_PAY +
-    COL.MATERIALS + COL.TOTAL + COL.SALARY + COL.PAID + COL.ACTION;
+    COL.SEL +
+    COL.JOB +
+    COL.TECH +
+    COL.STATUS +
+    COL.SCF +
+    COL.SCF_PAY +
+    COL.LABOR +
+    COL.LABOR_PAY +
+    COL.MATERIALS +
+    COL.TOTAL +
+    COL.SALARY +
+    COL.PAID +
+    COL.ACTION;
 
   const tableStyle = { tableLayout: 'fixed', borderCollapse: 'collapse', width: `${TABLE_WIDTH}px` };
   const thStyle = (w, align = 'left') => ({
@@ -94,6 +105,17 @@ const FinancePage = () => {
   });
   const selectStyle = { width: '100%', padding: '6px 8px' };
   const btn = { padding: '8px 12px', cursor: 'pointer', borderRadius: 6, border: 'none' };
+
+  const linkBtn = {
+    background: 'transparent',
+    border: 'none',
+    padding: 0,
+    margin: 0,
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    color: '#2563eb',
+    fontWeight: 600,
+  };
 
   const periodOptions = [
     { label: 'Сегодня', value: 'day' },
@@ -117,6 +139,16 @@ const FinancePage = () => {
     const tech = technicians.find((t) => String(t.id) === String(id));
     return tech ? tech.name : '—';
   };
+
+  /* ===== открыть карточку работы =====
+     Маршрут: /jobs/:id (открываем в новой вкладке)
+     Если у тебя другой путь — поменяешь тут в одной строке.
+  */
+  const openJobCard = useCallback((jobId) => {
+    if (!jobId) return;
+    const url = `/jobs/${jobId}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }, []);
 
   /* ===== загрузка данных ===== */
 
@@ -241,13 +273,11 @@ const FinancePage = () => {
       if (methodChosen(j.scf_payment_method) && scf > 0) {
         const label = normalizePaymentLabel(j.scf_payment_method);
         if (buckets[label] !== undefined) buckets[label] += scf;
-        else buckets.Другое += scf;
       }
 
       if (methodChosen(j.labor_payment_method) && labor > 0) {
         const label = normalizePaymentLabel(j.labor_payment_method);
         if (buckets[label] !== undefined) buckets[label] += labor;
-        else buckets.Другое += labor;
       }
     });
 
@@ -308,13 +338,7 @@ const FinancePage = () => {
         salary_paid_by: paid_by,
         salary_paid_amount: salary,
       };
-      const { error } = await supabase
-        .from('jobs')
-        .update(patch)
-        .eq('id', job.id)
-        .select('id')
-        .single();
-
+      const { error } = await supabase.from('jobs').update(patch).eq('id', job.id).select('id').single();
       if (error) throw error;
       await fetchJobs();
     } catch (e) {
@@ -331,13 +355,7 @@ const FinancePage = () => {
         salary_paid_by: null,
         salary_paid_amount: null,
       };
-      const { error } = await supabase
-        .from('jobs')
-        .update(patch)
-        .eq('id', job.id)
-        .select('id')
-        .single();
-
+      const { error } = await supabase.from('jobs').update(patch).eq('id', job.id).select('id').single();
       if (error) throw error;
       await fetchJobs();
     } catch (e) {
@@ -358,12 +376,7 @@ const FinancePage = () => {
           salary_paid_by: paid_by,
           salary_paid_amount: salary,
         };
-        const { error } = await supabase
-          .from('jobs')
-          .update(patch)
-          .eq('id', j.id)
-          .select('id')
-          .single();
+        const { error } = await supabase.from('jobs').update(patch).eq('id', j.id).select('id').single();
         if (error) throw error;
       }
       setSelected(new Set());
@@ -383,12 +396,7 @@ const FinancePage = () => {
         salary_paid_amount: null,
       };
       for (const id of ids) {
-        const { error } = await supabase
-          .from('jobs')
-          .update(patch)
-          .eq('id', id)
-          .select('id')
-          .single();
+        const { error } = await supabase.from('jobs').update(patch).eq('id', id).select('id').single();
         if (error) throw error;
       }
       setSelected(new Set());
@@ -508,11 +516,7 @@ const FinancePage = () => {
         {/* Фильтр: Оплата клиента */}
         <div>
           <label style={{ display: 'block', fontSize: 12, marginBottom: 6 }}>Оплата клиента</label>
-          <select
-            value={filterClientPaid}
-            onChange={(e) => setFilterClientPaid(e.target.value)}
-            style={selectStyle}
-          >
+          <select value={filterClientPaid} onChange={(e) => setFilterClientPaid(e.target.value)} style={selectStyle}>
             {clientPaidOptions.map((p) => (
               <option key={p.value} value={p.value}>
                 {p.label}
@@ -609,7 +613,19 @@ const FinancePage = () => {
                   <td style={{ ...tdStyle(COL.SEL, 'center') }}>
                     <input type="checkbox" checked={selected.has(j.id)} onChange={() => toggleRow(j.id)} />
                   </td>
-                  <td style={tdStyle(COL.JOB)}>{j.job_number || j.id}</td>
+
+                  {/* Job # — кликабельно */}
+                  <td style={tdStyle(COL.JOB)}>
+                    <button
+                      type="button"
+                      style={linkBtn}
+                      onClick={() => openJobCard(j.id)}
+                      title="Открыть карточку работы"
+                    >
+                      {j.job_number || j.id}
+                    </button>
+                  </td>
+
                   <td style={tdStyle(COL.TECH)}>{getTechnicianName(j.technician_id)}</td>
                   <td style={tdStyle(COL.STATUS)}>{showStatus(j)}</td>
 
@@ -621,11 +637,13 @@ const FinancePage = () => {
 
                   <td style={tdStyle(COL.MATERIALS, 'right')}>{formatMoney(materials)}</td>
                   <td style={{ ...tdStyle(COL.TOTAL, 'right'), fontWeight: 600 }}>{formatMoney(total)}</td>
+
                   <td style={tdStyle(COL.SALARY, 'right')}>
                     {paid && Number(j.salary_paid_amount) > 0
                       ? `${formatMoney(j.salary_paid_amount)} (снапшот)`
                       : formatMoney(salary)}
                   </td>
+
                   <td style={{ ...tdStyle(COL.PAID, 'center') }}>
                     {paid ? (
                       <div style={{ display: 'grid', gap: 2 }}>
@@ -641,24 +659,37 @@ const FinancePage = () => {
                       'Нет'
                     )}
                   </td>
+
                   <td style={{ ...tdStyle(COL.ACTION, 'center') }}>
-                    {!paid ? (
+                    <div style={{ display: 'grid', gap: 6, justifyItems: 'center' }}>
+                      {/* Кнопка открытия карточки */}
                       <button
-                        onClick={() => markPaid(j)}
-                        style={{ ...btn, background: '#2563eb', color: '#fff' }}
-                        title="Пометить как выплаченное с фиксацией суммы"
+                        type="button"
+                        onClick={() => openJobCard(j.id)}
+                        style={{ ...btn, background: '#111827', color: '#fff' }}
+                        title="Открыть карточку работы"
                       >
-                        Выплатил зарплату
+                        Карточка
                       </button>
-                    ) : (
-                      <button
-                        onClick={() => unmarkPaid(j)}
-                        style={{ ...btn, background: '#f59e0b', color: '#111827' }}
-                        title="Отменить пометку выплаты"
-                      >
-                        Отменить выплату
-                      </button>
-                    )}
+
+                      {!paid ? (
+                        <button
+                          onClick={() => markPaid(j)}
+                          style={{ ...btn, background: '#2563eb', color: '#fff' }}
+                          title="Пометить как выплаченное с фиксацией суммы"
+                        >
+                          Выплатил зарплату
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => unmarkPaid(j)}
+                          style={{ ...btn, background: '#f59e0b', color: '#111827' }}
+                          title="Отменить пометку выплаты"
+                        >
+                          Отменить выплату
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -693,11 +724,9 @@ const FinancePage = () => {
           <li>
             Карта: <strong>{formatMoney(moneyReport.buckets.Карта)}</strong>
           </li>
-          {moneyReport.buckets.Другое > 0 && (
-           <li>
+          <li>
             ACH: <strong>{formatMoney(moneyReport.buckets.ACH)}</strong>
-           </li>
-          )}
+          </li>
         </ul>
       </div>
 
@@ -722,4 +751,3 @@ const FinancePage = () => {
 };
 
 export default FinancePage;
-
