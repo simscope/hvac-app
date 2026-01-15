@@ -177,11 +177,19 @@ const AllJobsPage = () => {
   };
 
   /* ====== Filter / group ====== */
-  const filteredJobs = useMemo(() => {
+ const filteredJobs = useMemo(() => {
     const now = new Date();
+
+    // ✅ если что-то введено в поиск — ищем по ВСЕЙ базе, игнорируя viewMode
+    const hasGlobalSearch =
+      (searchText && searchText.trim().length > 0) || (invoiceQuery && invoiceQuery.trim().length > 0);
 
     return (jobs || [])
       .filter((j) => {
+        // ✅ когда идёт поиск — НЕ режем active/warranty/archive вообще
+        if (hasGlobalSearch) return true;
+
+        // ====== старое поведение (когда поиска нет) ======
         const o = origById(j.id, origJobs) || j;
         const recall = isRecall(o.status);
 
@@ -262,17 +270,14 @@ const AllJobsPage = () => {
         );
       })
       .sort((a, b) => {
-        // ✅ numeric sort by job_number (DESC by default)
         const aNum = Number(a.job_number || 0);
         const bNum = Number(b.job_number || 0);
 
-        // если у одного нет номера — пусть идет ниже
         if (!a.job_number && b.job_number) return 1;
         if (a.job_number && !b.job_number) return -1;
 
         if (aNum !== bNum) return sortAsc ? aNum - bNum : bNum - aNum;
 
-        // fallback стабильный
         const A = String(a.id || '');
         const B = String(b.id || '');
         return sortAsc ? A.localeCompare(B) : B.localeCompare(A);
@@ -863,3 +868,4 @@ function formatAddress(c) {
 function isDigits(s) {
   return /^\d+$/.test(String(s).trim());
 }
+
