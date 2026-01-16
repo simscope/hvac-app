@@ -177,7 +177,7 @@ const AllJobsPage = () => {
   };
 
   /* ====== Filter / group ====== */
- const filteredJobs = useMemo(() => {
+  const filteredJobs = useMemo(() => {
     const now = new Date();
 
     // ✅ если что-то введено в поиск — ищем по ВСЕЙ базе, игнорируя viewMode
@@ -346,15 +346,51 @@ const AllJobsPage = () => {
     return uniq.slice(0, 10);
   }, [invoiceQuery, invoices, jobs, invByJob, jobsById]);
 
-  const grouped = useMemo(() => {
-    const g = {};
-    filteredJobs.forEach((j) => {
-      const key = j.technician_id || 'No technician';
-      if (!g[key]) g[key] = [];
-      g[key].push(j);
+  // ✅ grouped: Technician -> Status blocks (in statuses order)
+  const groupedByTechThenStatus = useMemo(() => {
+    const techMap = {};
+
+    // 1) jobs по техникам
+    for (const j of filteredJobs) {
+      const techKey = j.technician_id || 'No technician';
+      if (!techMap[techKey]) techMap[techKey] = [];
+      techMap[techKey].push(j);
+    }
+
+    // 2) внутри техника — по статусам (в порядке statuses)
+    const result = {};
+    const order = statuses.map((s) => canonStatus(s));
+
+    Object.entries(techMap).forEach(([techKey, list]) => {
+      const buckets = new Map(); // canonStatus -> array
+      for (const j of list) {
+        const st = canonStatus(j.status) || '__no_status__';
+        if (!buckets.has(st)) buckets.set(st, []);
+        buckets.get(st).push(j);
+      }
+
+      const blocks = [];
+
+      // сначала в заданном порядке
+      for (const stCanon of order) {
+        const arr = buckets.get(stCanon);
+        if (arr && arr.length) {
+          const label = statuses.find((s) => canonStatus(s) === stCanon) || stCanon;
+          blocks.push({ key: stCanon, label, jobs: arr });
+          buckets.delete(stCanon);
+        }
+      }
+
+      // потом остальное
+      const rest = Array.from(buckets.entries())
+        .map(([k, arr]) => ({ key: k, label: k === '__no_status__' ? '— (No status)' : k, jobs: arr }))
+        .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+
+      result[techKey] = [...blocks, ...rest];
     });
-    return g;
-  }, [filteredJobs]);
+
+    return result;
+  }, [filteredJobs, statuses]);
 
   const openSingleMatchOnEnter = (e) => {
     if (e.key === 'Enter' && invoiceMatches.length > 0) {
@@ -453,6 +489,23 @@ const AllJobsPage = () => {
         .st-to-finish     { background:#ffedd5; border-color:#fed7aa; color:#9a3412; }
         .st-completed     { background:#dcfce7; border-color:#bbf7d0; color:#166534; }
         .st-warranty      { background:#dcfce7; border-color:#bbf7d0; color:#166534; }
+
+        /* status sub-block header */
+        .status-block-title{
+          display:flex;
+          align-items:center;
+          gap:10px;
+          margin: 6px 0 6px 0;
+        }
+        .status-count{
+          font-size:12px;
+          font-weight:700;
+          color:#334155;
+          background:#f1f5f9;
+          border:1px solid #e2e8f0;
+          border-radius:999px;
+          padding:2px 10px;
+        }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
@@ -545,211 +598,225 @@ const AllJobsPage = () => {
 
       {loading && <p>Loading...</p>}
 
-      {Object.entries(grouped).map(([techId, groupJobs]) => (
-        <div key={techId} className="mb-6">
-          <h2 className="text-lg font-semibold mb-1">
-            {techId === 'No technician'
-              ? '🧾 No technician'
-              : `👨‍🔧 ${technicians.find((t) => String(t.id) === String(techId))?.name || '—'}`}
-          </h2>
+      {!loading &&
+        Object.entries(groupedByTechThenStatus).map(([techId, statusBlocks]) => (
+          <div key={techId} className="mb-8">
+            <h2 className="text-lg font-semibold mb-1">
+              {techId === 'No technician'
+                ? '🧾 No technician'
+                : `👨‍🔧 ${technicians.find((t) => String(t.id) === String(techId))?.name || '—'}`}
+            </h2>
 
-          <Legend />
+            <Legend />
 
-          <div className="overflow-x-auto">
-            <table className="jobs-table">
-              <colgroup>
-                <col style={{ width: 70 }} />
-                <col style={{ width: 220 }} />
-                <col style={{ width: 120 }} />
-                <col style={{ width: 240 }} />
-                <col style={{ width: 120 }} />
-                <col style={{ width: 240 }} />
-                <col style={{ width: 90 }} />
-                <col style={{ width: 130 }} />
-                <col style={{ width: 90 }} />
-                <col style={{ width: 130 }} />
-                <col style={{ width: 160 }} />
-                <col style={{ width: 50 }} />
-              </colgroup>
+            {statusBlocks.map((block) => (
+              <div key={`${techId}:${block.key}`} className="mb-6">
+                <div className="status-block-title">
+                  <div style={{ fontWeight: 700 }}>{block.label}</div>
+                  <div className="status-count">{block.jobs.length}</div>
+                </div>
 
-              <thead>
-                <tr>
-                  <th>Job #</th>
-                  <th>Client</th>
-                  <th>Phone</th>
-                  <th>Address</th>
-                  <th>System</th>
-                  <th>Issue</th>
-                  <th>SCF</th>
-                  <th>SCF payment</th>
-                  <th>Labor</th>
-                  <th>Labor payment</th>
-                  <th>Status</th>
-                  <th className="center">💾</th>
-                </tr>
-              </thead>
+                <div className="overflow-x-auto">
+                  <table className="jobs-table">
+                    <colgroup>
+                      <col style={{ width: 70 }} />
+                      <col style={{ width: 220 }} />
+                      <col style={{ width: 120 }} />
+                      <col style={{ width: 240 }} />
+                      <col style={{ width: 120 }} />
+                      <col style={{ width: 240 }} />
+                      <col style={{ width: 90 }} />
+                      <col style={{ width: 130 }} />
+                      <col style={{ width: 90 }} />
+                      <col style={{ width: 130 }} />
+                      <col style={{ width: 160 }} />
+                      <col style={{ width: 50 }} />
+                    </colgroup>
 
-              <tbody>
-                {groupJobs.map((job) => {
-                  const client = getClient(job.client_id);
+                    <thead>
+                      <tr>
+                        <th>Job #</th>
+                        <th>Client</th>
+                        <th>Phone</th>
+                        <th>Address</th>
+                        <th>System</th>
+                        <th>Issue</th>
+                        <th>SCF</th>
+                        <th>SCF payment</th>
+                        <th>Labor</th>
+                        <th>Labor payment</th>
+                        <th>Status</th>
+                        <th className="center">💾</th>
+                      </tr>
+                    </thead>
 
-                  const warrantyRow =
-                    viewMode === 'warranty' || persistedInWarrantyBySavedState(job, origJobs, new Date());
+                    <tbody>
+                      {block.jobs.map((job) => {
+                        const client = getClient(job.client_id);
 
-                  const rowClass = warrantyRow ? 'warranty' : statusClassFor(job.status);
+                        const warrantyRow =
+                          viewMode === 'warranty' || persistedInWarrantyBySavedState(job, origJobs, new Date());
 
-                  const scfError = needsScfPayment(job);
-                  const laborError = needsLaborPayment(job);
+                        const rowClass = warrantyRow ? 'warranty' : statusClassFor(job.status);
 
-                  return (
-                    <tr
-                      key={job.id}
-                      className={rowClass}
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => {
-                        const tag = e.target.tagName;
-                        if (!['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'A'].includes(tag)) {
-                          navigate(`/job/${job.id}`);
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            navigate(`/job/${job.id}`);
-                          }
-                        }
-                      }}
-                      title="Open job editor"
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>
-                        <div
-                          className="cell-wrap"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(`/job/${job.id}`);
-                          }}
-                        >
-                          <span className="num-link">{job.job_number || job.id}</span>
-                        </div>
-                      </td>
+                        const scfError = needsScfPayment(job);
+                        const laborError = needsLaborPayment(job);
 
-                      <td>
-                        <div className="cell-wrap">
-                          {client?.company ? (
-                            <>
-                              <div style={{ fontWeight: 600 }}>{client.company}</div>
-                              <div style={{ color: '#6b7280', fontSize: 12 }}>
-                                {client.full_name || client.name || '—'}
+                        return (
+                          <tr
+                            key={job.id}
+                            className={rowClass}
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              const tag = e.target.tagName;
+                              if (!['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'A'].includes(tag)) {
+                                navigate(`/job/${job.id}`);
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  navigate(`/job/${job.id}`);
+                                }
+                              }
+                            }}
+                            title="Open job editor"
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <td>
+                              <div
+                                className="cell-wrap"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigate(`/job/${job.id}`);
+                                }}
+                              >
+                                <span className="num-link">{job.job_number || job.id}</span>
                               </div>
-                            </>
-                          ) : (
-                            <div>{client?.full_name || client?.name || '—'}</div>
-                          )}
-                        </div>
-                      </td>
+                            </td>
 
-                      <td>
-                        <div className="cell-wrap">{client?.phone || '—'}</div>
-                      </td>
-                      <td>
-                        <div className="cell-wrap">{formatAddress(client) || '—'}</div>
-                      </td>
-                      <td>
-                        <div className="cell-wrap">{job.system_type || '—'}</div>
-                      </td>
-                      <td>
-                        <div className="cell-wrap">{job.issue || '—'}</div>
-                      </td>
+                            <td>
+                              <div className="cell-wrap">
+                                {client?.company ? (
+                                  <>
+                                    <div style={{ fontWeight: 600 }}>{client.company}</div>
+                                    <div style={{ color: '#6b7280', fontSize: 12 }}>
+                                      {client.full_name || client.name || '—'}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <div>{client?.full_name || client?.name || '—'}</div>
+                                )}
+                              </div>
+                            </td>
 
-                      <td>
-                        <input
-                          type="number"
-                          value={job.scf || ''}
-                          onChange={(e) => handleChange(job.id, 'scf', e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </td>
+                            <td>
+                              <div className="cell-wrap">{client?.phone || '—'}</div>
+                            </td>
+                            <td>
+                              <div className="cell-wrap">{formatAddress(client) || '—'}</div>
+                            </td>
+                            <td>
+                              <div className="cell-wrap">{job.system_type || '—'}</div>
+                            </td>
+                            <td>
+                              <div className="cell-wrap">{job.issue || '—'}</div>
+                            </td>
 
-                      <td>
-                        <select
-                          className={scfError ? 'error' : ''}
-                          value={job.scf_payment_method || ''}
-                          onChange={(e) => handleChange(job.id, 'scf_payment_method', e.target.value || null)}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <option value="">—</option>
-                          <option value="cash">cash</option>
-                          <option value="zelle">Zelle</option>
-                          <option value="card">card</option>
-                          <option value="check">check</option>
-                          <option value="ACH">ACH</option>
-                          <option value="-">-</option>
-                        </select>
-                      </td>
+                            <td>
+                              <input
+                                type="number"
+                                value={job.scf || ''}
+                                onChange={(e) => handleChange(job.id, 'scf', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </td>
 
-                      <td>
-                        <input
-                          type="number"
-                          value={job.labor_price || ''}
-                          onChange={(e) => handleChange(job.id, 'labor_price', e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </td>
+                            <td>
+                              <select
+                                className={scfError ? 'error' : ''}
+                                value={job.scf_payment_method || ''}
+                                onChange={(e) =>
+                                  handleChange(job.id, 'scf_payment_method', e.target.value || null)
+                                }
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <option value="">—</option>
+                                <option value="cash">cash</option>
+                                <option value="zelle">Zelle</option>
+                                <option value="card">card</option>
+                                <option value="check">check</option>
+                                <option value="ACH">ACH</option>
+                                <option value="-">-</option>
+                              </select>
+                            </td>
 
-                      <td>
-                        <select
-                          className={laborError ? 'error' : ''}
-                          value={job.labor_payment_method || ''}
-                          onChange={(e) => handleChange(job.id, 'labor_payment_method', e.target.value || null)}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <option value="">—</option>
-                          <option value="cash">cash</option>
-                          <option value="zelle">Zelle</option>
-                          <option value="card">card</option>
-                          <option value="check">check</option>
-                          <option value="ACH">ACH</option>
-                          <option value="-">-</option>
-                        </select>
-                      </td>
+                            <td>
+                              <input
+                                type="number"
+                                value={job.labor_price || ''}
+                                onChange={(e) => handleChange(job.id, 'labor_price', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </td>
 
-                      <td>
-                        <select
-                          value={job.status || ''}
-                          onChange={(e) => handleChange(job.id, 'status', e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <option value="">—</option>
-                          {statuses.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
+                            <td>
+                              <select
+                                className={laborError ? 'error' : ''}
+                                value={job.labor_payment_method || ''}
+                                onChange={(e) =>
+                                  handleChange(job.id, 'labor_payment_method', e.target.value || null)
+                                }
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <option value="">—</option>
+                                <option value="cash">cash</option>
+                                <option value="zelle">Zelle</option>
+                                <option value="card">card</option>
+                                <option value="check">check</option>
+                                <option value="ACH">ACH</option>
+                                <option value="-">-</option>
+                              </select>
+                            </td>
 
-                      <td className="center">
-                        <button
-                          title="Save"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSave(job);
-                          }}
-                        >
-                          💾
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                            <td>
+                              <select
+                                value={job.status || ''}
+                                onChange={(e) => handleChange(job.id, 'status', e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <option value="">—</option>
+                                {statuses.map((s) => (
+                                  <option key={s} value={s}>
+                                    {s}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+
+                            <td className="center">
+                              <button
+                                title="Save"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSave(job);
+                                }}
+                              >
+                                💾
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
-      ))}
+        ))}
     </div>
   );
 };
@@ -868,4 +935,3 @@ function formatAddress(c) {
 function isDigits(s) {
   return /^\d+$/.test(String(s).trim());
 }
-
