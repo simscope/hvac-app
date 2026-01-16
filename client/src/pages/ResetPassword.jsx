@@ -1,5 +1,5 @@
 // src/pages/ResetPassword.jsx
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { supabase } from "../supabaseClient";
 
 export default function ResetPassword() {
@@ -21,12 +21,12 @@ export default function ResetPassword() {
     e.preventDefault();
     setError("");
 
-    const { data, error } = await supabase.auth.updateUser({
-      password: password,
+    const { error: updateError } = await supabase.auth.updateUser({
+      password,
     });
 
-    if (error) {
-      setError(error.message);
+    if (updateError) {
+      setError(updateError.message);
     } else {
       setDone(true);
     }
@@ -46,9 +46,7 @@ export default function ResetPassword() {
     <div style={{ padding: 30, maxWidth: 400 }}>
       <h2>Создать новый пароль</h2>
 
-      {error && (
-        <p style={{ color: "red", marginBottom: 10 }}>{error}</p>
-      )}
+      {error && <p style={{ color: "red", marginBottom: 10 }}>{error}</p>}
 
       <form onSubmit={handleSubmit}>
         <label>Новый пароль</label>
