@@ -4,6 +4,17 @@ import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 
+/* ✅ ВАЖНО: статусы ВНЕ компонента, чтобы не ломать deps useMemo */
+const STATUS_VALUES = [
+  'ReCall',
+  'Diagnosis',
+  'In progress',
+  'Parts ordered',
+  'Waiting for parts',
+  'To finish',
+  'Completed',
+];
+
 const AllJobsPage = () => {
   const [jobs, setJobs] = useState([]);
   const [origJobs, setOrigJobs] = useState([]);
@@ -22,16 +33,6 @@ const AllJobsPage = () => {
   const [showInvoiceList, setShowInvoiceList] = useState(true);
   const invoiceBoxRef = useRef(null);
   const navigate = useNavigate();
-
-  const statuses = [
-    'ReCall',
-    'Diagnosis',
-    'In progress',
-    'Parts ordered',
-    'Waiting for parts',
-    'To finish',
-    'Completed',
-  ];
 
   useEffect(() => {
     fetchAll();
@@ -176,7 +177,7 @@ const AllJobsPage = () => {
     XLSX.writeFile(wb, 'jobs.xlsx');
   };
 
-  /* ====== Filter / group ====== */
+  /* ====== Filter ====== */
   const filteredJobs = useMemo(() => {
     const now = new Date();
 
@@ -346,20 +347,18 @@ const AllJobsPage = () => {
     return uniq.slice(0, 10);
   }, [invoiceQuery, invoices, jobs, invByJob, jobsById]);
 
-  // ✅ grouped: Technician -> Status blocks (in statuses order)
+  // ✅ Technician -> Status blocks (in STATUS_VALUES order)
   const groupedByTechThenStatus = useMemo(() => {
     const techMap = {};
 
-    // 1) jobs по техникам
     for (const j of filteredJobs) {
       const techKey = j.technician_id || 'No technician';
       if (!techMap[techKey]) techMap[techKey] = [];
       techMap[techKey].push(j);
     }
 
-    // 2) внутри техника — по статусам (в порядке statuses)
     const result = {};
-    const order = statuses.map((s) => canonStatus(s));
+    const order = STATUS_VALUES.map((s) => canonStatus(s));
 
     Object.entries(techMap).forEach(([techKey, list]) => {
       const buckets = new Map(); // canonStatus -> array
@@ -371,17 +370,17 @@ const AllJobsPage = () => {
 
       const blocks = [];
 
-      // сначала в заданном порядке
+      // ✅ сначала в заданном порядке
       for (const stCanon of order) {
         const arr = buckets.get(stCanon);
         if (arr && arr.length) {
-          const label = statuses.find((s) => canonStatus(s) === stCanon) || stCanon;
+          const label = STATUS_VALUES.find((s) => canonStatus(s) === stCanon) || stCanon;
           blocks.push({ key: stCanon, label, jobs: arr });
           buckets.delete(stCanon);
         }
       }
 
-      // потом остальное
+      // ✅ потом остальные статусы
       const rest = Array.from(buckets.entries())
         .map(([k, arr]) => ({ key: k, label: k === '__no_status__' ? '— (No status)' : k, jobs: arr }))
         .sort((a, b) => String(a.label).localeCompare(String(b.label)));
@@ -390,7 +389,7 @@ const AllJobsPage = () => {
     });
 
     return result;
-  }, [filteredJobs, statuses]);
+  }, [filteredJobs]);
 
   const openSingleMatchOnEnter = (e) => {
     if (e.key === 'Enter' && invoiceMatches.length > 0) {
@@ -513,7 +512,7 @@ const AllJobsPage = () => {
       <div className="filters">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="all">All statuses</option>
-          {statuses.map((s) => (
+          {STATUS_VALUES.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
@@ -788,7 +787,7 @@ const AllJobsPage = () => {
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <option value="">—</option>
-                                {statuses.map((s) => (
+                                {STATUS_VALUES.map((s) => (
                                   <option key={s} value={s}>
                                     {s}
                                   </option>
