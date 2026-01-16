@@ -33,9 +33,13 @@ export default function DebtorsPage() {
 
   useEffect(() => {
     fetchAll();
+
+    // ✅ фикс warning: сохраняем ссылку один раз
+    const timers = saveTimersRef.current;
+
     return () => {
-      for (const t of saveTimersRef.current.values()) clearTimeout(t);
-      saveTimersRef.current.clear();
+      for (const t of (timers || new Map()).values()) clearTimeout(t);
+      (timers || new Map()).clear?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -67,14 +71,13 @@ export default function DebtorsPage() {
 
   const getClient = useCallback(
     (id) => (clients || []).find((c) => String(c.id) === String(id)) || null,
-    [clients]
+    [clients],
   );
 
   const getTechName = useCallback(
     (id) =>
-      (technicians || []).find((t) => String(t.id) === String(id))?.name ||
-      (id ? '—' : 'No technician'),
-    [technicians]
+      (technicians || []).find((t) => String(t.id) === String(id))?.name || (id ? '—' : 'No technician'),
+    [technicians],
   );
 
   const updateLocalJob = (id, patch) => {
@@ -121,10 +124,7 @@ export default function DebtorsPage() {
 
     const payload = {
       scf: job.scf !== '' && job.scf != null ? parseFloat(job.scf) : null,
-      labor_price:
-        job.labor_price !== '' && job.labor_price != null
-          ? parseFloat(job.labor_price)
-          : null,
+      labor_price: job.labor_price !== '' && job.labor_price != null ? parseFloat(job.labor_price) : null,
 
       scf_payment_method: job.scf_payment_method ?? null,
       labor_payment_method: job.labor_payment_method ?? null,
@@ -158,7 +158,7 @@ export default function DebtorsPage() {
     }
 
     setOrigJobs((prevOrig) =>
-      prevOrig.map((x) => (String(x.id) === String(jobId) ? { ...x, ...payload } : x))
+      prevOrig.map((x) => (String(x.id) === String(jobId) ? { ...x, ...payload } : x)),
     );
 
     setSavingById((p) => ({ ...p, [jobId]: false }));
@@ -237,9 +237,7 @@ export default function DebtorsPage() {
     return (jobs || [])
       .filter((j) => isDone(j.status))
       .filter((j) => isUnpaid(j))
-      .filter((j) =>
-        filterTech === 'all' ? true : String(j.technician_id) === String(filterTech)
-      )
+      .filter((j) => (filterTech === 'all' ? true : String(j.technician_id) === String(filterTech)))
       .filter((j) => {
         if (!txt) return true;
         const c = getClient(j.client_id);
@@ -248,13 +246,7 @@ export default function DebtorsPage() {
         const name = (c?.full_name || c?.name || '').toLowerCase();
         const phone = (c?.phone || '').toLowerCase();
         const jobNo = String(j.job_number || '').toLowerCase();
-        return (
-          company.includes(txt) ||
-          name.includes(txt) ||
-          phone.includes(txt) ||
-          addr.includes(txt) ||
-          jobNo.includes(txt)
-        );
+        return company.includes(txt) || name.includes(txt) || phone.includes(txt) || addr.includes(txt) || jobNo.includes(txt);
       })
       .sort((a, b) => {
         const A = Number(a.job_number || 0);
@@ -302,7 +294,7 @@ export default function DebtorsPage() {
       { v: 'ACH', label: 'ACH' },
       { v: '-', label: '-' },
     ],
-    []
+    [],
   );
 
   return (
@@ -327,48 +319,18 @@ export default function DebtorsPage() {
         }
         .err { color:#b91c1c; font-size:12px; margin-top:4px; }
 
-       .bl-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-}
+        .bl-row { display:inline-flex; align-items:center; gap:8px; white-space:nowrap; }
+        .bl-dot { width:10px; height:10px; border-radius:50%; background:#9ca3af; flex:0 0 10px; }
+        .bl-dot--yes { background:#dc2626; }
+        .bl-btn {
+          height:26px; padding:0 10px; border-radius:8px;
+          border:1px solid #e5e7eb; background:#fff; cursor:pointer;
+          font-weight:700; font-size:12px;
+        }
+        .bl-btn:hover { background:#f3f4f6; }
+        .bl-btn-danger { border-color:#fecaca; }
+        .bl-btn-danger:hover { background:#fee2e2; }
 
-.bl-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #9ca3af; /* серый */
-  flex: 0 0 10px;
-}
-
-.bl-dot--yes {
-  background: #dc2626; /* красный */
-}
-
-.bl-btn {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  cursor: pointer;
-  font-weight: 700;
-  font-size: 12px;
-}
-
-.bl-btn:hover {
-  background: #f3f4f6;
-}
-
-.bl-btn-danger {
-  border-color: #fecaca;
-}
-
-.bl-btn-danger:hover {
-  background: #fee2e2;
-}
-       
         .btn {
           height:28px; padding:0 10px; border-radius:8px;
           border:1px solid #e5e7eb; background:#fff; cursor:pointer;
@@ -384,11 +346,8 @@ export default function DebtorsPage() {
         .modal-backdrop {
           position:fixed; inset:0;
           background:rgba(0,0,0,0.5);
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          padding:16px;
-          z-index:9999;
+          display:flex; align-items:center; justify-content:center;
+          padding:16px; z-index:9999;
         }
         .modal {
           width:min(720px, 100%);
@@ -401,9 +360,7 @@ export default function DebtorsPage() {
         .modal-head {
           padding:12px 14px;
           border-bottom:1px solid #e5e7eb;
-          display:flex;
-          align-items:center;
-          justify-content:space-between;
+          display:flex; align-items:center; justify-content:space-between;
           gap:12px;
         }
         .modal-title { font-weight:900; font-size:16px; }
@@ -423,8 +380,7 @@ export default function DebtorsPage() {
         .modal-foot {
           padding:12px 14px;
           border-top:1px solid #e5e7eb;
-          display:flex;
-          justify-content:flex-end;
+          display:flex; justify-content:flex-end;
           gap:8px;
         }
         .muted { color:#6b7280; font-size:12px; }
@@ -437,7 +393,6 @@ export default function DebtorsPage() {
           role="dialog"
           aria-modal="true"
           onMouseDown={(e) => {
-            // клик вне окна закрывает
             if (e.target === e.currentTarget && !blSaving) closeBlacklistModal();
           }}
         >
@@ -461,8 +416,16 @@ export default function DebtorsPage() {
                 disabled={blSaving}
               />
 
-              {blError ? <div className="err" style={{ marginTop: 8 }}>⚠ {blError}</div> : null}
-              {blSaving ? <div className="muted" style={{ marginTop: 8 }}>Saving…</div> : null}
+              {blError ? (
+                <div className="err" style={{ marginTop: 8 }}>
+                  ⚠ {blError}
+                </div>
+              ) : null}
+              {blSaving ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Saving…
+                </div>
+              ) : null}
             </div>
 
             <div className="modal-foot">
@@ -526,19 +489,21 @@ export default function DebtorsPage() {
             return an.localeCompare(bn);
           })
           .map(([techId, list]) => {
-            const title =
-              techId === 'No technician'
-                ? '🧾 No technician'
-                : `👨‍🔧 ${getTechName(techId)}`;
+            const title = techId === 'No technician' ? '🧾 No technician' : `👨‍🔧 ${getTechName(techId)}`;
+
+            const techTotal = list.reduce((sum, j) => sum + debtAmount(j), 0);
 
             return (
               <div key={techId} style={{ marginBottom: 18 }}>
-                <div style={{ fontSize: 18, fontWeight: 900, margin: '14px 0 8px' }}>{title}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+                  <div style={{ fontSize: 18, fontWeight: 900, margin: '14px 0 8px' }}>{title}</div>
+                  <div style={{ fontSize: 12, color: '#334155', fontWeight: 900 }}>Total: {money(techTotal)}</div>
+                </div>
 
                 <div className="overflow-x-auto">
                   <table className="jobs-table">
                     <colgroup>
-                      <col style={{ width: 70 }} />
+                      <col style={{ width: 90 }} />
                       <col style={{ width: 240 }} />
                       <col style={{ width: 120 }} />
                       <col style={{ width: 260 }} />
@@ -575,6 +540,7 @@ export default function DebtorsPage() {
                         const laborErr = needsLaborPayment(job);
 
                         const err = errorById[job.id] || '';
+                        const saving = !!savingById[job.id]; // ✅ savingById теперь используется (eslint ok)
 
                         const blVal = client?.blacklist;
                         const isBl = !!(blVal && String(blVal).trim() !== '');
@@ -611,11 +577,12 @@ export default function DebtorsPage() {
                                 }}
                               >
                                 <span className="num-link">{job.job_number || job.id}</span>
+
                                 {job.archived_at && (
-                                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                                    archived
-                                  </div>
+                                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>archived</div>
                                 )}
+
+                                {saving && <div style={{ fontSize: 11, color: '#0f172a', marginTop: 2 }}>Saving…</div>}
                                 {err ? <div className="err">⚠ {err}</div> : null}
                               </div>
                             </td>
@@ -630,9 +597,7 @@ export default function DebtorsPage() {
                                     </div>
                                   </>
                                 ) : (
-                                  <div style={{ fontWeight: 700 }}>
-                                    {client?.full_name || client?.name || '—'}
-                                  </div>
+                                  <div style={{ fontWeight: 700 }}>{client?.full_name || client?.name || '—'}</div>
                                 )}
                               </div>
                             </td>
@@ -657,6 +622,7 @@ export default function DebtorsPage() {
                               <input
                                 type="number"
                                 value={job.scf || ''}
+                                disabled={saving}
                                 onChange={(e) => {
                                   e.stopPropagation();
                                   updateLocalJob(job.id, { scf: e.target.value });
@@ -671,11 +637,10 @@ export default function DebtorsPage() {
                               <select
                                 className={scfErr ? 'error' : ''}
                                 value={job.scf_payment_method || ''}
+                                disabled={saving}
                                 onChange={(e) => {
                                   e.stopPropagation();
-                                  updateLocalJob(job.id, {
-                                    scf_payment_method: e.target.value || null,
-                                  });
+                                  updateLocalJob(job.id, { scf_payment_method: e.target.value || null });
                                   scheduleAutosave(job.id, 'scf_payment_method');
                                 }}
                                 onClick={(e) => e.stopPropagation()}
@@ -693,6 +658,7 @@ export default function DebtorsPage() {
                               <input
                                 type="number"
                                 value={job.labor_price || ''}
+                                disabled={saving}
                                 onChange={(e) => {
                                   e.stopPropagation();
                                   updateLocalJob(job.id, { labor_price: e.target.value });
@@ -707,11 +673,10 @@ export default function DebtorsPage() {
                               <select
                                 className={laborErr ? 'error' : ''}
                                 value={job.labor_payment_method || ''}
+                                disabled={saving}
                                 onChange={(e) => {
                                   e.stopPropagation();
-                                  updateLocalJob(job.id, {
-                                    labor_payment_method: e.target.value || null,
-                                  });
+                                  updateLocalJob(job.id, { labor_payment_method: e.target.value || null });
                                   scheduleAutosave(job.id, 'labor_payment_method');
                                 }}
                                 onClick={(e) => e.stopPropagation()}
@@ -726,47 +691,37 @@ export default function DebtorsPage() {
                             </td>
 
                             <td onClick={(e) => e.stopPropagation()}>
-  {!client ? null : (
-    <div className="bl-row">
-      <span
-        className={`bl-dot ${isBl ? 'bl-dot--yes' : ''}`}
-        title={isBl ? String(client.blacklist) : 'Not blacklisted'}
-      />
+                              {!client ? null : (
+                                <div className="bl-row">
+                                  <span
+                                    className={`bl-dot ${isBl ? 'bl-dot--yes' : ''}`}
+                                    title={isBl ? String(client.blacklist) : 'Not blacklisted'}
+                                  />
 
-      {!isBl ? (
-        <button
-          className="bl-btn bl-btn-danger"
-          onClick={() => openBlacklistModal(client, '')}
-        >
-          Blacklist
-        </button>
-      ) : (
-        <>
-          <button
-            className="bl-btn"
-            onClick={() => openBlacklistModal(client, String(client.blacklist))}
-          >
-            Edit
-          </button>
-          <button
-            className="bl-btn bl-btn-danger"
-            onClick={() => clearBlacklist(client.id)}
-          >
-            Clear
-          </button>
-        </>
-      )}
-    </div>
-  )}
-</td>
+                                  {!isBl ? (
+                                    <button className="bl-btn bl-btn-danger" onClick={() => openBlacklistModal(client, '')}>
+                                      Blacklist
+                                    </button>
+                                  ) : (
+                                    <>
+                                      <button className="bl-btn" onClick={() => openBlacklistModal(client, String(client.blacklist))}>
+                                        Edit
+                                      </button>
+                                      <button className="bl-btn bl-btn-danger" onClick={() => clearBlacklist(client.id)}>
+                                        Clear
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
 
-                  <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }}>
-                   </div>
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#6b7280' }} />
                 </div>
               </div>
             );
@@ -790,16 +745,7 @@ function canonStatus(val) {
   if (v === 'completed' || v === 'complete' || v === 'done') return 'completed';
   if (v === 'canceled' || v === 'cancelled') return 'canceled';
   if (
-    [
-      'recall',
-      'diagnosis',
-      'in progress',
-      'parts ordered',
-      'waiting for parts',
-      'to finish',
-      'completed',
-      'canceled',
-    ].includes(raw)
+    ['recall', 'diagnosis', 'in progress', 'parts ordered', 'waiting for parts', 'to finish', 'completed', 'canceled'].includes(raw)
   )
     return raw;
   return v;
@@ -852,17 +798,7 @@ function origById(id, origJobs) {
 
 function formatAddress(c) {
   if (!c) return '';
-  const parts = [
-    c.address,
-    c.address_line1,
-    c.address_line2,
-    c.street,
-    c.city,
-    c.state,
-    c.region,
-    c.zip,
-    c.postal_code,
-  ].filter(Boolean);
+  const parts = [c.address, c.address_line1, c.address_line2, c.street, c.city, c.state, c.region, c.zip, c.postal_code].filter(Boolean);
   return parts.join(', ');
 }
 
