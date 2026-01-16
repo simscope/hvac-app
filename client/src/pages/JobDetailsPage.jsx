@@ -67,7 +67,7 @@ const ROW = { display: 'grid', gridTemplateColumns: '180px 1fr', gap: 10, alignI
 const INPUT = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px', width: '100%' };
 const SELECT = { ...INPUT };
 const TA = { ...INPUT, minHeight: 80, resize: 'vertical' };
-const TA_BIG = { ...INPUT, minHeight: 110, resize: 'vertical' };
+// ✅ TA_BIG был unused — убрали, чтобы ESLint не ругался
 
 const H1 = { fontWeight: 800, fontSize: 22 };
 const H2 = { fontWeight: 700, fontSize: 16, marginBottom: 8 };
