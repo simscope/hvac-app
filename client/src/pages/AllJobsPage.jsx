@@ -4,7 +4,7 @@ import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 
-/* ✅ ВАЖНО: статусы ВНЕ компонента, чтобы не ломать deps useMemo */
+/* ✅ ВАЖНО: статусы ВНЕ компонента */
 const STATUS_VALUES = [
   'ReCall',
   'Diagnosis',
@@ -34,8 +34,26 @@ const AllJobsPage = () => {
   const invoiceBoxRef = useRef(null);
   const navigate = useNavigate();
 
+  // ✅ autosave infra
+  const saveTimersRef = useRef(new Map()); // jobId -> timerId
+  const [savingById, setSavingById] = useState({}); // jobId -> bool
+  const [errorById, setErrorById] = useState({}); // jobId -> string
+
+  // ✅ FIX stale closures (autosave timers must see latest jobs/origJobs)
+  const jobsRef = useRef([]);
+  const origJobsRef = useRef([]);
+
+  useEffect(() => {
+    jobsRef.current = jobs || [];
+  }, [jobs]);
+
+  useEffect(() => {
+    origJobsRef.current = origJobs || [];
+  }, [origJobs]);
+
   useEffect(() => {
     fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -46,6 +64,15 @@ const AllJobsPage = () => {
     };
     document.addEventListener('mousedown', onClickOutside);
     return () => document.removeEventListener('mousedown', onClickOutside);
+  }, []);
+
+  // cleanup timers on unmount
+  useEffect(() => {
+    const timers = saveTimersRef.current;
+    return () => {
+      for (const t of (timers || new Map()).values()) clearTimeout(t);
+      (timers || new Map()).clear?.();
+    };
   }, []);
 
   const fetchAll = async () => {
@@ -69,11 +96,7 @@ const AllJobsPage = () => {
     setLoading(false);
   };
 
-  const getClient = useCallback((id) => clients.find((c) => c.id === id), [clients]);
-
-  const handleChange = (id, field, value) => {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, [field]: value } : j)));
-  };
+  const getClient = useCallback((id) => (clients || []).find((c) => c.id === id), [clients]);
 
   const toISO = (val) => {
     if (!val) return null;
@@ -84,9 +107,37 @@ const AllJobsPage = () => {
     return val;
   };
 
-  /* ====== Save ====== */
-  const handleSave = async (job) => {
-    const prev = origById(job.id, origJobs) || {};
+  const origByIdLocal = (id) => (origJobsRef.current || []).find((x) => String(x.id) === String(id)) || null;
+
+  const scheduleAutosave = (jobId, reason = 'change') => {
+    const old = saveTimersRef.current.get(jobId);
+    if (old) clearTimeout(old);
+
+    const t = setTimeout(() => {
+      doSave(jobId, reason);
+    }, 650);
+
+    saveTimersRef.current.set(jobId, t);
+  };
+
+  const updateLocalJob = (id, patch) => {
+    setJobs((prev) => prev.map((j) => (String(j.id) === String(id) ? { ...j, ...patch } : j)));
+  };
+
+  const handleChange = (id, field, value, autosaveReason = null) => {
+    updateLocalJob(id, { [field]: value });
+    if (autosaveReason) scheduleAutosave(id, autosaveReason);
+  };
+
+  /* ====== Save (single job by id, autosave-safe) ====== */
+  const doSave = async (jobId, reason = 'autosave') => {
+    const job = (jobsRef.current || []).find((j) => String(j.id) === String(jobId));
+    if (!job) return;
+
+    setSavingById((p) => ({ ...p, [jobId]: true }));
+    setErrorById((p) => ({ ...p, [jobId]: '' }));
+
+    const prev = origByIdLocal(jobId) || {};
     const wasDone = isDone(prev.status);
     const willBeDone = isDone(job.status);
 
@@ -105,18 +156,35 @@ const AllJobsPage = () => {
       payload.completed_at = new Date().toISOString();
     }
 
-    let { error } = await supabase.from('jobs').update(payload).eq('id', job.id);
+    let { error } = await supabase.from('jobs').update(payload).eq('id', jobId);
+
+    // если completed_at column нет/readonly и т.п.
     if (error && String(error.message || '').toLowerCase().includes('completed_at')) {
       const { completed_at, ...rest } = payload;
-      ({ error } = await supabase.from('jobs').update(rest).eq('id', job.id));
+      ({ error } = await supabase.from('jobs').update(rest).eq('id', jobId));
     }
+
     if (error) {
-      console.error('Save error (jobs):', error, payload);
-      alert('Failed to save');
+      console.error('Autosave error:', reason, error, payload);
+      setErrorById((p) => ({ ...p, [jobId]: (error?.message || 'Failed to save').toString() }));
+      setSavingById((p) => ({ ...p, [jobId]: false }));
       return;
     }
+
+    // обновим origJobs локально, чтобы warranty/archive логика не дергалась на старом
+    setOrigJobs((prevOrig) =>
+      (prevOrig || []).map((x) => (String(x.id) === String(jobId) ? { ...x, ...payload } : x)),
+    );
+
+    setSavingById((p) => ({ ...p, [jobId]: false }));
+
+    // подхватим свежую базу (как у тебя было)
     await fetchAll();
-    alert('Saved');
+  };
+
+  /* ====== manual Save (kept for button) ====== */
+  const handleSave = async (job) => {
+    await doSave(job.id, 'manual');
   };
 
   const resetFilters = () => {
@@ -148,49 +216,16 @@ const AllJobsPage = () => {
   }, [jobs]);
 
   /* ====== Export ====== */
-  const handleExport = () => {
-    const rows = filteredJobs.map((job) => {
-      const client = getClient(job.client_id);
-      const tech = technicians.find((t) => String(t.id) === String(job.technician_id));
-      const inv = invByJob.get(job.id);
-      return {
-        Job: job.job_number || job.id,
-        Invoice: inv?.invoice_no ?? '',
-        Company: client?.company || '',
-        Client: client?.name || client?.full_name || '',
-        Phone: client?.phone || '',
-        Address: formatAddress(client),
-        SCF: job.scf,
-        'SCF payment': job.scf_payment_method,
-        Labor: job.labor_price,
-        'Labor payment': job.labor_payment_method,
-        Status: job.status,
-        'Completed at': job.completed_at || '',
-        Technician: tech?.name || '',
-        System: job.system_type,
-        Issue: job.issue,
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Jobs');
-    XLSX.writeFile(wb, 'jobs.xlsx');
-  };
-
-  /* ====== Filter ====== */
   const filteredJobs = useMemo(() => {
     const now = new Date();
 
-    // ✅ если что-то введено в поиск — ищем по ВСЕЙ базе, игнорируя viewMode
     const hasGlobalSearch =
       (searchText && searchText.trim().length > 0) || (invoiceQuery && invoiceQuery.trim().length > 0);
 
     return (jobs || [])
       .filter((j) => {
-        // ✅ когда идёт поиск — НЕ режем active/warranty/archive вообще
         if (hasGlobalSearch) return true;
 
-        // ====== старое поведение (когда поиска нет) ======
         const o = origById(j.id, origJobs) || j;
         const recall = isRecall(o.status);
 
@@ -296,6 +331,35 @@ const AllJobsPage = () => {
     getClient,
   ]);
 
+  const handleExport = () => {
+    const rows = filteredJobs.map((job) => {
+      const client = getClient(job.client_id);
+      const tech = technicians.find((t) => String(t.id) === String(job.technician_id));
+      const inv = invByJob.get(job.id);
+      return {
+        Job: job.job_number || job.id,
+        Invoice: inv?.invoice_no ?? '',
+        Company: client?.company || '',
+        Client: client?.name || client?.full_name || '',
+        Phone: client?.phone || '',
+        Address: formatAddress(client),
+        SCF: job.scf,
+        'SCF payment': job.scf_payment_method,
+        Labor: job.labor_price,
+        'Labor payment': job.labor_payment_method,
+        Status: job.status,
+        'Completed at': job.completed_at || '',
+        Technician: tech?.name || '',
+        System: job.system_type,
+        Issue: job.issue,
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Jobs');
+    XLSX.writeFile(wb, 'jobs.xlsx');
+  };
+
   const invoiceMatches = useMemo(() => {
     const q = invoiceQuery.trim();
     if (!q) return [];
@@ -361,7 +425,7 @@ const AllJobsPage = () => {
     const order = STATUS_VALUES.map((s) => canonStatus(s));
 
     Object.entries(techMap).forEach(([techKey, list]) => {
-      const buckets = new Map(); // canonStatus -> array
+      const buckets = new Map();
       for (const j of list) {
         const st = canonStatus(j.status) || '__no_status__';
         if (!buckets.has(st)) buckets.set(st, []);
@@ -370,7 +434,6 @@ const AllJobsPage = () => {
 
       const blocks = [];
 
-      // ✅ сначала в заданном порядке
       for (const stCanon of order) {
         const arr = buckets.get(stCanon);
         if (arr && arr.length) {
@@ -380,7 +443,6 @@ const AllJobsPage = () => {
         }
       }
 
-      // ✅ потом остальные статусы
       const rest = Array.from(buckets.entries())
         .map(([k, arr]) => ({ key: k, label: k === '__no_status__' ? '— (No status)' : k, jobs: arr }))
         .sort((a, b) => String(a.label).localeCompare(String(b.label)));
@@ -505,6 +567,9 @@ const AllJobsPage = () => {
           border-radius:999px;
           padding:2px 10px;
         }
+
+        .err { color:#b91c1c; font-size:12px; margin-top:4px; }
+        .saving { font-size:11px; color:#0f172a; margin-top:2px; }
       `}</style>
 
       <h1 className="text-2xl font-bold mb-2">📋 All Jobs</h1>
@@ -628,7 +693,7 @@ const AllJobsPage = () => {
                       <col style={{ width: 130 }} />
                       <col style={{ width: 90 }} />
                       <col style={{ width: 130 }} />
-                      <col style={{ width: 160 }} />
+                      <col style={{ width: 190 }} />
                       <col style={{ width: 50 }} />
                     </colgroup>
 
@@ -660,6 +725,9 @@ const AllJobsPage = () => {
 
                         const scfError = needsScfPayment(job);
                         const laborError = needsLaborPayment(job);
+
+                        const saving = !!savingById[job.id];
+                        const err = errorById[job.id] || '';
 
                         return (
                           <tr
@@ -693,6 +761,8 @@ const AllJobsPage = () => {
                                 }}
                               >
                                 <span className="num-link">{job.job_number || job.id}</span>
+                                {saving ? <div className="saving">Saving…</div> : null}
+                                {err ? <div className="err">⚠ {err}</div> : null}
                               </div>
                             </td>
 
@@ -728,8 +798,13 @@ const AllJobsPage = () => {
                               <input
                                 type="number"
                                 value={job.scf || ''}
-                                onChange={(e) => handleChange(job.id, 'scf', e.target.value)}
+                                disabled={saving}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleChange(job.id, 'scf', e.target.value, 'scf');
+                                }}
                                 onClick={(e) => e.stopPropagation()}
+                                onBlur={() => doSave(job.id, 'scf-blur')}
                               />
                             </td>
 
@@ -737,10 +812,13 @@ const AllJobsPage = () => {
                               <select
                                 className={scfError ? 'error' : ''}
                                 value={job.scf_payment_method || ''}
-                                onChange={(e) =>
-                                  handleChange(job.id, 'scf_payment_method', e.target.value || null)
-                                }
+                                disabled={saving}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleChange(job.id, 'scf_payment_method', e.target.value || null, 'scf_payment');
+                                }}
                                 onClick={(e) => e.stopPropagation()}
+                                onBlur={() => doSave(job.id, 'scf_payment-blur')}
                               >
                                 <option value="">—</option>
                                 <option value="cash">cash</option>
@@ -756,8 +834,13 @@ const AllJobsPage = () => {
                               <input
                                 type="number"
                                 value={job.labor_price || ''}
-                                onChange={(e) => handleChange(job.id, 'labor_price', e.target.value)}
+                                disabled={saving}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleChange(job.id, 'labor_price', e.target.value, 'labor_price');
+                                }}
                                 onClick={(e) => e.stopPropagation()}
+                                onBlur={() => doSave(job.id, 'labor_price-blur')}
                               />
                             </td>
 
@@ -765,10 +848,13 @@ const AllJobsPage = () => {
                               <select
                                 className={laborError ? 'error' : ''}
                                 value={job.labor_payment_method || ''}
-                                onChange={(e) =>
-                                  handleChange(job.id, 'labor_payment_method', e.target.value || null)
-                                }
+                                disabled={saving}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  handleChange(job.id, 'labor_payment_method', e.target.value || null, 'labor_payment');
+                                }}
                                 onClick={(e) => e.stopPropagation()}
+                                onBlur={() => doSave(job.id, 'labor_payment-blur')}
                               >
                                 <option value="">—</option>
                                 <option value="cash">cash</option>
@@ -783,8 +869,14 @@ const AllJobsPage = () => {
                             <td>
                               <select
                                 value={job.status || ''}
-                                onChange={(e) => handleChange(job.id, 'status', e.target.value)}
+                                disabled={saving}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  // ✅ вот оно: статус теперь автосохраняется
+                                  handleChange(job.id, 'status', e.target.value || null, 'status');
+                                }}
                                 onClick={(e) => e.stopPropagation()}
+                                onBlur={() => doSave(job.id, 'status-blur')}
                               >
                                 <option value="">—</option>
                                 {STATUS_VALUES.map((s) => (
@@ -798,6 +890,7 @@ const AllJobsPage = () => {
                             <td className="center">
                               <button
                                 title="Save"
+                                disabled={saving}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleSave(job);
@@ -886,7 +979,7 @@ function needsLaborPayment(j) {
 }
 
 function origById(id, origJobs) {
-  return origJobs.find((x) => x.id === id) || null;
+  return (origJobs || []).find((x) => String(x.id) === String(id)) || null;
 }
 
 function persistedFullyPaid(j, origJobs) {
