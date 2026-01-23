@@ -24,6 +24,18 @@ export default function DebtorsPage() {
   const [errorById, setErrorById] = useState({}); // jobId -> string
   const [keepVisibleById, setKeepVisibleById] = useState({}); // keep row visible until save completes
 
+  // ✅ FIX: stale closures for autosave timers (always read latest state)
+  const jobsRef = useRef([]);
+  const origJobsRef = useRef([]);
+
+  useEffect(() => {
+    jobsRef.current = jobs || [];
+  }, [jobs]);
+
+  useEffect(() => {
+    origJobsRef.current = origJobs || [];
+  }, [origJobs]);
+
   // blacklist modal
   const [blOpen, setBlOpen] = useState(false);
   const [blClientId, setBlClientId] = useState(null);
@@ -112,13 +124,14 @@ export default function DebtorsPage() {
   };
 
   const doSave = async (jobId, reason = 'autosave') => {
-    const job = (jobs || []).find((j) => String(j.id) === String(jobId));
+    // ✅ IMPORTANT: always read fresh data (timer-safe)
+    const job = (jobsRef.current || []).find((j) => String(j.id) === String(jobId));
     if (!job) return;
 
     setSavingById((p) => ({ ...p, [jobId]: true }));
     setErrorById((p) => ({ ...p, [jobId]: '' }));
 
-    const prev = origById(jobId, origJobs) || {};
+    const prev = origById(jobId, origJobsRef.current) || {};
     const wasDone = isDone(prev.status);
     const willBeDone = isDone(job.status);
 
@@ -246,7 +259,13 @@ export default function DebtorsPage() {
         const name = (c?.full_name || c?.name || '').toLowerCase();
         const phone = (c?.phone || '').toLowerCase();
         const jobNo = String(j.job_number || '').toLowerCase();
-        return company.includes(txt) || name.includes(txt) || phone.includes(txt) || addr.includes(txt) || jobNo.includes(txt);
+        return (
+          company.includes(txt) ||
+          name.includes(txt) ||
+          phone.includes(txt) ||
+          addr.includes(txt) ||
+          jobNo.includes(txt)
+        );
       })
       .sort((a, b) => {
         const A = Number(a.job_number || 0);
@@ -540,7 +559,7 @@ export default function DebtorsPage() {
                         const laborErr = needsLaborPayment(job);
 
                         const err = errorById[job.id] || '';
-                        const saving = !!savingById[job.id]; // ✅ savingById теперь используется (eslint ok)
+                        const saving = !!savingById[job.id];
 
                         const blVal = client?.blacklist;
                         const isBl = !!(blVal && String(blVal).trim() !== '');
