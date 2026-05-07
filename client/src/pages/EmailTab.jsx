@@ -1,8 +1,7 @@
 // src/pages/EmailTab.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { supabase, FUNCTIONS_URL, SUPABASE_ANON_KEY } from '../supabaseClient';
+import { supabase } from '../supabaseClient';
 
-/* ====== КОНСТАНТЫ ====== */
 const SIGNATURE =
   `\n\n—\nSim HVAC & Appliance repair\n📍 New York City, NY\n📞 Phone: (929) 412-9042\n🌐 Website: https://appliance-hvac-repair.com\nHVAC • Appliance Repair\nServices Licensed & Insured | Serving NYC and NJ`;
 
@@ -19,7 +18,6 @@ Mailing address: 1587E 19th St Apt6F Brooklyn, NY 11230`;
 
 const ACCOUNT_EMAIL = 'simscope.office@gmail.com';
 
-/* ====== СТИЛИ ====== */
 const colors = {
   border: '#e5e7eb',
   subtext: '#64748b',
@@ -32,13 +30,7 @@ const colors = {
 
 const styles = {
   app: { display: 'grid', gridTemplateColumns: '260px 1fr', height: 'calc(100vh - 120px)' },
-
-  left: {
-    borderRight: `1px solid ${colors.border}`,
-    background: colors.bg,
-    padding: 12,
-    overflow: 'auto',
-  },
+  left: { borderRight: `1px solid ${colors.border}`, background: colors.bg, padding: 12, overflow: 'auto' },
   account: { fontSize: 13, color: colors.subtext, marginBottom: 8, paddingLeft: 4 },
   compose: {
     display: 'inline-flex',
@@ -73,7 +65,6 @@ const styles = {
     cursor: 'pointer',
   },
   error: { color: colors.danger, marginTop: 8, whiteSpace: 'pre-wrap' },
-
   right: { display: 'flex', flexDirection: 'column', minWidth: 0, background: colors.white },
   topbar: {
     display: 'flex',
@@ -126,7 +117,6 @@ const styles = {
   subject: { color: '#111827' },
   snippet: { color: colors.subtext, marginLeft: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   date: { textAlign: 'right', color: colors.subtext },
-
   overlayBase: {
     position: 'fixed',
     inset: 0,
@@ -172,11 +162,7 @@ const styles = {
     zIndex: 1,
   },
   readMeta: { color: colors.subtext, margin: '6px 0 8px' },
-  readBody: {
-    flex: 1,
-    minHeight: 0,
-    overflow: 'auto',
-  },
+  readBody: { flex: 1, minHeight: 0, overflow: 'auto' },
   formRow: { marginBottom: 10 },
   input: { width: '100%', padding: 10, borderRadius: 8, border: `1px solid ${colors.border}` },
   btnLine: { display: 'flex', gap: 8, marginTop: 8 },
@@ -214,6 +200,16 @@ const LABELS = [
   { id: 'spam', title: 'Спам', icon: '🚫' },
 ];
 
+async function invokeFn(fnName, body = {}) {
+  const { data, error } = await supabase.functions.invoke(fnName, { body });
+
+  if (error) {
+    throw new Error(error.message || JSON.stringify(error));
+  }
+
+  return data;
+}
+
 function hydrateCidImages(message) {
   if (!message?.html || !Array.isArray(message.attachments)) return message;
   const urlMap = {};
@@ -222,18 +218,23 @@ function hydrateCidImages(message) {
   for (const a of message.attachments) {
     if (!a?.contentId || !a?.dataBase64) continue;
     const cid = String(a.contentId).replace(/[<>]/g, '');
+
     try {
       const bin = atob(a.dataBase64);
       const bytes = new Uint8Array(bin.length);
+
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
       const blob = new Blob([bytes], { type: a.mimeType || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
+
       urlMap[cid] = url;
       revoke.push(url);
     } catch {}
   }
 
   let html = message.html;
+
   html = html.replace(/src=["']cid:([^"']+)["']/gi, (m, cidRaw) => {
     const key = String(cidRaw).replace(/[<>]/g, '');
     const url = urlMap[key];
@@ -277,12 +278,15 @@ function quoteBlock(s) {
 function safeBase64ToBlob(base64, mimeType = 'application/octet-stream') {
   const bin = atob(base64 || '');
   const bytes = new Uint8Array(bin.length);
+
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
   return new Blob([bytes], { type: mimeType });
 }
 
 function extFromMime(mime) {
   const m = String(mime || '').toLowerCase();
+
   if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg';
   if (m === 'image/png') return 'png';
   if (m === 'image/gif') return 'gif';
@@ -292,21 +296,25 @@ function extFromMime(mime) {
   if (m === 'application/zip') return 'zip';
   if (m.includes('wordprocessingml')) return 'docx';
   if (m.includes('spreadsheetml')) return 'xlsx';
+
   return '';
 }
 
 function ensureFilename(name, mimeType) {
   let fn = name && String(name).trim() ? String(name).trim() : 'attachment';
+
   if (!/\.[A-Za-z0-9]{1,8}$/.test(fn)) {
     const ext = extFromMime(mimeType);
     if (ext) fn = `${fn}.${ext}`;
   }
+
   return fn;
 }
 
 function downloadBlob(blob, filename = 'attachment') {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
+
   a.href = url;
   a.download = filename;
   document.body.appendChild(a);
@@ -323,6 +331,7 @@ function downloadBlob(blob, filename = 'attachment') {
 function fmtBytes(n) {
   const x = Number(n);
   if (!Number.isFinite(x) || x <= 0) return '';
+
   const units = ['B', 'KB', 'MB', 'GB'];
   let v = x;
   let i = 0;
@@ -339,6 +348,7 @@ function fmtBytes(n) {
 function fileToBase64DataUrl(file) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
+
     fr.onerror = () => reject(new Error('File read error'));
     fr.onload = () => resolve(String(fr.result || ''));
     fr.readAsDataURL(file);
@@ -349,6 +359,7 @@ function todayRange() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
   return { start, end };
 }
 
@@ -378,6 +389,7 @@ function buildGroups(list) {
     }
 
     const key = monthKey(dd);
+
     if (!map.has(key)) {
       map.set(key, {
         key,
@@ -396,9 +408,6 @@ function buildGroups(list) {
 
 export default function EmailTab() {
   const [folder, setFolder] = useState('inbox');
-
-  // q = реальный запрос, который уже отправлен в Edge Function
-  // searchDraft = то, что пользователь печатает в поле поиска
   const [q, setQ] = useState('');
   const [searchDraft, setSearchDraft] = useState('');
 
@@ -413,6 +422,7 @@ export default function EmailTab() {
   const [includeSignature, setIncludeSignature] = useState(true);
   const [includePaymentOptions, setIncludePaymentOptions] = useState(false);
   const [sending, setSending] = useState(false);
+
   const toRef = useRef();
   const subjectRef = useRef();
   const textRef = useRef();
@@ -431,44 +441,6 @@ export default function EmailTab() {
     sent: new Set(),
   });
 
-  const API = useMemo(
-    () => ({
-      list: `${FUNCTIONS_URL}/gmail_list`,
-      send: `${FUNCTIONS_URL}/gmail_send`,
-      get: `${FUNCTIONS_URL}/gmail_get`,
-      attach: `${FUNCTIONS_URL}/gmail_attachment`,
-      oauthStart: `${FUNCTIONS_URL}/oauth_google_start`,
-    }),
-    [],
-  );
-
-  async function getSessionHeaders(extraHeaders = {}) {
-    const { data: { session } = {} } = await supabase.auth.getSession();
-
-    if (!session?.access_token) {
-      throw new Error('Нет сессии Supabase. Войдите и повторите.');
-    }
-
-    return {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${session.access_token}`,
-      ...extraHeaders,
-    };
-  }
-
-  async function authedFetchJson(url, { method = 'POST', bodyObj = null, headers = {} } = {}) {
-    const baseHeaders = await getSessionHeaders({
-      'Content-Type': 'application/json',
-      ...headers,
-    });
-
-    return fetch(url, {
-      method,
-      headers: baseHeaders,
-      body: bodyObj ? JSON.stringify(bodyObj) : undefined,
-    });
-  }
-
   async function loadList({ append = false, pageToken = null, searchQuery = q } = {}) {
     try {
       setError('');
@@ -480,28 +452,22 @@ export default function EmailTab() {
         setNextPageToken(null);
       }
 
-      const r = await authedFetchJson(API.list, {
-        method: 'POST',
-        bodyObj: {
-          folder,
-          q: searchQuery,
-          pageToken,
-          maxResults: 10,
-        },
+      const data = await invokeFn('gmail_list', {
+        folder,
+        q: searchQuery,
+        pageToken,
+        maxResults: 10,
       });
 
-      if (!r.ok) {
-        const txt = await r.text();
-
-        if (r.status === 404 && txt.includes('MAIL_ACCOUNT_NOT_FOUND')) {
+      if (!data?.ok) {
+        if (data?.code === 'MAIL_ACCOUNT_NOT_FOUND') {
           setConnected(false);
           throw new Error('Аккаунт Gmail не привязан.');
         }
 
-        throw new Error(`gmail_list: ${r.status} ${txt}`);
+        throw new Error(data?.error || 'gmail_list error');
       }
 
-      const data = await r.json();
       const emails = Array.isArray(data?.emails) ? data.emails : [];
       const token = data?.nextPageToken || null;
 
@@ -523,22 +489,16 @@ export default function EmailTab() {
     }
   }
 
-  // Загружаем письма только при смене папки.
-  // Поиск НЕ запускается на каждую букву.
   useEffect(() => {
     setQ('');
     setSearchDraft('');
     loadList({ append: false, pageToken: null, searchQuery: '' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder]);
 
-  // Первый запуск
   useEffect(() => {
     loadList({ append: false, pageToken: null, searchQuery: '' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Для sent лениво догружаем "Кому", максимум 10, чтобы не убивать quota.
   useEffect(() => {
     if (folder !== 'sent' || !Array.isArray(list) || list.length === 0) return;
 
@@ -550,14 +510,7 @@ export default function EmailTab() {
         const pairs = await Promise.all(
           need.map(async (m) => {
             try {
-              const r = await authedFetchJson(API.get, {
-                method: 'POST',
-                bodyObj: { id: m.id },
-              });
-
-              if (!r.ok) throw new Error(await r.text());
-
-              const data = await r.json();
+              const data = await invokeFn('gmail_get', { id: m.id });
               return [m.id, data?.to || ''];
             } catch {
               return [m.id, ''];
@@ -567,15 +520,15 @@ export default function EmailTab() {
 
         setRecipients((prev) => {
           const next = { ...prev };
+
           for (const [id, to] of pairs) {
             if (to) next[id] = to;
           }
+
           return next;
         });
       } catch {}
     })();
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, list]);
 
   function runSearch() {
@@ -596,14 +549,11 @@ export default function EmailTab() {
     setReading(true);
 
     try {
-      const r = await authedFetchJson(API.get, {
-        method: 'POST',
-        bodyObj: { id, includeAttachmentsMeta: true },
+      const data = await invokeFn('gmail_get', {
+        id,
+        includeAttachmentsMeta: true,
       });
 
-      if (!r.ok) throw new Error(`gmail_get: ${r.status} ${await r.text()}`);
-
-      const data = await r.json();
       const attachments = Array.isArray(data?.attachments) ? data.attachments : [];
 
       const normalized = attachments.map((a) => ({
@@ -637,7 +587,9 @@ export default function EmailTab() {
   }
 
   useEffect(() => {
-    if (readOpen && readBodyRef.current) readBodyRef.current.scrollTop = 0;
+    if (readOpen && readBodyRef.current) {
+      readBodyRef.current.scrollTop = 0;
+    }
   }, [readOpen, current, reading]);
 
   function openComposerWith({ to = '', subject = '', body = '' } = {}) {
@@ -729,35 +681,21 @@ export default function EmailTab() {
         return;
       }
 
-      const r = await authedFetchJson(API.attach, {
-        method: 'POST',
-        bodyObj: {
-          id: msgId,
-          attachmentId: att.attachmentId,
-          filename: att.filename || 'attachment',
-          mimeType: mimeGuess,
-        },
+      const data = await invokeFn('gmail_attachment', {
+        id: msgId,
+        attachmentId: att.attachmentId,
+        filename: att.filename || 'attachment',
+        mimeType: mimeGuess,
       });
 
-      if (!r.ok) throw new Error(`Не удалось загрузить вложение: ${r.status} ${await r.text()}`);
+      const base64 = data?.base64 || data?.dataBase64 || '';
+      const mimeType = data?.mimeType || mimeGuess;
+      const filename = ensureFilename(data?.filename || nameGuess, mimeType);
 
-      const ct = (r.headers.get('content-type') || '').toLowerCase();
+      if (!base64) throw new Error('Пустые данные вложения base64.');
 
-      if (ct.includes('application/json')) {
-        const data = await r.json();
-        const base64 = data?.base64 || data?.dataBase64 || '';
-        const mimeType = data?.mimeType || mimeGuess;
-        const filename = ensureFilename(data?.filename || nameGuess, mimeType);
-
-        if (!base64) throw new Error('Пустые данные вложения base64.');
-
-        const blob = safeBase64ToBlob(base64, mimeType);
-        downloadBlob(blob, filename);
-        return;
-      }
-
-      const blob = await r.blob();
-      downloadBlob(blob, nameGuess);
+      const blob = safeBase64ToBlob(base64, mimeType);
+      downloadBlob(blob, filename);
     } catch (e) {
       console.error(e);
       setError(e.message || String(e));
@@ -768,9 +706,10 @@ export default function EmailTab() {
   }
 
   const MailRow = ({ m }) => {
-    const peer = folder === 'sent'
-      ? recipients[m.id] || m.to || '(без получателя)'
-      : m.from || '(без отправителя)';
+    const peer =
+      folder === 'sent'
+        ? recipients[m.id] || m.to || '(без получателя)'
+        : m.from || '(без отправителя)';
 
     return (
       <div key={m.id} style={styles.row} onClick={() => openMail(m.id)} role="button" title="Открыть">
@@ -822,15 +761,7 @@ export default function EmailTab() {
           <button
             style={styles.connectBtn}
             onClick={() => {
-              const w = window.open(`${FUNCTIONS_URL}/oauth_google_start`, 'oauth_gmail', 'width=600,height=700');
-              if (!w) return;
-
-              const t = setInterval(() => {
-                if (!w || w.closed) {
-                  clearInterval(t);
-                  loadList({ append: false, pageToken: null, searchQuery: q });
-                }
-              }, 800);
+              window.open('/oauth-gmail', 'oauth_gmail', 'width=600,height=700');
             }}
           >
             Подключить Gmail
@@ -1003,12 +934,17 @@ export default function EmailTab() {
                     }),
                   );
 
-                  const r = await authedFetchJson(API.send, {
-                    method: 'POST',
-                    bodyObj: { to, subject, text, html, attachments },
+                  const data = await invokeFn('gmail_send', {
+                    to,
+                    subject,
+                    text,
+                    html,
+                    attachments,
                   });
 
-                  if (!r.ok) throw new Error(`gmail_send: ${r.status} ${await r.text()}`);
+                  if (data?.ok === false) {
+                    throw new Error(data?.error || 'gmail_send error');
+                  }
 
                   setComposeOpen(false);
                   setFolder('sent');
@@ -1043,15 +979,7 @@ export default function EmailTab() {
                 <div>Текст</div>
                 <textarea ref={textRef} rows={8} style={styles.input} placeholder="Сообщение..." />
 
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: 16,
-                    marginTop: 8,
-                    alignItems: 'flex-start',
-                    flexWrap: 'wrap',
-                  }}
-                >
+                <div style={{ display: 'flex', gap: 16, marginTop: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                   <div style={{ flex: 1, minWidth: 260 }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <input
@@ -1075,9 +1003,7 @@ export default function EmailTab() {
                       Добавлять блок со способами оплаты
                     </label>
 
-                    <div style={styles.signatureHint}>
-                      Блок способов оплаты будет после подписи:{PAYMENT_OPTIONS}
-                    </div>
+                    <div style={styles.signatureHint}>Блок способов оплаты будет после подписи:{PAYMENT_OPTIONS}</div>
                   </div>
                 </div>
               </div>
@@ -1085,7 +1011,6 @@ export default function EmailTab() {
               <div style={styles.formRow}>
                 <div>Вложения</div>
                 <input ref={filesRef} type="file" multiple />
-
                 <div style={{ fontSize: 12, color: colors.subtext, marginTop: 6 }}>
                   Если письмо с большими файлами не отправляется — проверь лимит на Edge Function body size.
                 </div>
