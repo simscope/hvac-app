@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { supabase, supabaseUrl } from '../supabaseClient';
+import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
 /* ===== NY time: read/write "as in DB" ===== */
@@ -117,30 +117,20 @@ const storage = () => supabase.storage.from(PHOTOS_BUCKET);
 const invStorage = () => supabase.storage.from(INVOICES_BUCKET);
 
 /* ---------- Edge helpers ---------- */
-function functionsBase() {
-  return supabaseUrl.replace('.supabase.co', '.functions.supabase.co');
-}
 async function callEdgeAuth(path, body) {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  const token = session?.access_token || '';
-  const url = `${functionsBase().replace(/\/+$/, '')}/${path}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    mode: 'cors',
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify(body ?? {}),
+  const { data, error } = await supabase.functions.invoke(path, {
+    body: body ?? {},
   });
-  const text = await res.text();
-  let json;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = { message: text };
+
+  if (error) {
+    throw new Error(error.message || `Edge Function failed: ${path}`);
   }
-  if (!res.ok) throw new Error(json?.error || json?.message || `HTTP ${res.status}`);
-  return json;
+
+  if (data && data.ok === false) {
+    throw new Error(data.error || data.message || `Edge Function failed: ${path}`);
+  }
+
+  return data;
 }
 
 /* ---------- Dictionaries ---------- */
