@@ -15,7 +15,7 @@ Routing number 021000021
 💳 Credit/Debit Card (5% processing fee)
 🧾 Check
 Payable to: Sim Scope Inc.
-Mailing address: 1587E 19th St Apt6F Brooklyn, NY 11230`;
+Mailing address: 3 Henry St Apt1 Jersey City, NJ 07306`;
 
 const ACCOUNT_EMAIL = 'simscope.office@gmail.com';
 
