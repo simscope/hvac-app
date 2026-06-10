@@ -874,8 +874,8 @@ export default function InvoicePage() {
             )}
             <div style={{ marginTop: 8, fontWeight: 700 }}>Sim Scope Inc.</div>
             <div style={{ color: '#6b7280', lineHeight: 1.4 }}>
-              1587 E 19th St apt 6F<br />
-              Brooklyn, NY 11230
+              3 Henry St Apt 1<br />
+              Jersey City, NJ 07306
               <br />
               (929) 412-9042 Zelle
               <br />
