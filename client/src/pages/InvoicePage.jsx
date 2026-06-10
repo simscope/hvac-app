@@ -267,8 +267,8 @@ async function renderInvoiceLikePdf(doc, opts) {
   compTop += 14;
   doc.setFont(undefined, 'normal');
   [
-    '1587 E 19th St apt 6F',
-    'Brooklyn, NY 11230',
+    '3 Henry St apt 1', 
+    'Jersey City, NJ 07306',
     '(929) 412-9042 Zelle',
     'simscope.office@gmail.com',
   ].forEach((t) => {
