@@ -123,7 +123,19 @@ async function callEdgeAuth(path, body) {
   });
 
   if (error) {
-    throw new Error(error.message || `Edge Function failed: ${path}`);
+    let details = '';
+    try {
+      const context = error.context;
+      if (context && typeof context.json === 'function') {
+        const json = await context.json();
+        details = json?.error || json?.message || '';
+      } else if (context && typeof context.text === 'function') {
+        details = await context.text();
+      }
+    } catch {
+      details = '';
+    }
+    throw new Error(details || error.message || `Edge Function failed: ${path}`);
   }
 
   if (data && data.ok === false) {
@@ -1024,18 +1036,17 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
     try {
       setSendingInvId(keyOfInv(inv));
-      await callEdgeAuth('send-invoice-email', {
-        to,
+      await callEdgeAuth('gmail_send', {
+        to: [to],
         subject,
         text,
         html,
-        bucket: INVOICES_BUCKET,
-        key,
-        job_id: jobId,
-        invoice_no: invoiceNo ? Number(invoiceNo) : null,
-        client_name: client?.full_name || null,
-        client_address: client?.address || null,
-        job_number: job?.job_number || null,
+        attachments: [{
+          bucket: INVOICES_BUCKET,
+          key,
+          filename: fileName || 'invoice.pdf',
+          mimeType: 'application/pdf',
+        }],
       });
       alert('Invoice sent to ' + to);
     } catch (e) {
