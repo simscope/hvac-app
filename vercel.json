@@ -6,6 +6,22 @@
       "destination": "https://msi.tail4626fb.ts.net:8443/functions/v1/:path*"
     },
     {
+      "source": "/auth/v1/:path*",
+      "destination": "https://msi.tail4626fb.ts.net:8443/auth/v1/:path*"
+    },
+    {
+      "source": "/rest/v1/:path*",
+      "destination": "https://msi.tail4626fb.ts.net:8443/rest/v1/:path*"
+    },
+    {
+      "source": "/storage/v1/:path*",
+      "destination": "https://msi.tail4626fb.ts.net:8443/storage/v1/:path*"
+    },
+    {
+      "source": "/realtime/v1/:path*",
+      "destination": "https://msi.tail4626fb.ts.net:8443/realtime/v1/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
@@ -16,7 +32,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; connect-src 'self' https://msi.tail4626fb.ts.net:8443 wss://msi.tail4626fb.ts.net:8443; img-src 'self' data: blob: https://msi.tail4626fb.ts.net:8443 https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com"
+          "value": "default-src 'self'; connect-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://cdnjs.cloudflare.com; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com"
         },
         {
           "key": "Referrer-Policy",
@@ -34,6 +50,118 @@
         {
           "key": "Cache-Control",
           "value": "no-store"
+        },
+        {
+          "key": "CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Vercel-CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
+      ]
+    },
+    {
+      "source": "/auth/v1/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Vercel-CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
+      ]
+    },
+    {
+      "source": "/rest/v1/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Vercel-CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
+      ]
+    },
+    {
+      "source": "/storage/v1/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Vercel-CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        }
+      ]
+    },
+    {
+      "source": "/realtime/v1/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Vercel-CDN-Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "x-vercel-enable-rewrite-caching",
+          "value": "0"
         },
         {
           "key": "Referrer-Policy",

@@ -40,3 +40,14 @@ test('unsafe schemes and malformed encoded Storage paths are not signed', async 
   expect(storageReference('https://retired.invalid/storage/v1/object/public/unit-docs/%ZZ')).toBeNull();
   expect(mockFrom).not.toHaveBeenCalled();
 });
+
+test.each([
+  'https://retired.invalid/storage/v1/object/public/job-photos/job/photo.jpg',
+  'https://msi.tail4626fb.ts.net:8443/storage/v1/object/public/job-photos/job/photo.jpg',
+])('historical or current Tail storage links are replaced by a current-origin signed URL: %s', async (value) => {
+  mockSign.mockResolvedValue({ data: { signedUrl: 'https://hvac-app-jade.vercel.app/storage/v1/object/sign/job-photos/job/photo.jpg?token=new' }, error: null });
+  const result = await resolveStorageUrl(value, 'job-photos');
+  expect(mockFrom).toHaveBeenCalledWith('job-photos');
+  expect(mockSign).toHaveBeenCalledWith('job/photo.jpg', 3600);
+  expect(new URL(result).origin).toBe('https://hvac-app-jade.vercel.app');
+});
