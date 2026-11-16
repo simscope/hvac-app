@@ -18,6 +18,10 @@
       "destination": "https://msi.tail4626fb.ts.net:8443/storage/v1/:path*"
     },
     {
+      "source": "/realtime/v1/websocket",
+      "destination": "/api/realtime-bridge"
+    },
+    {
       "source": "/realtime/v1/:path*",
       "destination": "https://msi.tail4626fb.ts.net:8443/realtime/v1/:path*"
     },
@@ -193,5 +197,10 @@
       "destination": "https://hvac-app-jade.vercel.app/:path*",
       "permanent": true
     }
-  ]
+  ],
+  "functions": {
+    "api/realtime-bridge.js": {
+      "maxDuration": 300
+    }
+  }
 }

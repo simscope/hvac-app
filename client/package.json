@@ -25,6 +25,7 @@
     "react-router-dom": "6.26.2",
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4",
+    "ws": "8.18.3",
     "xlsx": "^0.18.5"
   },
   "overrides": {
@@ -35,6 +36,7 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
+    "test:realtime": "node --test --test-timeout=8000 tests/realtime-bridge.test.cjs",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
