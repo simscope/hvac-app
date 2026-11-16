@@ -1,9 +1,10 @@
 import { resolveStorageUrl, storageReference } from './storageUrls';
 const mockSign = jest.fn();
-const mockFrom = jest.fn(() => ({ createSignedUrl: mockSign }));
+const mockPublic = jest.fn();
+const mockFrom = jest.fn(() => ({ createSignedUrl: mockSign, getPublicUrl: mockPublic }));
 jest.mock('../supabaseClient', () => ({ supabase: { storage: { from: (...args) => mockFrom(...args) } } }));
 
-beforeEach(() => { jest.clearAllMocks(); mockFrom.mockImplementation(() => ({ createSignedUrl: mockSign })); mockSign.mockResolvedValue({ data: { signedUrl: 'https://new-api.invalid/storage/v1/object/sign/bucket/file?token=new' }, error: null }); });
+beforeEach(() => { jest.clearAllMocks(); mockFrom.mockImplementation(() => ({ createSignedUrl: mockSign, getPublicUrl: mockPublic })); mockSign.mockResolvedValue({ data: { signedUrl: 'https://new-api.invalid/storage/v1/object/sign/bucket/file?token=new' }, error: null }); mockPublic.mockReturnValue({ data: { publicUrl: 'https://hvac-app-jade.vercel.app/storage/v1/object/public/unit-docs/manual.pdf' } }); });
 
 test('a historical private photo URL is signed by the current backend, without reusing its host or token', async () => {
   const result = await resolveStorageUrl('https://retired.invalid/storage/v1/object/sign/job-photos/job/photo%20one.jpg?token=old', 'job-photos');
@@ -13,10 +14,38 @@ test('a historical private photo URL is signed by the current backend, without r
   expect(result).not.toContain('token=old');
 });
 
-test('a restored public document URL retains the exact bucket and key when signed', async () => {
-  await resolveStorageUrl('https://retired.invalid/storage/v1/object/public/unit-docs/manual.pdf');
+test.each([
+  'https://retired.invalid/storage/v1/object/public/unit-docs/manual.pdf',
+  'https://msi.tail4626fb.ts.net:8443/storage/v1/object/public/unit-docs/manual.pdf',
+  'https://retired.invalid/storage/v1/object/sign/unit-docs/manual.pdf?token=expired',
+  'manual.pdf',
+])('the verified public library uses the current SDK public URL without requesting signing permission: %s', async (value) => {
+  const url = await resolveStorageUrl(value, 'unit-docs');
   expect(mockFrom).toHaveBeenCalledWith('unit-docs');
-  expect(mockSign).toHaveBeenCalledWith('manual.pdf', 3600);
+  expect(mockPublic).toHaveBeenCalledWith('manual.pdf');
+  expect(mockSign).not.toHaveBeenCalled();
+  expect(url).toBe('https://hvac-app-jade.vercel.app/storage/v1/object/public/unit-docs/manual.pdf');
+});
+
+test('public library paths are decoded once and delegated to the SDK for current-origin encoding', async () => {
+  mockPublic.mockReturnValue({ data: { publicUrl: 'https://hvac-app-jade.vercel.app/storage/v1/object/public/unit-docs/guides/manual%20one%25.pdf' } });
+  const url = await resolveStorageUrl('https://retired.invalid/storage/v1/object/public/unit-docs/guides/manual%20one%25.pdf');
+  expect(mockPublic).toHaveBeenCalledWith('guides/manual one%.pdf');
+  expect(mockSign).not.toHaveBeenCalled();
+  expect(url).toBe('https://hvac-app-jade.vercel.app/storage/v1/object/public/unit-docs/guides/manual%20one%25.pdf');
+});
+
+test.each(['invoices', 'job-photos', 'chat-attachments'])('private bucket %s retains signing even for a historical public-looking URL', async (bucket) => {
+  await resolveStorageUrl(`https://retired.invalid/storage/v1/object/public/${bucket}/folder/manual%20one.pdf`);
+  expect(mockFrom).toHaveBeenCalledWith(bucket);
+  expect(mockSign).toHaveBeenCalledWith('folder/manual one.pdf', 3600);
+  expect(mockPublic).not.toHaveBeenCalled();
+});
+
+test('a missing SDK public URL fails without trying a private signing fallback', async () => {
+  mockPublic.mockReturnValue({ data: {} });
+  await expect(resolveStorageUrl('manual.pdf', 'unit-docs')).rejects.toThrow('Storage link is unavailable');
+  expect(mockSign).not.toHaveBeenCalled();
 });
 
 test('relative attachment keys use the caller bucket', async () => {

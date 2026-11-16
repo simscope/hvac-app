@@ -19,7 +19,17 @@ export function storageReference(value, defaultBucket) {
 export async function resolveStorageUrl(value, defaultBucket) {
   const ref = storageReference(value, defaultBucket);
   if (!ref) return typeof value === 'string' && /^https?:\/\//i.test(value) ? value : '';
-  const { data, error } = await supabase.storage.from(ref.bucket).createSignedUrl(ref.path, 3600);
+  const bucket = supabase.storage.from(ref.bucket);
+  // unit-docs is the verified public library bucket. Public delivery preserves
+  // its existing access contract without requiring a Storage SELECT policy.
+  // Every other bucket still requires a fresh signed URL, even if a legacy URL
+  // contains /public/. Both SDK methods use the current backend origin.
+  if (ref.bucket === 'unit-docs') {
+    const { data } = bucket.getPublicUrl(ref.path);
+    if (!data?.publicUrl) throw new Error('Storage link is unavailable');
+    return data.publicUrl;
+  }
+  const { data, error } = await bucket.createSignedUrl(ref.path, 3600);
   if (error) throw error;
   if (!data?.signedUrl) throw new Error('Storage link is unavailable');
   return data.signedUrl;
