@@ -276,7 +276,8 @@ export default function JobDetailsPage() {
   const { id } = useParams();
   const jobId = id;
   const navigate = useNavigate();
-  const { user, profile } = useAuth();
+  const { user, profile, role } = useAuth();
+  const isStaff = ['admin', 'manager'].includes(role);
 
   const [loading, setLoading] = useState(true);
   const [job, setJob] = useState(null);
@@ -427,7 +428,7 @@ export default function JobDetailsPage() {
 
       // warranty base date: completed_at > appointment_time > created_at
       const baseDateStr = job.completed_at || job.appointment_time || job.created_at;
-      if (!baseDateStr) return;
+      if (!isStaff || !baseDateStr) return;
 
       const base = new Date(baseDateStr);
       if (Number.isNaN(base.getTime())) return;
@@ -454,11 +455,12 @@ export default function JobDetailsPage() {
       setPhotos([]);
       return;
     }
-    const mapped = (data || []).map((o) => {
+    const mapped = await Promise.all((data || []).map(async (o) => {
       const full = `${jobId}/${o.name}`;
-      const { data: pub } = storage().getPublicUrl(full);
-      return { name: o.name, url: pub.publicUrl };
-    });
+      const { data: signed, error } = await storage().createSignedUrl(full, 3600);
+      if (error) throw error;
+      return { name: o.name, url: signed.signedUrl };
+    }));
     setPhotos(mapped);
     setChecked({});
   };
@@ -527,6 +529,7 @@ export default function JobDetailsPage() {
   };
 
   const saveJob = async () => {
+    if (!isStaff && (['completed', 'recall'].includes(String(job.status).toLowerCase()) || job.archived_at)) return;
     const payload = {
       technician_id: normalizeId(job.technician_id),
       appointment_time: job.appointment_time ?? null, // already in correct format
@@ -540,6 +543,9 @@ export default function JobDetailsPage() {
 
     payload.labor_payment_method = pmToSave(job.labor_payment_method);
     payload.scf_payment_method = pmToSave(job.scf_payment_method);
+    if (!isStaff) {
+      for (const key of Object.keys(payload)) if (!['appointment_time','system_type','issue','status'].includes(key)) delete payload[key];
+    }
 
     if (Object.prototype.hasOwnProperty.call(job, 'tech_comment')) {
       payload.tech_comment = job.tech_comment || null;
@@ -557,6 +563,7 @@ export default function JobDetailsPage() {
 
   /* ---------- Archive / Unarchive ---------- */
   const archiveJob = async (reason) => {
+    if (!isStaff) return;
     try {
       const patch = { archived_at: new Date().toISOString(), archived_reason: reason || null };
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
@@ -567,6 +574,7 @@ export default function JobDetailsPage() {
     }
   };
   const unarchiveJob = async () => {
+    if (!isStaff) return;
     try {
       const patch = { archived_at: null, archived_reason: null };
       const { error } = await supabase.from('jobs').update(patch).eq('id', jobId);
@@ -598,6 +606,7 @@ export default function JobDetailsPage() {
   };
 
   const saveClient = async () => {
+    if (!isStaff) return;
     const payload = {
       company: stringOrNull(client.company) ?? '',
       full_name: stringOrNull(client.full_name) ?? '',
@@ -676,6 +685,7 @@ export default function JobDetailsPage() {
     });
   };
   const delMat = async (m) => {
+    if (!isStaff && !String(m.id).startsWith('tmp-')) return;
     setMaterials((p) => p.filter((x) => x !== m));
     if (!String(m.id).startsWith('tmp-')) {
       const { error } = await supabase.from('materials').delete().eq('id', m.id);
@@ -701,7 +711,7 @@ export default function JobDetailsPage() {
       }
     }
 
-    for (const m of olds) {
+    for (const m of (isStaff ? olds : [])) {
       const patch = {
         name: m.name || '',
         price: m.price === '' || m.price == null ? null : Number(m.price),
@@ -768,6 +778,7 @@ export default function JobDetailsPage() {
 
   // Delete file (edge auth + fallback)
   const delPhoto = async (name) => {
+    if (!isStaff) return;
     if (!window.confirm('Delete file?')) return;
     try {
       await callEdgeAuth('admin-delete-photo', { bucket: PHOTOS_BUCKET, path: `${jobId}/${name}` });
@@ -822,21 +833,22 @@ export default function JobDetailsPage() {
       ]);
 
       const stData = stRes?.data || [];
-      const stor = stData
+      const stor = await Promise.all(stData
         .filter((o) => /\.pdf$/i.test(o.name))
-        .map((o) => {
+        .map(async (o) => {
           const full = `${jobId}/${o.name}`;
-          const { data: pub } = invStorage().getPublicUrl(full);
+          const { data: pub, error } = await invStorage().createSignedUrl(full, 3600);
+          if (error) throw error;
           const m = /invoice_(\d+)\.pdf$/i.exec(o.name);
           return {
             source: 'storage',
             name: o.name,
-            url: pub?.publicUrl || null,
+            url: pub?.signedUrl || null,
             updated_at: o.updated_at || o.created_at || null,
             invoice_no: m ? String(m[1]) : null,
             hasFile: true,
           };
-        });
+        }));
 
       const rows = dbRes?.data || [];
       const db = rows.map((r) => ({
@@ -887,6 +899,7 @@ export default function JobDetailsPage() {
   };
 
   const deleteInvoice = async (item) => {
+    if (!isStaff) return;
     if (!item) return;
 
     const invoiceNoStr = item?.invoice_no != null ? String(item.invoice_no) : null;
@@ -929,6 +942,7 @@ export default function JobDetailsPage() {
   };
 
   const createInvoice = () => {
+    if (!isStaff) return;
     window.open(makeFrontUrl(`/invoice/${jobId}`), '_blank', 'noopener,noreferrer');
   };
 
@@ -1188,7 +1202,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
             </span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={BTN} onClick={unarchiveJob}>
+            <button style={BTN} disabled={!isStaff} onClick={unarchiveJob}>
               Unarchive
             </button>
           </div>
@@ -1200,7 +1214,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
           <div style={BOX}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={H2}>Parameters</div>
-              {!isArchived && (
+              {isStaff && !isArchived && (
                 <button
                   style={{ ...BTN, borderColor: '#f59e0b', color: '#b45309', background: '#fffbeb' }}
                   onClick={() => {
@@ -1218,6 +1232,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 <div>Technician</div>
                 <select
                   style={SELECT}
+                  disabled={!isStaff}
                   value={job.technician_id == null ? '' : String(job.technician_id)}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -1237,7 +1252,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 <div>Appointment (NY)</div>
                 <input
                   style={INPUT}
-                  type="datetime-local"
+                  disabled={!isStaff && (['completed','recall'].includes(String(job.status).toLowerCase()) || !!job.archived_at)} type="datetime-local"
                   value={wallFromDb(job.appointment_time)}
                   onChange={(e) => setField('appointment_time', zonedIsoFromWall(e.target.value, job.appointment_time))}
                 />
@@ -1245,7 +1260,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
               <div style={ROW}>
                 <div>System type</div>
-                <select style={SELECT} value={job.system_type || SYSTEM_OPTIONS[0]} onChange={(e) => setField('system_type', e.target.value)}>
+                <select style={SELECT} disabled={!isStaff && (['completed','recall'].includes(String(job.status).toLowerCase()) || !!job.archived_at)} value={job.system_type || SYSTEM_OPTIONS[0]} onChange={(e) => setField('system_type', e.target.value)}>
                   {SYSTEM_OPTIONS.map((s) => (
                     <option key={s} value={s}>
                       {s}
@@ -1256,12 +1271,12 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
               <div style={ROW}>
                 <div>Issue</div>
-                <input style={INPUT} value={job.issue || ''} onChange={(e) => setField('issue', e.target.value)} />
+                <input style={INPUT} disabled={!isStaff && (['completed','recall'].includes(String(job.status).toLowerCase()) || !!job.archived_at)} value={job.issue || ''} onChange={(e) => setField('issue', e.target.value)} />
               </div>
 
               <div style={ROW}>
                 <div>SCF ($)</div>
-                <input style={INPUT} type="number" value={job.scf ?? ''} onChange={(e) => setField('scf', toNum(e.target.value))} />
+                <input style={INPUT} type="number" disabled={!isStaff} value={job.scf ?? ''} onChange={(e) => setField('scf', toNum(e.target.value))} />
               </div>
 
               <div style={ROW}>
@@ -1273,7 +1288,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                       border: `1px solid ${isUnpaidSCF ? '#ef4444' : '#e5e7eb'}`,
                       background: isUnpaidSCF ? '#fef2f2' : '#fff',
                     }}
-                    value={pmToSelect(job.scf_payment_method)}
+                    disabled={!isStaff} value={pmToSelect(job.scf_payment_method)}
                     onChange={(e) => setField('scf_payment_method', pmToSave(e.target.value))}
                   >
                     {['-', 'cash', 'zelle', 'card', 'check', 'ACH'].map((p) => (
@@ -1288,7 +1303,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
               <div style={ROW}>
                 <div>Labor ($)</div>
-                <input style={INPUT} type="number" value={job.labor_price ?? ''} onChange={(e) => setField('labor_price', toNum(e.target.value))} />
+                <input style={INPUT} type="number" disabled={!isStaff} value={job.labor_price ?? ''} onChange={(e) => setField('labor_price', toNum(e.target.value))} />
               </div>
 
               <div style={ROW}>
@@ -1300,7 +1315,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                       border: `1px solid ${isUnpaidLabor ? '#ef4444' : '#e5e7eb'}`,
                       background: isUnpaidLabor ? '#fef2f2' : '#fff',
                     }}
-                    value={pmToSelect(job.labor_payment_method)}
+                    disabled={!isStaff} value={pmToSelect(job.labor_payment_method)}
                     onChange={(e) => setField('labor_payment_method', pmToSave(e.target.value))}
                   >
                     {['-', 'cash', 'zelle', 'card', 'check', 'ACH'].map((p) => (
@@ -1318,10 +1333,10 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 <div>
                   <select
                     style={{ ...SELECT, border: `1px solid ${isRecall ? '#ef4444' : '#e5e7eb'}`, background: isRecall ? '#fef2f2' : '#fff' }}
-                    value={job.status || STATUS_OPTIONS[0]}
+                    disabled={!isStaff && (['completed','recall'].includes(String(job.status).toLowerCase()) || !!job.archived_at)} value={job.status || STATUS_OPTIONS[0]}
                     onChange={(e) => setField('status', normalizeStatusForDb(e.target.value))}
                   >
-                    {STATUS_OPTIONS.map((s) => (
+                    {STATUS_OPTIONS.filter((status) => isStaff || !['Completed', 'recall'].includes(status) || status === normalizeStatusForDb(job.status)).map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>
@@ -1333,7 +1348,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
               <div style={ROW}>
                 <div>Job # (optional)</div>
-                <input style={INPUT} value={job.job_number || ''} onChange={(e) => setField('job_number', e.target.value)} />
+                <input style={INPUT} disabled={!isStaff} value={job.job_number || ''} onChange={(e) => setField('job_number', e.target.value)} />
               </div>
 
               {'tech_comment' in (job || {}) && (
@@ -1344,7 +1359,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
               )}
 
               <div style={{ display: 'flex', gap: 8 }}>
-                <button style={PRIMARY} onClick={saveJob} disabled={!dirty}>
+                <button style={PRIMARY} onClick={saveJob} disabled={!dirty || (!isStaff && (['completed','recall'].includes(String(job.status).toLowerCase()) || !!job.archived_at))}>
                   Save job
                 </button>
                 <button style={GHOST} onClick={() => navigate(-1)}>
@@ -1359,7 +1374,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
         {/* Right column */}
         <div style={COL}>
           {/* Client */}
-          <div style={BOX}>
+          <fieldset style={{ ...BOX, minWidth: 0 }} disabled={!isStaff}>
             <div style={H2}>Client</div>
             <div style={{ display: 'grid', gap: 10 }}>
               <Row label="Company" value={client.company} onChange={(v) => setClientField('company', v)} />
@@ -1397,7 +1412,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 )}
               </div>
             </div>
-          </div>
+          </fieldset>
 
           {/* Invoices */}
           <div style={BOX}>
@@ -1417,14 +1432,14 @@ Services Licensed & Insured | Serving NYC and NJ`;
                   type="button"
                   style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.5, cursor: canSendSelected ? 'pointer' : 'not-allowed' }}
                   onClick={openEmailModalMulti}
-                  disabled={!canSendSelected}
+                  disabled={!isStaff || !canSendSelected}
                 >
                   Send selected
                 </button>
                 <button type="button" style={BTN} onClick={loadInvoices} disabled={invoicesLoading}>
                   {invoicesLoading ? '...' : 'Refresh'}
                 </button>
-                <button type="button" style={PRIMARY} onClick={createInvoice}>
+                <button type="button" style={PRIMARY} disabled={!isStaff} onClick={createInvoice}>
                   + Create invoice
                 </button>
               </div>
@@ -1466,7 +1481,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                       </div>
 
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <button type="button" style={BTN} onClick={() => openInvoice(inv)}>
+                        <button type="button" style={BTN} disabled={!isStaff && !inv.hasFile} onClick={() => openInvoice(inv)}>
                           Open PDF
                         </button>
                         <button
@@ -1481,7 +1496,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                           type="button"
                           style={{ ...DANGER, opacity: inv.hasFile ? 1 : 0.5, cursor: inv.hasFile ? 'pointer' : 'not-allowed' }}
                           onClick={() => inv.hasFile && deleteInvoice(inv)}
-                          disabled={!inv.hasFile}
+                          disabled={!isStaff || !inv.hasFile}
                         >
                           Delete
                         </button>
@@ -1490,7 +1505,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                           title={!inv.hasFile ? 'PDF not saved yet' : !normalizeEmail(client?.email) ? 'Client email is empty' : 'Send invoice by email'}
                           style={{ ...PRIMARY, opacity: canSend ? 1 : 0.5, cursor: canSend ? 'pointer' : 'not-allowed', minWidth: 120 }}
                           onClick={() => canSend && openEmailModal(inv)}
-                          disabled={!canSend || sending}
+                          disabled={!isStaff || !canSend || sending}
                         >
                           {sending ? 'Sending…' : 'Send email'}
                         </button>
@@ -1522,19 +1537,19 @@ Services Licensed & Insured | Serving NYC and NJ`;
               {materials.map((m, i) => (
                 <tr key={m.id}>
                   <Td>
-                    <input style={INPUT} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
+                    <input style={INPUT} disabled={!isStaff && !String(m.id).startsWith('tmp-')} value={m.name || ''} onChange={(e) => chMat(i, 'name', e.target.value)} />
                   </Td>
                   <Td>
-                    <input style={INPUT} type="number" value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} />
+                    <input style={INPUT} type="number" disabled={!isStaff && !String(m.id).startsWith('tmp-')} value={m.price ?? ''} onChange={(e) => chMat(i, 'price', e.target.value)} />
                   </Td>
                   <Td>
-                    <input style={INPUT} type="number" value={m.quantity ?? 1} onChange={(e) => chMat(i, 'quantity', e.target.value)} />
+                    <input style={INPUT} type="number" disabled={!isStaff && !String(m.id).startsWith('tmp-')} value={m.quantity ?? 1} onChange={(e) => chMat(i, 'quantity', e.target.value)} />
                   </Td>
                   <Td>
-                    <input style={INPUT} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} />
+                    <input style={INPUT} disabled={!isStaff && !String(m.id).startsWith('tmp-')} value={m.supplier || ''} onChange={(e) => chMat(i, 'supplier', e.target.value)} />
                   </Td>
                   <Td center>
-                    <button style={DANGER} onClick={() => delMat(m)}>
+                    <button style={DANGER} disabled={!isStaff && !String(m.id).startsWith('tmp-')} onClick={() => delMat(m)}>
                       🗑
                     </button>
                   </Td>
@@ -1634,7 +1649,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
                 <button style={BTN} onClick={() => downloadOne(p.name)}>
                   Download
                 </button>
-                <button style={DANGER} onClick={() => delPhoto(p.name)}>
+                <button style={DANGER} disabled={!isStaff} onClick={() => delPhoto(p.name)}>
                   Delete
                 </button>
               </div>
@@ -1734,7 +1749,7 @@ Services Licensed & Insured | Serving NYC and NJ`;
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button style={BTN} onClick={closeEmailModalMulti}>Cancel</button>
-              <button style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.6, cursor: canSendSelected ? 'pointer' : 'not-allowed' }} disabled={!canSendSelected} onClick={confirmSendEmailFromModalMulti}>
+              <button style={{ ...PRIMARY, opacity: canSendSelected ? 1 : 0.6, cursor: canSendSelected ? 'pointer' : 'not-allowed' }} disabled={!isStaff || !canSendSelected} onClick={confirmSendEmailFromModalMulti}>
                 Send {selectedInvoices.length}
               </button>
             </div>

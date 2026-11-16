@@ -8,6 +8,7 @@ import { supabase } from './supabaseClient';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import TopNav from './components/TopNav.jsx';
 import EmailTab from './pages/EmailTab.jsx';
+import OAuthGmailPage from './pages/OAuthGmailPage.jsx';
 
 // страницы
 import LoginPage from './pages/LoginPage.jsx';
@@ -16,6 +17,7 @@ import JobsPage from './pages/JobsPage.jsx';
 import AllJobsPage from './pages/AllJobsPage.jsx';
 import JobDetailsPage from './pages/JobDetailsPage.jsx';
 import CalendarPage from './pages/CalendarPage.jsx';
+import AssignedWorkPage from './pages/AssignedWorkPage.jsx';
 import MaterialsPage from './pages/MaterialsPage.jsx';
 import ChatPage from './pages/ChatPage.jsx';
 import InvoicePage from './pages/InvoicePage.jsx';
@@ -58,7 +60,7 @@ function JobAccess({ children }) {
       setChecking(true);
       const { data, error } = await supabase
         .from('jobs')
-        .select('id, technician_id, tech_id')
+        .select('id, technician_id')
         .eq('id', id)
         .maybeSingle();
 
@@ -71,7 +73,7 @@ function JobAccess({ children }) {
         return;
       }
 
-      const jobTechId = data?.technician_id ?? data?.tech_id ?? null;
+      const jobTechId = data?.technician_id ?? null;
       const allow = !!profile?.id && jobTechId === profile.id;
       setOk(!!allow);
       setChecking(false);
@@ -87,6 +89,11 @@ function JobAccess({ children }) {
 }
 
 /* ─────────────────────────── Оболочка с верхним меню ─────────────────────── */
+function AssignedOrStaff({ staff }) {
+  const { role } = useAuth();
+  return ['tech', 'technician'].includes(role) ? <AssignedWorkPage /> : staff;
+}
+
 function Shell() {
   const { pathname } = useLocation();
   const hideNav = pathname === '/login' || pathname === '/no-access' || pathname === '/reset-password';
@@ -102,6 +109,8 @@ function Shell() {
 
           {/* 🔥 Страница смены пароля */}
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/oauth-gmail" element={<ProtectedRoute allow={['admin','manager']}><OAuthGmailPage /></ProtectedRoute>} />
+          <Route path="/oauth-gmail/complete" element={<ProtectedRoute allow={['admin','manager']}><OAuthGmailPage /></ProtectedRoute>} />
 
           {/* Задачи — менеджер + админ */}
           <Route
@@ -118,8 +127,8 @@ function Shell() {
           <Route
             path="/jobs"
             element={
-              <ProtectedRoute allow={['admin', 'manager']}>
-                <JobsPage />
+              <ProtectedRoute allow={['admin', 'manager', 'tech']}>
+                <AssignedOrStaff staff={<JobsPage />} />
               </ProtectedRoute>
             }
           />
@@ -145,8 +154,8 @@ function Shell() {
           <Route
             path="/calendar"
             element={
-              <ProtectedRoute allow={['admin', 'manager']}>
-                <CalendarPage />
+              <ProtectedRoute allow={['admin', 'manager', 'tech']}>
+                <AssignedOrStaff staff={<CalendarPage />} />
               </ProtectedRoute>
             }
           />

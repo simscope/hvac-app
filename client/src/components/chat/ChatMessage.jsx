@@ -1,6 +1,6 @@
 // client/src/components/chat/ChatMessage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
-import { supabase } from '../../supabaseClient';
+import { resolveStorageUrl } from '../../utils/storageUrls';
 
 const STORAGE_BUCKET = 'chat-attachments';
 
@@ -33,17 +33,11 @@ export default function ChatMessage({ m, isMine, receipts, memberNames }) {
       const raw = m?.file_url || m?.attachment_url || null;
       if (!raw) { if (alive) setFileUrl(null); return; }
 
-      const http = /^https?:\/\//i.test(raw);
-      if (http) {
-        if (alive) setFileUrl(raw);
-      } else {
-        // считаем, что это путь в Storage
-        try {
-          const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(raw, 3600);
-          if (alive) setFileUrl(error ? null : (data?.signedUrl || null));
-        } catch {
-          if (alive) setFileUrl(null);
-        }
+      try {
+        const url = await resolveStorageUrl(raw, STORAGE_BUCKET);
+        if (alive) setFileUrl(url || null);
+      } catch {
+        if (alive) setFileUrl(null);
       }
     })();
     return () => { alive = false; };

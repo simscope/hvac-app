@@ -1,6 +1,7 @@
 // client/src/pages/TechLibraryPage.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { resolveStorageUrl } from '../utils/storageUrls';
 import UploadTechDoc from '../components/UploadTechDoc.jsx';
 
 const pageWrap = {
@@ -199,7 +200,10 @@ export default function TechLibraryPage() {
         console.error(error);
         throw new Error(error.message || 'Ошибка загрузки unit_docs');
       }
-      setDocs(data || []);
+      const linked = await Promise.all((data || []).map(async (doc) => ({
+        ...doc, file_url: await resolveStorageUrl(doc.file_url, 'unit-docs').catch(() => ''),
+      })));
+      setDocs(linked);
     } catch (e) {
       console.error(e);
       setErr(e.message || 'Ошибка загрузки данных.');

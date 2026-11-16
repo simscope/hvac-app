@@ -147,7 +147,7 @@ export default function TopNav() {
   };
 
   const loadGmailUnread = async ({ force = false } = {}) => {
-    if (!user) {
+    if (!user || !['admin', 'manager'].includes(norm(role))) {
       setGmailUnread(0);
       return;
     }
@@ -267,7 +267,7 @@ export default function TopNav() {
   }, [uid]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !['admin', 'manager'].includes(norm(role))) {
       setGmailUnread(0);
       return;
     }
@@ -311,6 +311,7 @@ export default function TopNav() {
 
   const links = useMemo(() => {
     const arr = [{ to: '/jobs', label: 'Заявки', icon: <Icon.Jobs />, end: true }];
+    if (r === 'tech') arr.push({ to: '/calendar', label: 'Мой календарь', icon: <Icon.Calendar /> });
 
     if (r === 'admin' || r === 'manager') {
       arr.push(

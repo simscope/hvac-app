@@ -88,11 +88,12 @@ export function AuthProvider({ children }) {
       const pr = String(profRow?.role || '').toLowerCase();
       if (pr) {
         setRole(pr === 'technician' ? 'tech' : pr);
+        setRoleLoading(false);
         return;
       }
 
       // 3.2 fallback: rpc
-      if (!session?.user?.id) { setRole(null); return; }
+      if (!session?.user?.id) { setRole(null); setRoleLoading(false); return; }
 
       setRoleLoading(true);
       try {
@@ -135,7 +136,7 @@ export function AuthProvider({ children }) {
       try {
         const { data, error } = await supabase
           .from('technicians')
-          .select('id, full_name, name, phone, email')
+          .select('id, name, phone, email')
           .eq('id', id)
           .maybeSingle();
 

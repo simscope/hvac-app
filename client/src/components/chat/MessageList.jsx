@@ -4,7 +4,9 @@ import React, {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react';
+import { resolveStorageUrl } from '../../utils/storageUrls';
 
 /**
  * props:
@@ -219,16 +221,7 @@ export default function MessageList({
                     <span title={m.file_name}>
                       {m.file_name} {m.file_size ? `(${formatBytes(m.file_size)})` : ''}
                     </span>
-                    {m.file_url && (
-                      <a
-                        href={m.file_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ marginLeft: 6 }}
-                      >
-                        открыть
-                      </a>
-                    )}
+                    {(m.file_url || m.attachment_url) && <StorageFileLink value={m.file_url || m.attachment_url} />}
                   </div>
                 )}
               </div>
@@ -254,4 +247,19 @@ function formatBytes(bytes) {
     i++;
   }
   return `${num.toFixed(num < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function StorageFileLink({ value }) {
+  const [url, setUrl] = useState('');
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setUrl(''); setFailed(false);
+    resolveStorageUrl(value, 'chat-attachments')
+      .then((link) => { if (active) { setUrl(link); setFailed(!link); } })
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [value]);
+  if (!url) return failed ? <span role="status">Файл недоступен</span> : null;
+  return <a href={url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>Открыть</a>;
 }

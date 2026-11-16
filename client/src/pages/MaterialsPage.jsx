@@ -2,6 +2,7 @@
 // Materials table + inline status/technician editing, modal to add/edit materials
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { resolveStorageUrl } from '../utils/storageUrls';
 
 /* ---------- Status values stored in DB (Title Case) ---------- */
 const STATUS_VALUES = [
@@ -273,7 +274,8 @@ export default function MaterialsPage() {
           .filter((u) => u.length > 0);
 
         setModalComments(comments);
-        setModalPhotos(photos);
+        const links = await Promise.all(photos.map((url) => resolveStorageUrl(url, 'job-photos').catch(() => '')));
+        setModalPhotos(links.filter(Boolean));
       }
     } catch (e) {
       console.warn('Failed to load comments/photos:', e?.message || e);
