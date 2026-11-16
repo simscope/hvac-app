@@ -41,5 +41,29 @@
         }
       ]
     }
+  ],
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "hvac\\-app\\-andrei\\-simanenkas\\-projects\\.vercel\\.app"
+        }
+      ],
+      "destination": "https://hvac-app-jade.vercel.app/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "hvac\\-app\\-git\\-main\\-andrei\\-simanenkas\\-projects\\.vercel\\.app"
+        }
+      ],
+      "destination": "https://hvac-app-jade.vercel.app/:path*",
+      "permanent": true
+    }
   ]
 }
