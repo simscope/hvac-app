@@ -32,7 +32,9 @@ export async function messagesFor(event, config) {
   const kind = data.email_action_type;
   const app = new URL(config.appOrigin), api = new URL(config.publicApi);
   if (app.protocol !== 'https:' || api.protocol !== 'https:') fail('INVALID_SERVER_CONFIGURATION', 503);
-  if (data.site_url && new URL(data.site_url).origin !== app.origin) fail('INVALID_SITE_URL');
+  // GoTrue v2.197 sends its external Auth API URL in email_data.site_url.
+  // Browser destinations remain independently restricted to the frontend.
+  if (data.site_url && new URL(data.site_url).origin !== api.origin) fail('INVALID_SITE_URL');
   const redirect = new URL(data.redirect_to || app.href);
   if (redirect.origin !== app.origin || redirect.username || redirect.password) fail('INVALID_REDIRECT');
   if (kind === 'recovery' && redirect.pathname === '/' && !redirect.search && !redirect.hash) redirect.pathname = '/reset-password';
