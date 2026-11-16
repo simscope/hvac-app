@@ -1,0 +1,23 @@
+{
+  "services": {
+    "functions": {
+      "environment": {
+        "GOOGLE_CLIENT_ID": "${HVAC_GOOGLE_CLIENT_ID:?DPAPI Google client ID required}",
+        "GOOGLE_CLIENT_SECRET": "${HVAC_GOOGLE_CLIENT_SECRET:?DPAPI Google client secret required}",
+        "MAIL_ENC_KEY_B64": "${HVAC_MAIL_ENC_KEY_B64:?DPAPI mail encryption key required}",
+        "HVAC_OAUTH_APP_ORIGIN": "https://hvac-app-jade.vercel.app",
+        "HVAC_OAUTH_REDIRECT_URI": "https://hvac-app-jade.vercel.app/functions/v1/oauth_google_callback",
+        "ALLOWED_ORIGIN": "https://hvac-app-jade.vercel.app"
+      },
+      "networks": [
+        "default",
+        "google-readonly-egress"
+      ]
+    }
+  },
+  "networks": {
+    "google-readonly-egress": {
+      "internal": false
+    }
+  }
+}

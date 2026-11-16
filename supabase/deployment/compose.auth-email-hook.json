@@ -1,0 +1,33 @@
+{
+  "services": {
+    "auth": {
+      "environment": {
+        "GOTRUE_HOOK_SEND_EMAIL_ENABLED": "true",
+        "GOTRUE_HOOK_SEND_EMAIL_URI": "http://host.docker.internal:18200/functions/v1/auth_send_email",
+        "GOTRUE_HOOK_SEND_EMAIL_SECRETS": "${HVAC_AUTH_EMAIL_HOOK_SECRET:?Protected Auth email hook secret required}",
+        "GOTRUE_SITE_URL": "https://hvac-app-jade.vercel.app",
+        "GOTRUE_URI_ALLOW_LIST": "https://hvac-app-jade.vercel.app/**",
+        "API_EXTERNAL_URL": "https://msi.tail4626fb.ts.net:8443",
+        "GOTRUE_MAILER_AUTOCONFIRM": "false"
+      },
+      "extra_hosts": [
+        "host.docker.internal:host-gateway"
+      ],
+      "networks": [
+        "default",
+        "auth-hook-egress"
+      ]
+    },
+    "functions": {
+      "environment": {
+        "AUTH_SEND_EMAIL_HOOK_SECRET": "${HVAC_AUTH_EMAIL_HOOK_SECRET:?Protected Auth email hook secret required}",
+        "HVAC_PUBLIC_API_URL": "https://msi.tail4626fb.ts.net:8443"
+      }
+    }
+  },
+  "networks": {
+    "auth-hook-egress": {
+      "internal": false
+    }
+  }
+}
