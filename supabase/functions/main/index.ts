@@ -332,14 +332,11 @@ Deno.serve(async (req: Request) => {
   if (bootProbe && !serviceCaller) return Response.json({error:'LOCAL_PROBE_SERVICE_ONLY'},{status:403});
   if (!bootProbe) {
     // Shared Gmail is live-staff and organization scoped; deferred legacy wrappers remain disabled.
-    if (service_name==='send-invoice-email') {
-      return Response.json({error:'LOCAL_SEND_DISABLED_OWNER_TEST_RECIPIENT_REQUIRED'},{status:503,headers:localCors(req)});
-    }
-    if (service_name==='gmail_modify') {
-      return Response.json({error:'LOCAL_OAUTH_OR_LEGACY_CONTRACT_UNCONFIRMED'},{status:503,headers:localCors(req)});
+    if (['gmail_modify','task_morning','task_nudge','on-location-upsert'].includes(service_name)) {
+      return Response.json({error:'PREEXISTING_BUSINESS_CONTRACT_UNAVAILABLE'},{status:503,headers:localCors(req)});
     }
     if (!serviceCaller && !service_name.startsWith('oauth_google_') && service_name!=='auth_send_email') {
-      const confirmedRoles: Record<string,string[]> = {'admin-ensure-user':['admin'],'staff-terminate':['admin'],'admin-delete-photo':['admin','manager'],'admin-delete-invoice':['admin','manager'],'gmail_list':['admin','manager'],'gmail_get':['admin','manager'],'gmail_attachment':['admin','manager'],'gmail_send':['admin','manager']};
+      const confirmedRoles: Record<string,string[]> = {'admin-ensure-user':['admin'],'staff-terminate':['admin'],'admin-delete-photo':['admin','manager'],'admin-delete-invoice':['admin','manager'],'gmail_list':['admin','manager'],'gmail_get':['admin','manager'],'gmail_attachment':['admin','manager'],'gmail_send':['admin','manager'],'admin-delete-invoice-bundle':['admin','manager'],'send-invoice-email':['admin','manager'],'calendar-badge':['admin','manager'],'push-on-message':['admin','manager','tech']};
       const required=confirmedRoles[service_name];
       let authorized=false;
       if (required && typeof callerToken==='string') {
@@ -351,7 +348,13 @@ Deno.serve(async (req: Request) => {
           const profileResponse=await fetch(`${base}/rest/v1/profiles?select=role&id=eq.${encodeURIComponent(user.id)}`,{headers:{apikey:key,Authorization:`Bearer ${key}`}});
           if (profileResponse.ok) {
             const profiles=await profileResponse.json();
-            authorized=profiles.length===1 && required.includes(profiles[0].role);
+            const callerRole=profiles[0]?.role==='technician'?'tech':profiles[0]?.role;
+            authorized=profiles.length===1 && required.includes(callerRole);
+            if (authorized && ['admin-delete-invoice-bundle','send-invoice-email','calendar-badge','push-on-message'].includes(service_name)) {
+              const liveResponse=await fetch(`${base}/rest/v1/rpc/hvac_live_caller_context`,{method:'POST',headers:{apikey:key,Authorization:`Bearer ${callerToken}`,'Content-Type':'application/json'},body:'{}'});
+              const live=liveResponse.ok?await liveResponse.json():null;
+              authorized=!!live && live.user===user.id && required.includes(live.role);
+            }
             if (authorized && service_name.startsWith('gmail_')) {
               const contextResponse=await fetch(`${base}/rest/v1/rpc/hvac_oauth_context`,{method:'POST',headers:{apikey:key,Authorization:`Bearer ${callerToken}`,'Content-Type':'application/json'},body:'{}'});
               const configResponse=await fetch(`${base}/rest/v1/rpc/hvac_oauth_store`,{method:'POST',headers:{apikey:key,Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({action:'config',args:{mailbox:'hvac-gmail'}})});
