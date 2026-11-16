@@ -135,6 +135,8 @@ const companyDocsRowWrap = {
 };
 
 const companyDocBtn = {
+  color: 'inherit',
+  textDecoration: 'none',
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'flex-start',
@@ -255,11 +257,6 @@ export default function TechLibraryPage() {
     });
   }, [visibleDocs, search, categoryFilter]);
 
-  const handleOpenFile = (url) => {
-    if (!url) return;
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
-
   const handleDelete = async (row) => {
     if (!window.confirm(`Удалить документ: ${row.brand} ${row.model} — ${row.title}?`)) return;
     try {
@@ -308,17 +305,19 @@ export default function TechLibraryPage() {
           ) : (
             <div style={companyDocsRowWrap}>
               {companyDocs.map((d) => (
-                <button
+                <a
                   key={d.id}
-                  type="button"
+                  href={d.file_url || undefined}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-disabled={!d.file_url}
                   style={companyDocBtn}
-                  onClick={() => handleOpenFile(d.file_url)}
                 >
                   <span style={companyDocTitle}>{d.title || 'Без названия'}</span>
                   {d.description && (
                     <span style={companyDocDesc}>{d.description}</span>
                   )}
-                </button>
+                </a>
               ))}
             </div>
           )}
@@ -408,9 +407,14 @@ export default function TechLibraryPage() {
                   </td>
                   <td style={tdStyle}>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        type="button"
+                      <a
+                        href={d.file_url || undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-disabled={!d.file_url}
                         style={{
+                          color: 'inherit',
+                          textDecoration: 'none',
                           padding: '4px 10px',
                           borderRadius: 999,
                           border: '1px solid #d1d5db',
@@ -418,10 +422,9 @@ export default function TechLibraryPage() {
                           cursor: 'pointer',
                           fontSize: 12,
                         }}
-                        onClick={() => handleOpenFile(d.file_url)}
                       >
                         Открыть
-                      </button>
+                      </a>
                       {/* Удалять фирменные доки — только админ, но сюда они уже не попадают;
                           проверка оставлена для обычных доков */}
                       {(!isCompanyDoc || isAdmin) && (
